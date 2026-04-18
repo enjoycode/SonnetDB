@@ -12,5 +12,7 @@
 
   <ItemGroup Label="Benchmark">
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.6" />
+    <PackageVersion Include="InfluxDB.Client" Version="5.0.0" />
   </ItemGroup>
 </Project>

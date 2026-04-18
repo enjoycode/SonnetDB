@@ -1,0 +1,57 @@
+# docker-compose.yml — TSLite 基准测试外部数据库环境
+#
+# 用法：
+#   docker compose up -d            # 启动所有服务
+#   docker compose down -v          # 停止并删除容器与卷
+#
+# InfluxDB 连接信息：
+#   URL:    http://localhost:8086
+#   Token:  my-super-secret-auth-token
+#   Org:    tslite
+#   Bucket: benchmarks
+#
+# TDengine 连接信息（REST API）：
+#   URL:      http://localhost:6041
+#   Username: root
+#   Password: taosdata
+
+services:
+  influxdb:
+    image: influxdb:2.7
+    container_name: tslite-bench-influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=password123
+      - DOCKER_INFLUXDB_INIT_ORG=tslite
+      - DOCKER_INFLUXDB_INIT_BUCKET=benchmarks
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-auth-token
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  tdengine:
+    image: tdengine/tdengine:3.3.4.3
+    container_name: tslite-bench-tdengine
+    ports:
+      - "6030:6030"   # 原生连接端口
+      - "6041:6041"   # RESTful API 端口
+    environment:
+      - TAOS_FQDN=localhost
+    volumes:
+      - tdengine-data:/var/lib/taos
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:6041/rest/sql", "-d", "SELECT SERVER_VERSION()"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  influxdb-data:
+  tdengine-data:
