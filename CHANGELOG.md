@@ -32,6 +32,14 @@
 - 新增枚举：`BlockEncoding` / `FieldType` / `WalRecordType`
 - 新增 `FormatSizes` 常量类，所有 header 尺寸由编译期 `Unsafe.SizeOf<T>` 测试守护
 - 完成 Milestone 1：内存与二进制基础设施（Span/MemoryMarshal/InlineArray + 全部固定 header）（PR #6）
+- 新增逻辑数据模型（namespace `TSLite.Model`）：
+  - `FieldValue`（readonly struct，零装箱，支持 Float64/Int64/Boolean/String）
+  - `Point`（用户层写入对象，含校验规则）
+  - `DataPoint`（引擎内单 field 数据点，readonly record struct）
+  - `SeriesFieldKey`（series + field 复合键，readonly record struct）
+  - `AggregateResult`（Count/Sum/Min/Max/Avg 累加器）
+  - `TimeBucket`（时间桶 Floor/Range/Enumerate 辅助）
+- 启动 Milestone 2：逻辑模型与 Series Catalog（PR #7）
 
 ---
 
