@@ -14,6 +14,10 @@
 - `Directory.Packages.props`（Central Package Management）
 - `global.json`（固定 .NET 10 SDK）
 - `.editorconfig`（统一代码风格）
+- 新增 GitHub Actions CI 工作流（build + test，ubuntu / windows 矩阵）
+- 新增 CodeQL 安全扫描工作流
+- 新增 Dependabot 依赖更新配置
+- 新增 dotnet format 校验
 
 ---
 
