@@ -18,6 +18,10 @@
 - 新增 CodeQL 安全扫描工作流
 - 新增 Dependabot 依赖更新配置
 - 新增 dotnet format 校验
+- 新增 `TSLite.IO.SpanWriter`：基于 Span/MemoryMarshal/BinaryPrimitives 的 safe-only 顺序二进制写入器（PR #4）
+- 新增 `TSLite.IO.SpanReader`：基于 Span/MemoryMarshal/BinaryPrimitives 的 safe-only 顺序二进制读取器（PR #4）
+- 支持基础类型、unmanaged 结构体、结构体数组、VarInt(LEB128)、字符串的 round-trip 编解码（PR #4）
+- 全程 little-endian，零 `unsafe`（PR #4）
 
 ---
 
