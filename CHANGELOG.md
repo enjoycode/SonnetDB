@@ -26,6 +26,12 @@
 - 新增 `InlineBytesExtensions`：通过 `MemoryMarshal.CreateSpan` 提供 Safe-only 的 `AsSpan` / `AsReadOnlySpan` 视图
 - 新增 `InlineBytesHelpers`：泛型 `SequenceEqual` / `CopyFrom` 辅助方法
 - 新增 `TsdbMagic`：定义 TSLite 文件 / 段 / WAL 的 magic 与格式版本常量（PR #5）
+- 新增固定二进制结构体（namespace `TSLite.Storage.Format`）：
+  - `FileHeader`（64B）/ `SegmentHeader`（64B）/ `BlockHeader`（64B）
+  - `BlockIndexEntry`（48B）/ `SegmentFooter`（64B）/ `WalRecordHeader`（32B）
+- 新增枚举：`BlockEncoding` / `FieldType` / `WalRecordType`
+- 新增 `FormatSizes` 常量类，所有 header 尺寸由编译期 `Unsafe.SizeOf<T>` 测试守护
+- 完成 Milestone 1：内存与二进制基础设施（Span/MemoryMarshal/InlineArray + 全部固定 header）（PR #6）
 
 ---
 
