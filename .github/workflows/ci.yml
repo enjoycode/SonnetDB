@@ -44,13 +44,13 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Restore
-        run: dotnet restore TSLite.sln
+        run: dotnet restore TSLite.slnx
 
       - name: Build
-        run: dotnet build TSLite.sln --configuration Release --no-restore /warnaserror
+        run: dotnet build TSLite.slnx --configuration Release --no-restore /warnaserror
 
       - name: Test
-        run: dotnet test TSLite.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage" --results-directory ./TestResults
+        run: dotnet test TSLite.slnx --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage" --results-directory ./TestResults
 
       - name: Upload test results
         if: always()
@@ -71,7 +71,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore TSLite.sln
+        run: dotnet restore TSLite.slnx
 
       - name: Format check
-        run: dotnet format TSLite.sln --verify-no-changes --no-restore --severity warn
+        run: dotnet format TSLite.slnx --verify-no-changes --no-restore --severity warn
