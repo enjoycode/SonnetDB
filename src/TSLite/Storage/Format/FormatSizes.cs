@@ -38,4 +38,9 @@ public static class FormatSizes
     /// <see cref="WalRecordHeader"/> 的固定大小（字节）。
     /// </summary>
     public const int WalRecordHeaderSize = 32;
+
+    /// <summary>
+    /// <see cref="CatalogFileHeader"/> 的固定大小（字节）。
+    /// </summary>
+    public const int CatalogFileHeaderSize = 64;
 }

@@ -12,6 +12,9 @@ public static class TsdbMagic
     /// <summary>WAL 文件 magic："TSLWALv1"（8 字节）。</summary>
     public static ReadOnlySpan<byte> Wal => "TSLWALv1"u8;
 
+    /// <summary>目录文件 magic："TSLCATv1"（8 字节）。</summary>
+    public static ReadOnlySpan<byte> Catalog => "TSLCATv1"u8;
+
     /// <summary>当前文件格式版本号。</summary>
     public const int FormatVersion = 1;
 
@@ -39,6 +42,15 @@ public static class TsdbMagic
     {
         InlineBytes8 magic = default;
         Wal.CopyTo(magic.AsSpan());
+        return magic;
+    }
+
+    /// <summary>构造目录 magic <see cref="InlineBytes8"/>。</summary>
+    /// <returns>内容为 <c>"TSLCATv1"</c> 的 <see cref="InlineBytes8"/> 实例。</returns>
+    public static InlineBytes8 CreateCatalogMagic()
+    {
+        InlineBytes8 magic = default;
+        Catalog.CopyTo(magic.AsSpan());
         return magic;
     }
 }

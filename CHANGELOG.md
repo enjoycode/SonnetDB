@@ -42,6 +42,15 @@
 - 启动 Milestone 2：逻辑模型与 Series Catalog（PR #7）
 - 新增 `TSLite.Model.SeriesKey`（readonly struct）：规范化 `measurement + sorted(tags)` 为确定性字符串，格式 `measurement,k1=v1,k2=v2`，tags 按 key Ordinal 升序
 - 新增 `TSLite.Model.SeriesId`（static class）：通过 `XxHash64` 将 `SeriesKey.Canonical` 的 UTF-8 编码折叠为 `ulong`，作为引擎主键（PR #8）
+- 新增 `TSLite.Catalog.SeriesCatalog`：线程安全的 SeriesKey ↔ SeriesId ↔ SeriesEntry 中央目录（基于 ConcurrentDictionary，单写多读友好）
+- 新增 `TSLite.Catalog.SeriesEntry`：序列目录条目（Id / Key / Measurement / Tags / CreatedAtUtcTicks），Tags 以 FrozenDictionary 保证不可变
+- 新增 `SeriesCatalog.Find`：按 measurement + tag 子集线性查找
+- 新增 `TSLite.Catalog.CatalogFileCodec`：`.tslcat` 目录文件序列化器（含临时文件原子替换写入与规范化校验加载）
+- 新增 `TSLite.Storage.Format.CatalogFileHeader`（64B）：目录文件头，含 magic "TSLCATv1" / 版本 / 条目数
+- 新增 `TsdbMagic.Catalog`（"TSLCATv1"）与 `TsdbMagic.CreateCatalogMagic()`
+- 新增 `FormatSizes.CatalogFileHeaderSize = 64`
+- 新增 `InlineBytes24` 内联缓冲区及其 `AsSpan`/`AsReadOnlySpan` 扩展
+- 完成 Milestone 2：逻辑模型与 Series Catalog（PR #9）
 
 ---
 
