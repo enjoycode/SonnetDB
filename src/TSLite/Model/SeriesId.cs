@@ -11,6 +11,13 @@ namespace TSLite.Model;
 public static class SeriesId
 {
     /// <summary>
+    /// 使用 <c>stackalloc</c> 的 UTF-8 字节数上限阈值（512B）。
+    /// 典型的序列键远小于此值；超出时改从 <see cref="ArrayPool{T}"/> 租用缓冲区，
+    /// 避免大字符串占用过多栈空间（默认栈大小约 1 MB）。
+    /// </summary>
+    private const int _stackAllocThreshold = 512;
+
+    /// <summary>
     /// 计算 <paramref name="key"/> 的 <c>XxHash64</c> 哈希值。
     /// </summary>
     /// <param name="key">规范化序列键。</param>
@@ -18,8 +25,8 @@ public static class SeriesId
     /// <remarks>
     /// 内部将 <see cref="SeriesKey.Canonical"/> 编码为 UTF-8 字节，
     /// 然后调用 <see cref="XxHash64.HashToUInt64(ReadOnlySpan{byte})"/>。
-    /// 小于等于 512 字节时使用 <c>stackalloc</c>，否则从
-    /// <see cref="ArrayPool{T}"/> 租用缓冲区，全程无托管堆分配。
+    /// 小于等于 512 字节时使用 <c>stackalloc</c>，
+    /// 否则从 <see cref="ArrayPool{T}"/> 租用缓冲区，全程无托管堆分配。
     /// </remarks>
     public static ulong Compute(SeriesKey key) => ComputeFromCanonical(key.Canonical);
 
@@ -35,7 +42,7 @@ public static class SeriesId
 
         int maxBytes = Encoding.UTF8.GetMaxByteCount(canonical.Length);
 
-        if (maxBytes <= 512)
+        if (maxBytes <= _stackAllocThreshold)
         {
             Span<byte> stackBuffer = stackalloc byte[maxBytes];
             int written = Encoding.UTF8.GetBytes(canonical, stackBuffer);

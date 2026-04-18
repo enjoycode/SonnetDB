@@ -78,7 +78,12 @@ public readonly struct SeriesKey : IEquatable<SeriesKey>
 
         Array.Sort(sortedKeys, StringComparer.Ordinal);
 
-        var sb = new StringBuilder(measurement.Length + tags.Count * 16);
+        // 预估容量：measurement + 每个 tag 的 "," + key + "=" + value
+        int capacity = measurement.Length;
+        foreach (var key in sortedKeys)
+            capacity += 1 + key.Length + 1 + tags[key].Length; // ',' + key + '=' + value
+
+        var sb = new StringBuilder(capacity);
         sb.Append(measurement);
 
         foreach (var key in sortedKeys)
