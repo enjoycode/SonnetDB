@@ -2,10 +2,10 @@
 
 > 一个使用 C# / .NET 10 编写的嵌入式单文件时序数据库（Time-Series Database）
 
-[![Build](https://img.shields.io/github/actions/workflow/status/maikebing/TSLite/ci.yml?label=Build)](https://github.com/maikebing/TSLite/actions)
-[![NuGet](https://img.shields.io/nuget/v/TSLite?label=NuGet)](https://www.nuget.org/packages/TSLite)
+[![CI](https://github.com/maikebing/TSLite/actions/workflows/ci.yml/badge.svg)](https://github.com/maikebing/TSLite/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/maikebing/TSLite/actions/workflows/codeql.yml/badge.svg)](https://github.com/maikebing/TSLite/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![.NET 10](https://img.shields.io/badge/.NET-10-blueviolet)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
 
 ---
 
