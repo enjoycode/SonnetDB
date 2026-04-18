@@ -40,6 +40,8 @@
   - `AggregateResult`（Count/Sum/Min/Max/Avg 累加器）
   - `TimeBucket`（时间桶 Floor/Range/Enumerate 辅助）
 - 启动 Milestone 2：逻辑模型与 Series Catalog（PR #7）
+- 新增 `TSLite.Model.SeriesKey`（readonly struct）：规范化 `measurement + sorted(tags)` 为确定性字符串，格式 `measurement,k1=v1,k2=v2`，tags 按 key Ordinal 升序
+- 新增 `TSLite.Model.SeriesId`（static class）：通过 `XxHash64` 将 `SeriesKey.Canonical` 的 UTF-8 编码折叠为 `ulong`，作为引擎主键（PR #8）
 
 ---
 
