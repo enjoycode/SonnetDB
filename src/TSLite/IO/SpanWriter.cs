@@ -57,6 +57,7 @@ public ref struct SpanWriter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void EnsureRemaining(int count)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
         if (Remaining < count)
             throw new InvalidOperationException("SpanWriter buffer overflow");
     }
@@ -280,8 +281,8 @@ public ref struct SpanWriter
         }
 
         int byteCount = encoding.GetByteCount(value);
+        EnsureRemaining(sizeof(int) + byteCount);
         WriteInt32(byteCount);
-        EnsureRemaining(byteCount);
         encoding.GetBytes(value, FreeSpan);
         _position += byteCount;
     }

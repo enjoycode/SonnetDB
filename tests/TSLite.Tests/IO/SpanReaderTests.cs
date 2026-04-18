@@ -302,4 +302,76 @@ public sealed class SpanReaderTests
         var reader = new SpanReader(writer.WrittenSpan);
         Assert.Equal("时序数据库", reader.ReadString(System.Text.Encoding.UTF8));
     }
+
+    // ──────────────────────── VarUInt 非法编码负例 ────────────────────────
+
+    [Fact]
+    public void ReadVarUInt32_TooManyContinuationBytes_Throws()
+    {
+        byte[] data = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80];
+        var reader = new SpanReader(data);
+
+        bool threw = false;
+        try { reader.ReadVarUInt32(); }
+        catch (InvalidOperationException) { threw = true; }
+        Assert.True(threw);
+    }
+
+    [Fact]
+    public void ReadVarUInt32_FifthByteHasInvalidHighBits_Throws()
+    {
+        byte[] data = [0x80, 0x80, 0x80, 0x80, 0x10];
+        var reader = new SpanReader(data);
+
+        bool threw = false;
+        try { reader.ReadVarUInt32(); }
+        catch (InvalidOperationException) { threw = true; }
+        Assert.True(threw);
+    }
+
+    [Fact]
+    public void ReadVarUInt64_TenthByteHasInvalidHighBits_Throws()
+    {
+        byte[] data = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02];
+        var reader = new SpanReader(data);
+
+        bool threw = false;
+        try { reader.ReadVarUInt64(); }
+        catch (InvalidOperationException) { threw = true; }
+        Assert.True(threw);
+    }
+
+    // ──────────────────────── ReadString 格式非法负例 ────────────────────────
+
+    [Fact]
+    public void ReadString_InvalidNegativeLength_ThrowsInvalidOperationException()
+    {
+        Span<byte> buf = stackalloc byte[4];
+        var writer = new SpanWriter(buf);
+        writer.WriteInt32(-2);
+
+        var reader = new SpanReader(writer.WrittenSpan);
+
+        bool threw = false;
+        try { reader.ReadString(System.Text.Encoding.UTF8); }
+        catch (InvalidOperationException) { threw = true; }
+        Assert.True(threw);
+    }
+
+    [Fact]
+    public void ReadString_LengthExceedsRemaining_ThrowsInvalidOperationException()
+    {
+        Span<byte> buf = stackalloc byte[6];
+        var writer = new SpanWriter(buf);
+        writer.WriteInt32(4);
+        writer.WriteByte((byte)'A');
+        writer.WriteByte((byte)'B');
+
+        var reader = new SpanReader(writer.WrittenSpan);
+
+        bool threw = false;
+        try { reader.ReadString(System.Text.Encoding.UTF8); }
+        catch (InvalidOperationException) { threw = true; }
+        Assert.True(threw);
+    }
 }

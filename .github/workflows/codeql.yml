@@ -30,7 +30,7 @@ jobs:
           languages: csharp
 
       - name: Build
-        run: dotnet build TSLite.sln --configuration Release
+        run: dotnet build TSLite.slnx --configuration Release
 
       - uses: github/codeql-action/analyze@v3
         with:

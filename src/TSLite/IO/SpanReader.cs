@@ -57,6 +57,7 @@ public ref struct SpanReader
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void EnsureRemaining(int count)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
         if (Remaining < count)
             throw new InvalidOperationException("SpanReader buffer underflow");
     }
@@ -239,7 +240,8 @@ public ref struct SpanReader
     /// <returns>指向缓冲区的 <see cref="ReadOnlySpan{T}"/> 视图。</returns>
     public ReadOnlySpan<T> ReadStructs<T>(int count) where T : unmanaged
     {
-        int size = Unsafe.SizeOf<T>() * count;
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+        int size = checked(Unsafe.SizeOf<T>() * count);
         EnsureRemaining(size);
         ReadOnlySpan<T> result = MemoryMarshal.Cast<byte, T>(_buffer.Slice(_position, size));
         _position += size;
@@ -258,12 +260,19 @@ public ref struct SpanReader
         while (true)
         {
             byte b = ReadByte();
+            if (shift == 28)
+            {
+                // 5th byte: only low 4 bits are valid for uint32
+                if ((b & 0xF0) != 0)
+                    throw new InvalidOperationException("VarUInt32 overflow");
+                result |= (uint)(b & 0x0F) << shift;
+                break;
+            }
+
             result |= (uint)(b & 0x7F) << shift;
             if ((b & 0x80) == 0)
                 break;
             shift += 7;
-            if (shift >= 35)
-                throw new InvalidOperationException("VarUInt32 overflow");
         }
 
         return result;
@@ -281,12 +290,19 @@ public ref struct SpanReader
         while (true)
         {
             byte b = ReadByte();
+            if (shift == 63)
+            {
+                // 10th byte: only bit 0 is valid for uint64
+                if ((b & 0xFE) != 0)
+                    throw new InvalidOperationException("VarUInt64 overflow");
+                result |= (ulong)(b & 0x01) << shift;
+                break;
+            }
+
             result |= (ulong)(b & 0x7F) << shift;
             if ((b & 0x80) == 0)
                 break;
             shift += 7;
-            if (shift >= 70)
-                throw new InvalidOperationException("VarUInt64 overflow");
         }
 
         return result;
@@ -305,6 +321,10 @@ public ref struct SpanReader
             return null;
         if (length == 0)
             return string.Empty;
+        if (length < 0)
+            throw new InvalidOperationException($"Invalid string length: {length}");
+        if (length > Remaining)
+            throw new InvalidOperationException("String length exceeds remaining buffer");
         ReadOnlySpan<byte> bytes = ReadBytes(length);
         return encoding.GetString(bytes);
     }
