@@ -19,6 +19,30 @@
 - 新增 Dependabot 依赖更新配置
 - 新增 dotnet format 校验
 - 新增时序数据库性能对比基准（`tests/TSLite.Benchmarks/`）：使用 BenchmarkDotNet 0.15.8 对比 TSLite（内存占位）、SQLite、InfluxDB 2.x 和 TDengine 3.x 在相同 Docker 环境下的 100 万条数据**写入、时间范围查询、1 分钟桶聚合**的性能，含 Docker Compose 配置和 README 说明
+- 新增 `TSLite.IO.SpanWriter`：基于 Span/MemoryMarshal/BinaryPrimitives 的 safe-only 顺序二进制写入器
+- 新增 `TSLite.IO.SpanReader`：基于 Span/MemoryMarshal/BinaryPrimitives 的 safe-only 顺序二进制读取器
+- 支持基础类型、unmanaged 结构体、结构体数组、VarInt(LEB128)、字符串的 round-trip 编解码
+- 全程 little-endian，零 `unsafe`（PR #4）
+- 新增 `TSLite.Buffers.InlineBytes4/8/16/32/64`：基于 `[InlineArray(N)]` 的固定长度内联缓冲区
+- 新增 `InlineBytesExtensions`：通过 `MemoryMarshal.CreateSpan` 提供 Safe-only 的 `AsSpan` / `AsReadOnlySpan` 视图
+- 新增 `InlineBytesHelpers`：泛型 `SequenceEqual` / `CopyFrom` 辅助方法
+- 新增 `TsdbMagic`：定义 TSLite 文件 / 段 / WAL 的 magic 与格式版本常量（PR #5）
+- 新增固定二进制结构体（namespace `TSLite.Storage.Format`）：
+  - `FileHeader`（64B）/ `SegmentHeader`（64B）/ `BlockHeader`（64B）
+  - `BlockIndexEntry`（48B）/ `SegmentFooter`（64B）/ `WalRecordHeader`（32B）
+- 新增枚举：`BlockEncoding` / `FieldType` / `WalRecordType`
+- 新增 `FormatSizes` 常量类，所有 header 尺寸由编译期 `Unsafe.SizeOf<T>` 测试守护
+- 完成 Milestone 1：内存与二进制基础设施（Span/MemoryMarshal/InlineArray + 全部固定 header）（PR #6）
+- 新增逻辑数据模型（namespace `TSLite.Model`）：
+  - `FieldValue`（readonly struct，零装箱，支持 Float64/Int64/Boolean/String）
+  - `Point`（用户层写入对象，含校验规则）
+  - `DataPoint`（引擎内单 field 数据点，readonly record struct）
+  - `SeriesFieldKey`（series + field 复合键，readonly record struct）
+  - `AggregateResult`（Count/Sum/Min/Max/Avg 累加器）
+  - `TimeBucket`（时间桶 Floor/Range/Enumerate 辅助）
+- 启动 Milestone 2：逻辑模型与 Series Catalog（PR #7）
+- 新增 `TSLite.Model.SeriesKey`（readonly struct）：规范化 `measurement + sorted(tags)` 为确定性字符串，格式 `measurement,k1=v1,k2=v2`，tags 按 key Ordinal 升序
+- 新增 `TSLite.Model.SeriesId`（static class）：通过 `XxHash64` 将 `SeriesKey.Canonical` 的 UTF-8 编码折叠为 `ulong`，作为引擎主键（PR #8）
 
 ---
 
