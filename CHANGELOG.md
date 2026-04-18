@@ -18,6 +18,7 @@
 - 新增 CodeQL 安全扫描工作流
 - 新增 Dependabot 依赖更新配置
 - 新增 dotnet format 校验
+- 新增时序数据库性能对比基准（`tests/TSLite.Benchmarks/`）：使用 BenchmarkDotNet 0.15.8 对比 TSLite（内存占位）、SQLite、InfluxDB 2.x 和 TDengine 3.x 在相同 Docker 环境下的 100 万条数据**写入、时间范围查询、1 分钟桶聚合**的性能，含 Docker Compose 配置和 README 说明
 - 新增 `TSLite.IO.SpanWriter`：基于 Span/MemoryMarshal/BinaryPrimitives 的 safe-only 顺序二进制写入器
 - 新增 `TSLite.IO.SpanReader`：基于 Span/MemoryMarshal/BinaryPrimitives 的 safe-only 顺序二进制读取器
 - 支持基础类型、unmanaged 结构体、结构体数组、VarInt(LEB128)、字符串的 round-trip 编解码
