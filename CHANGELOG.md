@@ -9,6 +9,11 @@
 - 初始化项目规划文档：`README.md`、`CHANGELOG.md`、`ROADMAP.md`、`AGENTS.md`
 - 确定技术栈：C# / .NET 10 / xUnit / BenchmarkDotNet / GitHub Actions
 - 确定核心设计原则：Safe-only、Span/MemoryMarshal、InlineArray、WAL+MemTable+Segment
+- 解决方案与项目骨架（`TSLite.slnx`、`src/TSLite`、`src/TSLite.Cli`、`tests/TSLite.Tests`、`tests/TSLite.Benchmarks`）（PR #2）
+- `Directory.Build.props`（统一 `LangVersion` / `Nullable` / `ImplicitUsings` / `TreatWarningsAsErrors`）
+- `Directory.Packages.props`（Central Package Management）
+- `global.json`（固定 .NET 10 SDK）
+- `.editorconfig`（统一代码风格）
 - 新增 GitHub Actions CI 工作流（build + test，ubuntu / windows 矩阵）
 - 新增 CodeQL 安全扫描工作流
 - 新增 Dependabot 依赖更新配置

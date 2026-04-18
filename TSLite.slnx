@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TSLite.Cli/TSLite.Cli.csproj" />
+    <Project Path="src/TSLite/TSLite.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TSLite.Benchmarks/TSLite.Benchmarks.csproj" />
+    <Project Path="tests/TSLite.Tests/TSLite.Tests.csproj" />
+  </Folder>
+</Solution>
