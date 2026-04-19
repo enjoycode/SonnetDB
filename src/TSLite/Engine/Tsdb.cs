@@ -1,4 +1,5 @@
 using TSLite.Catalog;
+using TSLite.Engine.Compaction;
 using TSLite.Memory;
 using TSLite.Model;
 using TSLite.Query;
@@ -27,6 +28,7 @@ public sealed class Tsdb : IDisposable
     private long _nextSegmentId;
     private bool _disposed;
     private BackgroundFlushWorker? _flushWorker;
+    private CompactionWorker? _compactionWorker;
     private long _checkpointLsn;
 
     /// <summary>数据库根目录路径。</summary>
@@ -66,6 +68,19 @@ public sealed class Tsdb : IDisposable
 
     /// <summary>后台 Flush 策略（供 BackgroundFlushWorker 访问）。</summary>
     internal MemTableFlushPolicy BackgroundFlushPolicy => _options.FlushPolicy;
+
+    /// <summary>Compaction 写入选项（供 CompactionWorker 访问）。</summary>
+    internal SegmentWriterOptions CompactionWriterOptions => _options.SegmentWriterOptions;
+
+    /// <summary>
+    /// 线程安全地分配下一个 SegmentId（单调递增）。
+    /// </summary>
+    /// <returns>新分配的 SegmentId。</returns>
+    internal long AllocateSegmentId()
+    {
+        lock (_writeSync)
+            return _nextSegmentId++;
+    }
 
     private Tsdb(
         TsdbOptions options,
@@ -142,6 +157,13 @@ public sealed class Tsdb : IDisposable
         {
             tsdb._flushWorker = new BackgroundFlushWorker(tsdb, options.BackgroundFlush);
             tsdb._flushWorker.Start();
+        }
+
+        // 启动后台 Compaction 线程
+        if (options.Compaction.Enabled)
+        {
+            tsdb._compactionWorker = new CompactionWorker(tsdb, options.Compaction);
+            tsdb._compactionWorker.Start();
         }
 
         return tsdb;
@@ -232,7 +254,11 @@ public sealed class Tsdb : IDisposable
     /// </summary>
     public void Dispose()
     {
-        // 先关闭后台线程（在锁外，防止与 InternalFlushFromBackground 死锁）
+        // 先关闭 Compaction 后台线程（在锁外，防止与内部操作死锁）
+        _compactionWorker?.Dispose();
+        _compactionWorker = null;
+
+        // 再关闭后台 Flush 线程（在锁外，防止与 InternalFlushFromBackground 死锁）
         _flushWorker?.Dispose();
         _flushWorker = null;
 
