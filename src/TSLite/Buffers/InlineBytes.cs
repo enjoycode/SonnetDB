@@ -36,6 +36,17 @@ public struct InlineBytes16
     private byte _element0;
 }
 
+/// <summary>24 字节内联缓冲区（适用于保留字段）。</summary>
+[InlineArray(Length)]
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct InlineBytes24
+{
+    /// <summary>缓冲区字节长度常量。</summary>
+    public const int Length = 24;
+
+    private byte _element0;
+}
+
 /// <summary>32 字节内联缓冲区（适用于哈希、SHA256 输出、scratch buffer）。</summary>
 [InlineArray(Length)]
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
