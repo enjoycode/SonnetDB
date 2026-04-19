@@ -6,6 +6,14 @@
 ## [Unreleased]
 
 ### Added
+- 新增 `TSLite.Storage.Segments.SegmentBlockRef`（readonly struct）：跨段统一的 Block 引用（SegmentId + SegmentPath + BlockDescriptor）
+- 新增 `SegmentIndex`（sealed class）：单段内 SeriesId / (SeriesId, FieldName) → BlockDescriptor 索引，含段级时间范围与时间窗二分剪枝
+- 新增 `MultiSegmentIndex`（sealed class）：跨段只读联合索引快照；`LookupCandidates` 剪枝顺序：段级时间 → series → field → 段内时间窗二分
+- 新增 `TSLite.Engine.SegmentManager`（sealed class）：已打开 SegmentReader 集合 + 索引快照管理器；lock 写 + Volatile 无锁读并发模型
+- `Tsdb` 接入 `SegmentManager`：Open 时扫描段构建初始索引，FlushNow 时增量 AddSegment；Dispose 时关闭全部 SegmentReader
+- `TsdbOptions` 新增 `SegmentReaderOptions` 属性
+
+### Added
 - 启动 Milestone 4：查询路径
 - 新增 `TSLite.Storage.Segments.SegmentReader`：不可变段文件只读访问器
   - Open 时校验 Magic / Version / HeaderSize / FooterOffset / IndexCrc32

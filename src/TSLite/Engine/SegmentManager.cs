@@ -1,0 +1,168 @@
+using TSLite.Storage.Segments;
+
+namespace TSLite.Engine;
+
+/// <summary>
+/// 已打开的 <see cref="SegmentReader"/> 集合的所有者。
+/// <list type="bullet">
+///   <item><description>启动时扫描 segments/ 目录，构建初始集合 + 索引快照；</description></item>
+///   <item><description>Flush 完成后，调用 <see cref="AddSegment"/> 接入新段，重建索引快照（原子替换）；</description></item>
+///   <item><description>进程关闭或显式 Dispose 时关闭所有 <see cref="SegmentReader"/>。</description></item>
+/// </list>
+/// 线程安全：内部 lock 保护"重建+替换"，读取通过 volatile 字段做无锁读。
+/// </summary>
+public sealed class SegmentManager : IDisposable
+{
+    private readonly object _lock = new();
+    private readonly SegmentReaderOptions? _readerOptions;
+    private readonly Dictionary<long, SegmentReader> _readerById = new();
+    private MultiSegmentIndex _index = MultiSegmentIndex.Empty;
+    private IReadOnlyList<SegmentReader> _readersSnapshot = Array.Empty<SegmentReader>();
+    private bool _disposed;
+
+    /// <summary>当前所有已打开的 <see cref="SegmentReader"/> 快照（按 SegmentId 升序）。</summary>
+    public IReadOnlyList<SegmentReader> Readers => Volatile.Read(ref _readersSnapshot);
+
+    /// <summary>当前索引快照（无锁读取，可能比写端稍旧但始终自洽）。</summary>
+    public MultiSegmentIndex Index => Volatile.Read(ref _index);
+
+    /// <summary>当前已加载的段数量。</summary>
+    public int SegmentCount => Index.SegmentCount;
+
+    private SegmentManager(SegmentReaderOptions? readerOptions)
+    {
+        _readerOptions = readerOptions;
+    }
+
+    /// <summary>
+    /// 扫描 <paramref name="rootDirectory"/> 下 segments/ 子目录，打开所有已落盘段文件，
+    /// 构建初始 <see cref="SegmentManager"/> 实例。
+    /// </summary>
+    /// <param name="rootDirectory">数据库根目录路径。</param>
+    /// <param name="readerOptions">段读取选项；为 null 时使用 <see cref="SegmentReaderOptions.Default"/>。</param>
+    /// <returns>已初始化的 <see cref="SegmentManager"/> 实例。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="rootDirectory"/> 为 null 时抛出。</exception>
+    public static SegmentManager Open(string rootDirectory, SegmentReaderOptions? readerOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(rootDirectory);
+
+        var manager = new SegmentManager(readerOptions);
+
+        var segments = TsdbPaths.EnumerateSegments(rootDirectory)
+            .OrderBy(static t => t.SegmentId)
+            .ToList();
+
+        foreach (var (segId, path) in segments)
+        {
+            try
+            {
+                var reader = SegmentReader.Open(path, readerOptions);
+                manager._readerById[segId] = reader;
+            }
+            catch (SegmentCorruptedException)
+            {
+                // 跳过损坏或不完整的段文件（如崩溃中断的临时写入），不阻止引擎启动。
+            }
+        }
+
+        manager.RebuildSnapshotsUnsafe();
+        return manager;
+    }
+
+    /// <summary>
+    /// 把新写入的段加入集合，重建并发布索引快照。返回新段对应的 <see cref="SegmentReader"/>。
+    /// </summary>
+    /// <param name="path">新段文件的完整路径。</param>
+    /// <returns>已打开的 <see cref="SegmentReader"/> 实例。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> 为 null 时抛出。</exception>
+    /// <exception cref="ObjectDisposedException">实例已关闭时抛出。</exception>
+    public SegmentReader AddSegment(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            var reader = SegmentReader.Open(path, _readerOptions);
+            long segId = reader.Header.SegmentId;
+            _readerById[segId] = reader;
+            RebuildSnapshotsLocked();
+            return reader;
+        }
+    }
+
+    /// <summary>
+    /// 移除指定段（用于未来 Compaction），关闭对应 <see cref="SegmentReader"/> 后重建索引。
+    /// </summary>
+    /// <param name="segmentId">要移除的段唯一标识符。</param>
+    /// <returns>找到并成功移除返回 <c>true</c>；未找到返回 <c>false</c>。</returns>
+    /// <exception cref="ObjectDisposedException">实例已关闭时抛出。</exception>
+    public bool RemoveSegment(long segmentId)
+    {
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            if (!_readerById.TryGetValue(segmentId, out var reader))
+                return false;
+
+            _readerById.Remove(segmentId);
+            RebuildSnapshotsLocked();
+            reader.Dispose();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// 关闭全部 <see cref="SegmentReader"/>。
+    /// </summary>
+    public void Dispose()
+    {
+        List<SegmentReader> readersToDispose;
+        lock (_lock)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            readersToDispose = new List<SegmentReader>(_readerById.Values);
+            _readerById.Clear();
+        }
+
+        Volatile.Write(ref _index, MultiSegmentIndex.Empty);
+        Volatile.Write(ref _readersSnapshot, Array.Empty<SegmentReader>());
+
+        foreach (var reader in readersToDispose)
+        {
+            try { reader.Dispose(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// 重建索引快照（调用方必须持有 <c>_lock</c>）。
+    /// </summary>
+    private void RebuildSnapshotsLocked()
+    {
+        RebuildSnapshotsUnsafe();
+    }
+
+    /// <summary>
+    /// 重建索引快照（单线程初始化时调用，无需持有锁）。
+    /// </summary>
+    private void RebuildSnapshotsUnsafe()
+    {
+        var ordered = _readerById
+            .OrderBy(static kvp => kvp.Key)
+            .ToList();
+
+        var indices = new List<SegmentIndex>(ordered.Count);
+        foreach (var (segId, reader) in ordered)
+            indices.Add(SegmentIndex.Build(reader, segId));
+
+        var newIndex = new MultiSegmentIndex(indices);
+        var newReaders = (IReadOnlyList<SegmentReader>)ordered.Select(static kvp => kvp.Value).ToArray();
+
+        Volatile.Write(ref _index, newIndex);
+        Volatile.Write(ref _readersSnapshot, newReaders);
+    }
+}
