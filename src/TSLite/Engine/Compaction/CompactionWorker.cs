@@ -75,6 +75,8 @@ internal sealed class CompactionWorker : IDisposable
 
         if (_thread != null)
         {
+            // 中断 Thread.Sleep 以加快退出
+            _thread.Interrupt();
             bool exited = _thread.Join(_policy.ShutdownTimeout);
             if (!exited)
             {
@@ -92,16 +94,12 @@ internal sealed class CompactionWorker : IDisposable
     {
         while (!_cts.IsCancellationRequested)
         {
-            // 等待轮询周期
+            // 等待轮询周期（专用后台线程使用 Thread.Sleep，避免线程池饥饿）
             try
             {
-                Task.Delay(_policy.PollInterval, _cts.Token).Wait();
+                Thread.Sleep(_policy.PollInterval);
             }
-            catch (AggregateException ae) when (ae.InnerException is OperationCanceledException)
-            {
-                break;
-            }
-            catch (OperationCanceledException)
+            catch (ThreadInterruptedException)
             {
                 break;
             }

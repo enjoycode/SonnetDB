@@ -178,4 +178,3 @@ public sealed class CompactionPlannerTests : IDisposable
         }
     }
 }
-
