@@ -6,6 +6,19 @@
 ## [Unreleased]
 
 ### Added
+- 启动 Milestone 4：查询路径
+- 新增 `TSLite.Storage.Segments.SegmentReader`：不可变段文件只读访问器
+  - Open 时校验 Magic / Version / HeaderSize / FooterOffset / IndexCrc32
+  - 按 SeriesId / (SeriesId, FieldName) / TimeRange 线性查找 BlockDescriptor
+  - `ReadBlock` 返回零拷贝 ref struct `BlockData`
+  - `DecodeBlock` / `DecodeBlockRange` 解码出 DataPoint[]
+- 新增 `BlockDescriptor`（readonly struct）：描述 Block 元数据与物理位置
+- 新增 `BlockData`（readonly ref struct）：零拷贝 Block payload 视图
+- 新增 `SegmentReaderOptions`：VerifyIndexCrc / VerifyBlockCrc 选项（默认均启用）
+- 新增 `SegmentCorruptedException`：段文件损坏或格式不一致时抛出（含 path + offset）
+- 新增 `BlockDecoder`（internal static）：ValuePayloadCodec 的对偶，跨平台读用 BinaryPrimitives LE；支持 Float64 / Int64 / Boolean / String 四种类型及 DecodeRange 时间裁剪
+
+### Added
 - 启动 TSLite 引擎门面：`TSLite.Engine.Tsdb`（Open / Write / WriteMany / FlushNow / Dispose），完成 Milestone 3 写入路径闭环（PR #13）
 - 新增 `TsdbOptions`：引擎全局配置（RootDirectory / FlushPolicy / SegmentWriterOptions / WalBufferSize / SyncWalOnEveryWrite）
 - 新增 `TsdbPaths`：标准磁盘布局路径管理（catalog.tslcat + wal/active.tslwal + segments/{id:X16}.tslseg）
