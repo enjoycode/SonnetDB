@@ -25,6 +25,7 @@ public sealed class WalTruncatorTests : IDisposable
 
     private string WalPath() => Path.Combine(_tempDir, "active.tslwal");
 
+#pragma warning disable CS0618 // 测试已废弃的 WalTruncator.SwapAndTruncate 接口，保留以验证向后兼容行为
     [Fact]
     public void SwapAndTruncate_DeletesOldWal_CreatesNewWal()
     {
@@ -185,4 +186,5 @@ public sealed class WalTruncatorTests : IDisposable
         Assert.Throws<ArgumentNullException>(() =>
             WalTruncator.SwapAndTruncate(writer, null!, 1L, 64 * 1024));
     }
+#pragma warning restore CS0618
 }

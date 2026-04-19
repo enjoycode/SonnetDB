@@ -1,6 +1,7 @@
 using TSLite.Engine.Compaction;
 using TSLite.Memory;
 using TSLite.Storage.Segments;
+using TSLite.Wal;
 
 namespace TSLite.Engine;
 
@@ -34,6 +35,9 @@ public sealed class TsdbOptions
 
     /// <summary>Compaction 策略选项（默认启用，Size-Tiered，MinTierSize=4）。</summary>
     public CompactionPolicy Compaction { get; init; } = CompactionPolicy.Default;
+
+    /// <summary>WAL 滚动策略（默认启用，64MB / 百万条双阈值）。</summary>
+    public WalRollingPolicy WalRolling { get; init; } = WalRollingPolicy.Default;
 
     /// <summary>默认配置实例。</summary>
     public static TsdbOptions Default { get; } = new();

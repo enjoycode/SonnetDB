@@ -26,6 +26,10 @@ public static class WalTruncator
     /// <param name="keepArchive">是否保留归档文件（默认 false，即 rename 后立即删除）。</param>
     /// <returns>新创建的 <see cref="WalWriter"/> 实例，startLsn 为 <paramref name="nextLsn"/>。</returns>
     /// <exception cref="ArgumentNullException">任何参数为 null 时抛出。</exception>
+    /// <remarks>
+    /// 此方法已废弃。请改用 <see cref="WalSegmentSet.Roll"/> + <see cref="WalSegmentSet.RecycleUpTo"/>。
+    /// </remarks>
+    [Obsolete("Use WalSegmentSet.Roll + RecycleUpTo instead. This method remains for backward compatibility.")]
     public static WalWriter SwapAndTruncate(
         WalWriter currentWriter,
         string activeWalPath,
