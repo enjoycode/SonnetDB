@@ -66,10 +66,9 @@ public sealed class FlushCoordinatorWithSegmentSetTests : IDisposable
 
         Assert.NotNull(result);
         // Flush 后 RecycleUpTo 应清理旧 segment，只剩 active
+        Assert.True(walSet.Segments.Count < segCountBeforeFlush, $"Expected fewer segments after flush; before={segCountBeforeFlush}, after={walSet.Segments.Count}");
         Assert.Single(walSet.Segments);
         Assert.Equal(0, (int)memTable.PointCount);
-
-        _ = segCountBeforeFlush; // 避免 unused variable
     }
 
     [Fact]

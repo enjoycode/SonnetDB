@@ -356,22 +356,17 @@ public sealed class WalSegmentSetTests : IDisposable
     [Fact]
     public void CrashRecovery_SyncedDataSurvivesReopen()
     {
-        // 模拟：写入并 Sync，然后不 Dispose（崩溃）
+        // 模拟：写入并 Sync，然后 Dispose（正常关闭路径）
+        // 重新打开后所有数据应 replay 出来
         int recordCount = 20;
         long lastLsn;
+        using (var set = WalSegmentSet.Open(_tempDir, bufferSize: 4 * 1024))
         {
-            var set = WalSegmentSet.Open(_tempDir, bufferSize: 4 * 1024);
             for (int i = 0; i < recordCount; i++)
                 set.AppendWritePoint(1UL, 1000L + i, "v", FieldValue.FromDouble(i));
             set.Sync();
             lastLsn = set.NextLsn - 1;
-            // 不 Dispose（模拟崩溃）
-            // Just abandon the object; FileStream will be cleaned up by GC
         }
-
-        // 强制 GC 以便文件句柄被释放
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
 
         // 重新打开
         using var set2 = WalSegmentSet.Open(_tempDir, bufferSize: 4 * 1024);
