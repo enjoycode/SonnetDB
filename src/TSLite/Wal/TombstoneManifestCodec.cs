@@ -153,9 +153,6 @@ public static class TombstoneManifestCodec
                     int fieldNameLen = fixedReader.ReadUInt16();
 
                     // Variable part: FieldNameUtf8
-                    if (fieldNameLen < 0)
-                        throw new InvalidDataException($"TombstoneManifest: tombstone {i} has negative field name length.");
-
                     byte[] fieldBuf = ArrayPool<byte>.Shared.Rent(Math.Max(fieldNameLen, 1));
                     try
                     {
