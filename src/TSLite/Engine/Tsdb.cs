@@ -96,10 +96,7 @@ public sealed class Tsdb : IDisposable
             memTable.ReplayFrom(records);
         }
 
-        // 记录"已在 WAL 中有 CreateSeries 记录"的 series 集合（replay 后的 catalog 快照）
-        var seriesWithWalRecord = new HashSet<ulong>();
-        foreach (var entry in catalog.Snapshot())
-            seriesWithWalRecord.Add(entry.Id);
+        var seriesWithWalRecord = catalog.Snapshot().Select(e => e.Id).ToHashSet();
 
         // 打开 WAL 写入器（已有文件时自动续写）
         var walWriter = WalWriter.Open(walPath, startLsn: 1, bufferSize: options.WalBufferSize);

@@ -81,7 +81,7 @@ public sealed class TsdbConcurrencyTests : IDisposable
         using var cts = new CancellationTokenSource();
         var readExceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
 
-        // 启动读取线程（不传 cancellationToken，让任务运行到结束）
+        // 启动读取线程（通过检查 cts.Token.IsCancellationRequested 退出循环，不依赖 Task.Run 的 token 传参）
         var readTasks = Enumerable.Range(0, readThreads).Select(_ =>
             Task.Run(() =>
             {

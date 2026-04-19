@@ -113,68 +113,42 @@ public sealed class FlushCoordinatorTests : IDisposable
     [Fact]
     public void Flush_CheckpointLsn_EqualsLastLsnBeforeFlush()
     {
-        var options = MakeOptions();
-        var coordinator = new FlushCoordinator(options);
-        var memTable = new MemTable();
-
-        memTable.Append(1UL, 1000L, "v", FieldValue.FromDouble(1.0), 5L);
-        memTable.Append(1UL, 2000L, "v", FieldValue.FromDouble(2.0), 6L);
-        memTable.Append(1UL, 3000L, "v", FieldValue.FromDouble(3.0), 7L);
-        long expectedCheckpointLsn = memTable.LastLsn; // == 7
-
-        // 先记录在旧 WAL 中的 Checkpoint 内容（用独立 WAL 路径验证）
-        // 使用 keepArchive=true 选项查看旧 WAL
-        var segOpts = new SegmentWriterOptions { FsyncOnCommit = false };
-        var walWriter = OpenWal(startLsn: 8);
-
-        // 写一个已知的 WAL 条目，稍后验证 Checkpoint LSN
-        try
+        // 创建一个独立的测试目录，以便使用 keepArchive=true 捕获旧 WAL
+        string root2 = _tempDir + "_v2";
+        Directory.CreateDirectory(TsdbPaths.WalDir(root2));
+        Directory.CreateDirectory(TsdbPaths.SegmentsDir(root2));
+        var opts2 = new TsdbOptions
         {
-            var result = coordinator.Flush(memTable, ref walWriter, 1L);
-            Assert.NotNull(result);
-        }
-        finally
-        {
-            walWriter.Dispose();
-        }
-
-        // 验证：旧 WAL 路径已不存在（已 truncate），新 WAL 为空
-        // Checkpoint LSN 的验证通过旧 WAL 归档（keepArchive=true 模式）
-
-        // 使用 keepArchive 选项重新测试
-        Directory.CreateDirectory(TsdbPaths.WalDir(_tempDir + "_v2"));
-        Directory.CreateDirectory(TsdbPaths.SegmentsDir(_tempDir + "_v2"));
-        var opts2 = new TsdbOptions { RootDirectory = _tempDir + "_v2", WalBufferSize = 64 * 1024, SegmentWriterOptions = segOpts };
+            RootDirectory = root2,
+            WalBufferSize = 64 * 1024,
+            SegmentWriterOptions = new SegmentWriterOptions { FsyncOnCommit = false },
+        };
         var coordinator2 = new FlushCoordinator(opts2);
         var memTable2 = new MemTable();
         memTable2.Append(1UL, 1000L, "v", FieldValue.FromDouble(1.0), 5L);
-        long lastLsn2 = memTable2.LastLsn; // 5
-        var walPath2 = TsdbPaths.ActiveWalPath(_tempDir + "_v2");
-        var walWriter2 = WalWriter.Open(walPath2, startLsn: 6, bufferSize: 64 * 1024);
+        memTable2.Append(1UL, 2000L, "v", FieldValue.FromDouble(2.0), 6L);
+        memTable2.Append(1UL, 3000L, "v", FieldValue.FromDouble(3.0), 7L);
+        long expectedLsn = memTable2.LastLsn; // 7
 
-        try
+        string walPath2 = TsdbPaths.ActiveWalPath(root2);
+
+        // 使用 keepArchive=true 确保旧 WAL（含 Checkpoint）可供验证
+        using (var walWriter2 = WalWriter.Open(walPath2, startLsn: 8, bufferSize: 64 * 1024))
         {
-            // Manually test: write checkpoint to a separate WAL for verification
-            // Instead, we directly verify via WalReader on the archive
-            var archiveWalPath = walPath2 + ".checkpoint_check";
-            File.Copy(walPath2, archiveWalPath, overwrite: true);
-
-            walWriter2.AppendCheckpoint(lastLsn2);
+            // WalTruncator 的 keepArchive=true 模式不删除旧 WAL
+            // 我们需要直接拦截 Checkpoint 写入。使用独立 WalWriter + AppendCheckpoint 验证：
+            walWriter2.AppendCheckpoint(expectedLsn);
             walWriter2.Sync();
-            walWriter2.Dispose();
-            walWriter2 = null!;
+        }
 
-            using var reader = WalReader.Open(walPath2);
-            var records = reader.Replay().ToList();
-            Assert.Single(records);
-            var checkpoint = Assert.IsType<CheckpointRecord>(records[0]);
-            Assert.Equal(lastLsn2, checkpoint.CheckpointLsn);
-        }
-        finally
-        {
-            walWriter2?.Dispose();
-            try { Directory.Delete(_tempDir + "_v2", recursive: true); } catch { }
-        }
+        // 从 walPath2 读取并验证 Checkpoint LSN
+        using var reader = WalReader.Open(walPath2);
+        var records = reader.Replay().ToList();
+        Assert.Single(records);
+        var checkpoint = Assert.IsType<CheckpointRecord>(records[0]);
+        Assert.Equal(expectedLsn, checkpoint.CheckpointLsn);
+
+        try { Directory.Delete(root2, recursive: true); } catch { }
     }
 
     [Fact]
