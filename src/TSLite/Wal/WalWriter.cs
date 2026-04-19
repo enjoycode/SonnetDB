@@ -215,7 +215,7 @@ public sealed class WalWriter : IDisposable
         long lsn = _nextLsn;
         long now = DateTime.UtcNow.Ticks;
 
-        byte[] payloadBuf = ArrayPool<byte>.Shared.Rent(Math.Max(payloadSize, 1));
+        byte[] payloadBuf = ArrayPool<byte>.Shared.Rent(Math.Max(payloadSize, 1)); // ArrayPool requires length >= 1
         try
         {
             // Write payload

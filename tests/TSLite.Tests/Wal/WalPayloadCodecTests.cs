@@ -14,11 +14,10 @@ public sealed class WalPayloadCodecTests
     // ── WritePoint round-trip ────────────────────────────────────────────────
 
     [Theory]
-    [InlineData(1.234, FieldType.Float64)]
-    [InlineData(-9999.0, FieldType.Float64)]
-    public void WritePoint_Float64_RoundTrip(double numericValue, FieldType fieldType)
+    [InlineData(1.234)]
+    [InlineData(-9999.0)]
+    public void WritePoint_Float64_RoundTrip(double numericValue)
     {
-        _ = fieldType;
         var value = FieldValue.FromDouble(numericValue);
         RoundTripWritePoint(0xABCDUL, 1000L, "temperature", value);
     }
