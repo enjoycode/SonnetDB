@@ -35,6 +35,10 @@ public sealed class FormatSizesTests
         => Assert.Equal(FormatSizes.WalRecordHeaderSize, Unsafe.SizeOf<WalRecordHeader>());
 
     [Fact]
+    public void WalFileHeaderSize_MatchesUnsafeSizeOf()
+        => Assert.Equal(FormatSizes.WalFileHeaderSize, Unsafe.SizeOf<WalFileHeader>());
+
+    [Fact]
     public void AllSizes_AreCorrect()
     {
         Assert.Equal(64, FormatSizes.FileHeaderSize);
@@ -43,5 +47,6 @@ public sealed class FormatSizesTests
         Assert.Equal(48, FormatSizes.BlockIndexEntrySize);
         Assert.Equal(64, FormatSizes.SegmentFooterSize);
         Assert.Equal(32, FormatSizes.WalRecordHeaderSize);
+        Assert.Equal(64, FormatSizes.WalFileHeaderSize);
     }
 }

@@ -22,12 +22,19 @@ public sealed class WalRecordHeaderTests
     public void Default_AllFieldsAreZero()
     {
         WalRecordHeader h = default;
+        Assert.Equal(0u, h.Magic);
         Assert.Equal(WalRecordType.Unknown, h.RecordType);
         Assert.Equal(0, h.PayloadLength);
-        Assert.Equal(0UL, h.SeriesId);
+        Assert.Equal(0u, h.PayloadCrc32);
         Assert.Equal(0L, h.Timestamp);
-        Assert.Equal(0U, h.Crc32);
+        Assert.Equal(0L, h.Lsn);
     }
+
+    // ── MagicValue ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void MagicValue_IsCorrect()
+        => Assert.Equal(0x57414C52u, WalRecordHeader.MagicValue);
 
     // ── CreateNew ───────────────────────────────────────────────────────────
 
@@ -35,15 +42,34 @@ public sealed class WalRecordHeaderTests
     public void CreateNew_SetsExpectedFields()
     {
         WalRecordHeader h = WalRecordHeader.CreateNew(
-            recordType: WalRecordType.Write,
-            seriesId: 777UL,
-            timestamp: 1_000_000L,
-            payloadLength: 16);
+            recordType: WalRecordType.WritePoint,
+            payloadLength: 16,
+            payloadCrc32: 0xDEADBEEFu,
+            timestampUtcTicks: 1_000_000L,
+            lsn: 42L);
 
-        Assert.Equal(WalRecordType.Write, h.RecordType);
-        Assert.Equal(777UL, h.SeriesId);
-        Assert.Equal(1_000_000L, h.Timestamp);
+        Assert.Equal(WalRecordHeader.MagicValue, h.Magic);
+        Assert.Equal(WalRecordType.WritePoint, h.RecordType);
         Assert.Equal(16, h.PayloadLength);
+        Assert.Equal(0xDEADBEEFu, h.PayloadCrc32);
+        Assert.Equal(1_000_000L, h.Timestamp);
+        Assert.Equal(42L, h.Lsn);
+    }
+
+    // ── IsMagicValid ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void IsMagicValid_WhenMagicSet_ReturnsTrue()
+    {
+        WalRecordHeader h = WalRecordHeader.CreateNew(WalRecordType.WritePoint, 0, 0, 0L, 1L);
+        Assert.True(h.IsMagicValid());
+    }
+
+    [Fact]
+    public void IsMagicValid_WhenMagicZero_ReturnsFalse()
+    {
+        WalRecordHeader h = default;
+        Assert.False(h.IsMagicValid());
     }
 
     // ── Round-trip ──────────────────────────────────────────────────────────
@@ -53,10 +79,10 @@ public sealed class WalRecordHeaderTests
     {
         WalRecordHeader original = WalRecordHeader.CreateNew(
             recordType: WalRecordType.Checkpoint,
-            seriesId: 0xFEEDFACEUL,
-            timestamp: 9_999_999L,
-            payloadLength: 0);
-        original.Crc32 = 0x12345678U;
+            payloadLength: 8,
+            payloadCrc32: 0x12345678u,
+            timestampUtcTicks: 9_999_999L,
+            lsn: 99L);
 
         Span<byte> buffer = stackalloc byte[FormatSizes.WalRecordHeaderSize];
         var writer = new SpanWriter(buffer);
@@ -66,20 +92,22 @@ public sealed class WalRecordHeaderTests
         var reader = new SpanReader(buffer);
         WalRecordHeader read = reader.ReadStruct<WalRecordHeader>();
 
+        Assert.Equal(original.Magic, read.Magic);
         Assert.Equal(original.RecordType, read.RecordType);
         Assert.Equal(original.PayloadLength, read.PayloadLength);
-        Assert.Equal(original.SeriesId, read.SeriesId);
+        Assert.Equal(original.PayloadCrc32, read.PayloadCrc32);
         Assert.Equal(original.Timestamp, read.Timestamp);
-        Assert.Equal(original.Crc32, read.Crc32);
+        Assert.Equal(original.Lsn, read.Lsn);
     }
 
     // ── Enum values ─────────────────────────────────────────────────────────
 
     [Theory]
     [InlineData(WalRecordType.Unknown, (byte)0)]
-    [InlineData(WalRecordType.Write, (byte)1)]
+    [InlineData(WalRecordType.WritePoint, (byte)1)]
     [InlineData(WalRecordType.Checkpoint, (byte)2)]
-    [InlineData(WalRecordType.CatalogUpdate, (byte)3)]
+    [InlineData(WalRecordType.CreateSeries, (byte)3)]
+    [InlineData(WalRecordType.Truncate, (byte)4)]
     public void WalRecordType_ByteValues_AreCorrect(WalRecordType type, byte expected)
         => Assert.Equal(expected, (byte)type);
 
@@ -89,7 +117,7 @@ public sealed class WalRecordHeaderTests
         Span<byte> buffer = stackalloc byte[FormatSizes.WalRecordHeaderSize];
         foreach (WalRecordType type in Enum.GetValues<WalRecordType>())
         {
-            WalRecordHeader original = WalRecordHeader.CreateNew(type, 1UL, 1L, 0);
+            WalRecordHeader original = WalRecordHeader.CreateNew(type, 0, 0u, 1L, 1L);
             buffer.Clear();
             var writer = new SpanWriter(buffer);
             writer.WriteStruct(in original);
