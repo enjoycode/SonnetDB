@@ -20,7 +20,7 @@ internal sealed class BackgroundFlushWorker : IDisposable
     private long _failureCount;
     private Exception? _lastError;
 
-    /// <summary>当前累计已触发 Flush 次数（含失败）。仅用于测试/诊断。</summary>
+    /// <summary>当前累计已触发 Flush 尝试次数（仅当满足 FlushPolicy 阈值时；含成功和失败）。仅用于测试/诊断。</summary>
     public long TriggeredCount => Interlocked.Read(ref _triggeredCount);
 
     /// <summary>当前累计 Flush 异常次数。</summary>

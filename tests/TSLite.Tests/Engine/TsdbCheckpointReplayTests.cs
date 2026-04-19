@@ -122,12 +122,12 @@ public sealed class TsdbCheckpointReplayTests : IDisposable
     }
 
     /// <summary>
-    /// 场景：正常关闭（Dispose）后重新 Open，MemTable 应为空（catalog 已保存）。
+    /// 场景：正常关闭（Dispose）后重新 Open，MemTable 应为空（会话 1 的 Dispose 会 Flush 所有剩余数据）。
     /// </summary>
     [Fact]
     public void Reopen_AfterNormalClose_MemTableIsEmpty()
     {
-        // 会话 1：写 50 点，正常关闭
+        // 会话 1：写 50 点，正常关闭（Dispose 会触发 Flush）
         {
             using var db = Tsdb.Open(MakeOptions());
 
@@ -135,7 +135,7 @@ public sealed class TsdbCheckpointReplayTests : IDisposable
                 db.Write(MakePoint("sensor", 1000L + i, i));
         }
 
-        // 会话 2：正常关闭后 Dispose 会 Flush，重新 Open 后 MemTable 应为空
+        // 会话 2：重新 Open 后 MemTable 应为空（会话 1 的 Dispose 已 Flush 所有数据）
         {
             using var db = Tsdb.Open(MakeOptions());
             Assert.Equal(0L, db.MemTable.PointCount);
