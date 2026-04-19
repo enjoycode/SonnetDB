@@ -9,11 +9,14 @@ public enum WalRecordType : byte
     Unknown = 0,
 
     /// <summary>数据写入记录（包含一个时序数据点）。</summary>
-    Write = 1,
+    WritePoint = 1,
 
     /// <summary>检查点记录（标记 Flush 完成后的截断位置）。</summary>
     Checkpoint = 2,
 
     /// <summary>序列目录更新记录（新建 SeriesId 映射）。</summary>
-    CatalogUpdate = 3,
+    CreateSeries = 3,
+
+    /// <summary>WAL 截断记录（标记该位置之前的记录已全部落盘）。</summary>
+    Truncate = 4,
 }
