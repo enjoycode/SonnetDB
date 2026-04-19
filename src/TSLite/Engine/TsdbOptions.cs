@@ -1,3 +1,4 @@
+using TSLite.Engine.Compaction;
 using TSLite.Memory;
 using TSLite.Storage.Segments;
 
@@ -30,6 +31,9 @@ public sealed class TsdbOptions
 
     /// <summary>后台 Flush 线程选项（默认启用，轮询间隔 1s，关闭超时 30s）。</summary>
     public BackgroundFlushOptions BackgroundFlush { get; init; } = BackgroundFlushOptions.Default;
+
+    /// <summary>Compaction 策略选项（默认启用，Size-Tiered，MinTierSize=4）。</summary>
+    public CompactionPolicy Compaction { get; init; } = CompactionPolicy.Default;
 
     /// <summary>默认配置实例。</summary>
     public static TsdbOptions Default { get; } = new();

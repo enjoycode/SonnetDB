@@ -93,6 +93,53 @@ public sealed class SegmentManager : IDisposable
     }
 
     /// <summary>
+    /// 原子地移除多个旧段并加入一个新段，重建并发布索引快照。
+    /// <para>在锁内一次性完成"移除旧 Reader + 打开新 Reader + 重建快照"，避免中间状态可见。</para>
+    /// </summary>
+    /// <param name="removeIds">要移除的段 ID 列表。</param>
+    /// <param name="addedPath">新段的文件路径。</param>
+    /// <returns>已打开的新段 <see cref="SegmentReader"/> 实例。</returns>
+    /// <exception cref="ArgumentNullException">任何参数为 null 时抛出。</exception>
+    /// <exception cref="ObjectDisposedException">实例已关闭时抛出。</exception>
+    public SegmentReader SwapSegments(IReadOnlyList<long> removeIds, string addedPath)
+    {
+        ArgumentNullException.ThrowIfNull(removeIds);
+        ArgumentNullException.ThrowIfNull(addedPath);
+
+        List<SegmentReader> toDispose;
+        SegmentReader newReader;
+
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            newReader = SegmentReader.Open(addedPath, _readerOptions);
+            long newSegId = newReader.Header.SegmentId;
+
+            toDispose = new List<SegmentReader>(removeIds.Count);
+            foreach (long segId in removeIds)
+            {
+                if (_readerById.TryGetValue(segId, out var old))
+                {
+                    _readerById.Remove(segId);
+                    toDispose.Add(old);
+                }
+            }
+
+            _readerById[newSegId] = newReader;
+            RebuildSnapshotsLocked();
+        }
+
+        // 锁外 Dispose 旧 reader
+        foreach (var old in toDispose)
+        {
+            try { old.Dispose(); } catch { }
+        }
+
+        return newReader;
+    }
+
+    /// <summary>
     /// 移除指定段（用于未来 Compaction），关闭对应 <see cref="SegmentReader"/> 后重建索引。
     /// </summary>
     /// <param name="segmentId">要移除的段唯一标识符。</param>
