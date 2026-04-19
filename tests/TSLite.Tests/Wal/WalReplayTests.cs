@@ -32,10 +32,10 @@ public sealed class WalReplayTests : IDisposable
         var tags1 = new Dictionary<string, string> { ["host"] = "srv1" };
         var tags2 = new Dictionary<string, string> { ["host"] = "srv2" };
 
-        // Compute expected series IDs using SeriesCatalog
-        var refCatalog = new SeriesCatalog();
-        var entry1 = refCatalog.GetOrAdd("cpu", tags1);
-        var entry2 = refCatalog.GetOrAdd("memory", tags2);
+        // Pre-compute expected series IDs so the WAL can be written with correct IDs
+        var precomputedCatalog = new SeriesCatalog();
+        var entry1 = precomputedCatalog.GetOrAdd("cpu", tags1);
+        var entry2 = precomputedCatalog.GetOrAdd("memory", tags2);
 
         using (var writer = WalWriter.Open(path))
         {
