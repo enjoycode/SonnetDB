@@ -196,11 +196,9 @@ public sealed class SegmentIndexTests : IDisposable
             var (min, max) = blocks[i];
             var mt = new MemTable();
             long lsn = 1;
-            for (long ts = min; ts <= max; ts += (max - min) / 10 == 0 ? 10 : (max - min) / 10)
-            {
+            long step = Math.Max(10L, (max - min) / 10);
+            for (long ts = min; ts < max; ts += step)
                 mt.Append(sid, ts, field, SegmentIndexTestHelpers.MakeDouble(ts), lsn++);
-                if (ts == max) break;
-            }
             mt.Append(sid, max, field, SegmentIndexTestHelpers.MakeDouble(max), lsn++);
 
             string segPath = TempPath($"seg{i}.tslseg");

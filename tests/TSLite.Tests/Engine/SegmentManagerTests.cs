@@ -33,11 +33,8 @@ public sealed class SegmentManagerTests : IDisposable
     {
         var mt = new MemTable();
         long lsn = 1;
-        for (long ts = minTs; ts <= maxTs; ts += 100)
-        {
+        for (long ts = minTs; ts < maxTs; ts += 100)
             mt.Append(seriesId, ts, field, FieldValue.FromDouble((double)ts), lsn++);
-            if (ts == maxTs) break;
-        }
         mt.Append(seriesId, maxTs, field, FieldValue.FromDouble((double)maxTs), lsn++);
 
         string path = SegPath(segId);

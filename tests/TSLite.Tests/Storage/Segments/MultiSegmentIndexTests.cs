@@ -30,11 +30,9 @@ public sealed class MultiSegmentIndexTests : IDisposable
     {
         var mt = new MemTable();
         long lsn = 1;
-        for (long ts = minTs; ts <= maxTs; ts += Math.Max(1, (maxTs - minTs) / 5))
-        {
+        long step = Math.Max(1L, (maxTs - minTs) / 5);
+        for (long ts = minTs; ts < maxTs; ts += step)
             mt.Append(seriesId, ts, field, FieldValue.FromDouble((double)ts), lsn++);
-            if (ts == maxTs) break;
-        }
         mt.Append(seriesId, maxTs, field, FieldValue.FromDouble((double)maxTs), lsn++);
 
         string path = TempPath($"seg{segId:X16}.tslseg");
