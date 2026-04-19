@@ -52,6 +52,17 @@
 - 新增 `FormatSizes.CatalogFileHeaderSize = 64`
 - 新增 `InlineBytes24` 内联缓冲区及其 `AsSpan`/`AsReadOnlySpan` 扩展
 - 完成 Milestone 2：逻辑模型与 Series Catalog（PR #9）
+- 启动 Milestone 3：写入路径（PR #10）
+- 新增 `TSLite.Storage.Format.WalFileHeader`（64B）：WAL 文件头，含 magic "TSLWALv1" / 版本 / FirstLsn
+- 新增 `FormatSizes.WalFileHeaderSize = 64`
+- 更新 `WalRecordHeader`（32B）：新增 `Magic`（0x57414C52）/ `Flags` / `PayloadCrc32` / `Lsn` 字段，移除 `SeriesId` 至 payload
+- 更新 `WalRecordType`：重命名 `Write→WritePoint`、`CatalogUpdate→CreateSeries`，新增 `Truncate=4`
+- 新增 `TSLite.Wal` 命名空间：
+  - `WalRecord` 抽象基类及派生：`WritePointRecord` / `CreateSeriesRecord` / `CheckpointRecord` / `TruncateRecord`
+  - `WalWriter`：append-only WAL 写入器，含 CRC32（`System.IO.Hashing.Crc32`）+ fsync 支持
+  - `WalReader`：迭代式回放，支持文件尾截断与 CRC 校验失败的优雅停止，暴露 `LastValidOffset`
+  - `WalReplay`：将 WAL 回放到 `SeriesCatalog`，并 yield 出 `WritePointRecord` 流
+  - `WalPayloadCodec`（internal）：4 种 RecordType × 4 种 FieldType 的 payload 编解码
 
 ---
 
