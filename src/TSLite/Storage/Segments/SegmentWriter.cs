@@ -266,7 +266,7 @@ public sealed class SegmentWriter
                 fs.Flush(true);
 
             bs.Dispose();
-            // fs 由 using 语句在块结束时关闭（bs.Dispose 已关闭底层 fs，using 是幂等的二次关闭）
+            // using var fs ensures fs is disposed when the try block exits (idempotent if bs already closed it)
         }
         catch
         {
