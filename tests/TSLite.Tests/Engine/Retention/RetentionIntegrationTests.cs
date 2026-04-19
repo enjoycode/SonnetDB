@@ -251,8 +251,10 @@ public sealed class RetentionIntegrationTests : IDisposable
 
         // 查询 [9000, +∞) 应完整
         var fresh = db.Query.Execute(new PointQuery(seriesId, "usage", new TimeRange(9000L, long.MaxValue))).ToList();
-        // 应含 9000, 9100, 9200, 9300, 9400, 9500 共 6 个点
+        // 应含 9000, 9100, 9200, 9300, 9400, 9500 共 6 个点（cutoff=9000 点不过期）
         Assert.Equal(6, fresh.Count);
         Assert.All(fresh, p => Assert.True(p.Timestamp >= 9000L));
+        var expectedTimestamps = new long[] { 9000L, 9100L, 9200L, 9300L, 9400L, 9500L };
+        Assert.Equal(expectedTimestamps, fresh.Select(p => p.Timestamp).OrderBy(t => t).ToArray());
     }
 }

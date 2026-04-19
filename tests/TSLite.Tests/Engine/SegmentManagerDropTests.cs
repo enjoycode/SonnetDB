@@ -182,7 +182,7 @@ public sealed class SegmentManagerDropTests : IDisposable
                         mgr.DropSegments([removeId]);
                     }
 
-                    // 补一个新段进去
+                    // 补一个新段进去（短暂延迟让读线程也有机会获得 CPU 时间）
                     long segId = Interlocked.Increment(ref nextSegId);
                     WriteSegment(segId, seriesId: (ulong)segId);
                     mgr.AddSegment(SegPath(segId));
