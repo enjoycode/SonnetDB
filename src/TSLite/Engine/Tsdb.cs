@@ -1,6 +1,7 @@
 using TSLite.Catalog;
 using TSLite.Memory;
 using TSLite.Model;
+using TSLite.Query;
 using TSLite.Storage.Segments;
 using TSLite.Wal;
 
@@ -38,6 +39,9 @@ public sealed class Tsdb : IDisposable
     /// <summary>段集合与索引快照管理器。</summary>
     public SegmentManager Segments { get; }
 
+    /// <summary>查询执行器：合并 MemTable 与多个 Segment 的候选 Block，提供原始点查询与聚合查询。</summary>
+    public QueryEngine Query { get; }
+
     /// <summary>下一个将分配的 SegmentId（线程安全读取）。</summary>
     public long NextSegmentId
     {
@@ -65,6 +69,7 @@ public sealed class Tsdb : IDisposable
         _seriesWithWalRecord = seriesWithWalRecord;
         Segments = segmentManager;
         _flushCoordinator = new FlushCoordinator(options);
+        Query = new QueryEngine(memTable, segmentManager, catalog);
     }
 
     /// <summary>
