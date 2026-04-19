@@ -35,6 +35,9 @@ public sealed class Tsdb : IDisposable
     /// <summary>当前内存层（MemTable）。</summary>
     public MemTable MemTable { get; }
 
+    /// <summary>段集合与索引快照管理器。</summary>
+    public SegmentManager Segments { get; }
+
     /// <summary>下一个将分配的 SegmentId（线程安全读取）。</summary>
     public long NextSegmentId
     {
@@ -51,7 +54,8 @@ public sealed class Tsdb : IDisposable
         MemTable memTable,
         WalWriter walWriter,
         long nextSegmentId,
-        HashSet<ulong> seriesWithWalRecord)
+        HashSet<ulong> seriesWithWalRecord,
+        SegmentManager segmentManager)
     {
         _options = options;
         Catalog = catalog;
@@ -59,6 +63,7 @@ public sealed class Tsdb : IDisposable
         _walWriter = walWriter;
         _nextSegmentId = nextSegmentId;
         _seriesWithWalRecord = seriesWithWalRecord;
+        Segments = segmentManager;
         _flushCoordinator = new FlushCoordinator(options);
     }
 
@@ -101,7 +106,9 @@ public sealed class Tsdb : IDisposable
         // 打开 WAL 写入器（已有文件时自动续写）
         var walWriter = WalWriter.Open(walPath, startLsn: 1, bufferSize: options.WalBufferSize);
 
-        return new Tsdb(options, catalog, memTable, walWriter, nextSegmentId, seriesWithWalRecord);
+        var segmentManager = SegmentManager.Open(root, options.SegmentReaderOptions);
+
+        return new Tsdb(options, catalog, memTable, walWriter, nextSegmentId, seriesWithWalRecord, segmentManager);
     }
 
     /// <summary>
@@ -224,6 +231,7 @@ public sealed class Tsdb : IDisposable
             finally
             {
                 writerToDispose?.Dispose();
+                Segments.Dispose();
             }
         }
     }
@@ -245,6 +253,10 @@ public sealed class Tsdb : IDisposable
         // 确保在 .tslcat 未落盘的情况下崩溃恢复仍能从 WAL 重建 catalog。
         if (result != null)
         {
+            // 仅在非关闭路径（非 Dispose 内部调用）时更新索引快照
+            if (!_disposed)
+                Segments.AddSegment(result.Path);
+
             foreach (var entry in Catalog.Snapshot())
                 _walWriter!.AppendCreateSeries(entry.Id, entry.Measurement, entry.Tags);
             _walWriter!.Sync();

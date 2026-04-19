@@ -25,6 +25,9 @@ public sealed class TsdbOptions
     /// </summary>
     public bool SyncWalOnEveryWrite { get; init; } = false;
 
+    /// <summary>段读取选项（默认两项校验均启用）。</summary>
+    public SegmentReaderOptions SegmentReaderOptions { get; init; } = SegmentReaderOptions.Default;
+
     /// <summary>默认配置实例。</summary>
     public static TsdbOptions Default { get; } = new();
 }
