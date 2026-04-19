@@ -26,6 +26,8 @@ public sealed class Tsdb : IDisposable
     private WalWriter? _walWriter;
     private long _nextSegmentId;
     private bool _disposed;
+    private BackgroundFlushWorker? _flushWorker;
+    private long _checkpointLsn;
 
     /// <summary>数据库根目录路径。</summary>
     public string RootDirectory => _options.RootDirectory;
@@ -52,6 +54,19 @@ public sealed class Tsdb : IDisposable
         }
     }
 
+    /// <summary>最近一次 WAL Checkpoint 的 LSN（启动时从 WAL replay 获得；仅诊断/测试用）。</summary>
+    public long CheckpointLsn
+    {
+        get
+        {
+            lock (_writeSync)
+                return _checkpointLsn;
+        }
+    }
+
+    /// <summary>后台 Flush 策略（供 BackgroundFlushWorker 访问）。</summary>
+    internal MemTableFlushPolicy BackgroundFlushPolicy => _options.FlushPolicy;
+
     private Tsdb(
         TsdbOptions options,
         SeriesCatalog catalog,
@@ -59,7 +74,8 @@ public sealed class Tsdb : IDisposable
         WalWriter walWriter,
         long nextSegmentId,
         HashSet<ulong> seriesWithWalRecord,
-        SegmentManager segmentManager)
+        SegmentManager segmentManager,
+        long checkpointLsn)
     {
         _options = options;
         Catalog = catalog;
@@ -70,6 +86,7 @@ public sealed class Tsdb : IDisposable
         Segments = segmentManager;
         _flushCoordinator = new FlushCoordinator(options);
         Query = new QueryEngine(memTable, segmentManager, catalog);
+        _checkpointLsn = checkpointLsn;
     }
 
     /// <summary>
@@ -97,23 +114,37 @@ public sealed class Tsdb : IDisposable
                 nextSegmentId = segId + 1;
         }
 
-        // 回放 WAL（若文件存在）
+        // 回放 WAL（若文件存在），使用 Checkpoint LSN 跳过已落盘记录
         var memTable = new MemTable();
         string walPath = TsdbPaths.ActiveWalPath(root);
+        long checkpointLsn = 0;
+        long lastLsn = 0;
         if (File.Exists(walPath) && new FileInfo(walPath).Length > 0)
         {
-            var records = WalReplay.ReplayInto(walPath, catalog);
-            memTable.ReplayFrom(records);
+            var result = WalReplay.ReplayIntoWithCheckpoint(walPath, catalog);
+            memTable.ReplayFrom(result.WritePoints);
+            checkpointLsn = result.CheckpointLsn;
+            lastLsn = result.LastLsn;
         }
 
         var seriesWithWalRecord = catalog.Snapshot().Select(e => e.Id).ToHashSet();
 
-        // 打开 WAL 写入器（已有文件时自动续写）
-        var walWriter = WalWriter.Open(walPath, startLsn: 1, bufferSize: options.WalBufferSize);
+        // 打开 WAL 写入器（续写，起始 LSN = lastLsn + 1）
+        long startLsn = lastLsn > 0 ? lastLsn + 1 : 1;
+        var walWriter = WalWriter.Open(walPath, startLsn: startLsn, bufferSize: options.WalBufferSize);
 
         var segmentManager = SegmentManager.Open(root, options.SegmentReaderOptions);
 
-        return new Tsdb(options, catalog, memTable, walWriter, nextSegmentId, seriesWithWalRecord, segmentManager);
+        var tsdb = new Tsdb(options, catalog, memTable, walWriter, nextSegmentId, seriesWithWalRecord, segmentManager, checkpointLsn);
+
+        // 启动后台 Flush 线程
+        if (options.BackgroundFlush.Enabled)
+        {
+            tsdb._flushWorker = new BackgroundFlushWorker(tsdb, options.BackgroundFlush);
+            tsdb._flushWorker.Start();
+        }
+
+        return tsdb;
     }
 
     /// <summary>
@@ -145,10 +176,10 @@ public sealed class Tsdb : IDisposable
 
             if (_options.SyncWalOnEveryWrite)
                 _walWriter!.Sync();
-
-            if (MemTable.ShouldFlush(_options.FlushPolicy))
-                FlushNowLocked();
         }
+
+        // 锁外向后台线程发送非阻塞信号
+        _flushWorker?.Signal();
     }
 
     /// <summary>
@@ -197,10 +228,14 @@ public sealed class Tsdb : IDisposable
     }
 
     /// <summary>
-    /// 关闭数据库：Flush 剩余 MemTable、保存 catalog、关闭 WAL。
+    /// 关闭数据库：先关闭后台 Flush 线程，再 Flush 剩余 MemTable、保存 catalog、关闭 WAL。
     /// </summary>
     public void Dispose()
     {
+        // 先关闭后台线程（在锁外，防止与 InternalFlushFromBackground 死锁）
+        _flushWorker?.Dispose();
+        _flushWorker = null;
+
         lock (_writeSync)
         {
             if (_disposed)
@@ -220,8 +255,10 @@ public sealed class Tsdb : IDisposable
                         try
                         {
                             var writer = writerToDispose;
-                            _flushCoordinator.Flush(MemTable, ref writer, _nextSegmentId++);
+                            var result = _flushCoordinator.Flush(MemTable, ref writer, _nextSegmentId++);
                             writerToDispose = writer;
+                            if (result != null)
+                                _checkpointLsn = MemTable.LastLsn;
                         }
                         catch
                         {
@@ -251,6 +288,7 @@ public sealed class Tsdb : IDisposable
         if (_walWriter == null)
             return null;
 
+        long lsnBeforeFlush = MemTable.LastLsn;
         long segId = _nextSegmentId++;
         var result = _flushCoordinator.Flush(MemTable, ref _walWriter!, segId);
 
@@ -258,6 +296,10 @@ public sealed class Tsdb : IDisposable
         // 确保在 .tslcat 未落盘的情况下崩溃恢复仍能从 WAL 重建 catalog。
         if (result != null)
         {
+            // 更新 CheckpointLsn（在锁内完成）
+            if (lsnBeforeFlush != long.MinValue)
+                _checkpointLsn = lsnBeforeFlush;
+
             // 仅在非关闭路径（非 Dispose 内部调用）时更新索引快照
             if (!_disposed)
                 Segments.AddSegment(result.Path);
@@ -268,6 +310,19 @@ public sealed class Tsdb : IDisposable
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// 由后台 Flush 线程调用的 Flush 入口。与同步 FlushNow 共享 _writeSync 锁，保证互斥。
+    /// </summary>
+    internal void InternalFlushFromBackground()
+    {
+        lock (_writeSync)
+        {
+            if (_disposed)
+                return;
+            FlushNowLocked();
+        }
     }
 
     /// <summary>
