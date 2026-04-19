@@ -46,6 +46,9 @@ public sealed class Tsdb : IDisposable
     /// <summary>查询执行器：合并 MemTable 与多个 Segment 的候选 Block，提供原始点查询与聚合查询。</summary>
     public QueryEngine Query { get; }
 
+    /// <summary>进程内墓碑集合，支持查询过滤与 Compaction 消化。</summary>
+    public TombstoneTable Tombstones { get; private set; } = new TombstoneTable();
+
     /// <summary>下一个将分配的 SegmentId（线程安全读取）。</summary>
     public long NextSegmentId
     {
@@ -100,7 +103,7 @@ public sealed class Tsdb : IDisposable
         _seriesWithWalRecord = seriesWithWalRecord;
         Segments = segmentManager;
         _flushCoordinator = new FlushCoordinator(options);
-        Query = new QueryEngine(memTable, segmentManager, catalog);
+        Query = new QueryEngine(memTable, segmentManager, catalog, Tombstones);
         _checkpointLsn = checkpointLsn;
     }
 
@@ -144,6 +147,16 @@ public sealed class Tsdb : IDisposable
         var segmentManager = SegmentManager.Open(root, options.SegmentReaderOptions);
 
         var tsdb = new Tsdb(options, catalog, memTable, walSet, nextSegmentId, seriesWithWalRecord, segmentManager, checkpointLsn);
+
+        // 加载墓碑清单（文件不存在时返回空集合）
+        tsdb.Tombstones.LoadFrom(TombstoneManifestCodec.Load(TsdbPaths.TombstoneManifestPath(root)));
+
+        // 追加 WAL replay 中 checkpoint 之后的 Delete 记录
+        foreach (var del in result.DeleteRecords)
+            tsdb.Tombstones.Add(new Tombstone(del.SeriesId, del.FieldName, del.FromTimestamp, del.ToTimestamp, del.Lsn));
+
+        // 重写一遍 manifest（合并 manifest + WAL replay 的结果）
+        TombstoneManifestCodec.Save(TsdbPaths.TombstoneManifestPath(root), tsdb.Tombstones.All);
 
         // 启动后台 Flush 线程
         if (options.BackgroundFlush.Enabled)
@@ -218,6 +231,70 @@ public sealed class Tsdb : IDisposable
     }
 
     /// <summary>
+    /// 删除某 (seriesId, fieldName) 在 [fromTimestamp, toTimestamp] 时间窗内的所有点。
+    /// 在 WAL 中追加 Delete 记录，并将墓碑加入内存 <see cref="Tombstones"/> 集合。
+    /// manifest 将在下次 FlushNow / Compaction / Dispose 时持久化；崩溃时 WAL replay 兜底。
+    /// </summary>
+    /// <param name="seriesId">目标序列 ID（XxHash64 值）。</param>
+    /// <param name="fieldName">目标字段名称（非空）。</param>
+    /// <param name="fromTimestamp">删除时间窗起始时间戳（Unix 毫秒，闭区间）。</param>
+    /// <param name="toTimestamp">删除时间窗结束时间戳（Unix 毫秒，闭区间）。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="fieldName"/> 为 null 时抛出。</exception>
+    /// <exception cref="ArgumentException"><paramref name="fieldName"/> 为空字符串时抛出。</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="fromTimestamp"/> &gt; <paramref name="toTimestamp"/> 时抛出。</exception>
+    /// <exception cref="ObjectDisposedException">实例已关闭时抛出。</exception>
+    public void Delete(ulong seriesId, string fieldName, long fromTimestamp, long toTimestamp)
+    {
+        ArgumentNullException.ThrowIfNull(fieldName);
+        if (fieldName.Length == 0)
+            throw new ArgumentException("fieldName 不能为空字符串。", nameof(fieldName));
+        if (fromTimestamp > toTimestamp)
+            throw new ArgumentOutOfRangeException(nameof(fromTimestamp),
+                $"fromTimestamp ({fromTimestamp}) 不能大于 toTimestamp ({toTimestamp})。");
+
+        lock (_writeSync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            long lsn = _walSet!.AppendDelete(seriesId, fieldName, fromTimestamp, toTimestamp);
+            var tomb = new Tombstone(seriesId, fieldName, fromTimestamp, toTimestamp, lsn);
+            Tombstones.Add(tomb);
+
+            if (_options.SyncWalOnEveryWrite)
+                _walSet!.Sync();
+        }
+
+        // 锁外向后台线程发送非阻塞信号
+        _flushWorker?.Signal();
+    }
+
+    /// <summary>
+    /// 删除某 (measurement, tags, fieldName) 在 [fromTimestamp, toTimestamp] 时间窗内的所有点。
+    /// 若序列不存在于 Catalog 中则直接返回 false，不做任何操作。
+    /// </summary>
+    /// <param name="measurement">Measurement 名称。</param>
+    /// <param name="tags">Tag 键值对。</param>
+    /// <param name="fieldName">目标字段名称（非空）。</param>
+    /// <param name="fromTimestamp">删除时间窗起始时间戳（Unix 毫秒，闭区间）。</param>
+    /// <param name="toTimestamp">删除时间窗结束时间戳（Unix 毫秒，闭区间）。</param>
+    /// <returns>序列存在并成功标记墓碑时返回 <c>true</c>；序列不存在时返回 <c>false</c>。</returns>
+    /// <exception cref="ArgumentNullException">任何参数为 null 时抛出。</exception>
+    public bool Delete(string measurement, IReadOnlyDictionary<string, string> tags, string fieldName, long fromTimestamp, long toTimestamp)
+    {
+        ArgumentNullException.ThrowIfNull(measurement);
+        ArgumentNullException.ThrowIfNull(tags);
+        ArgumentNullException.ThrowIfNull(fieldName);
+
+        var key = new SeriesKey(measurement, tags);
+        var entry = Catalog.TryGet(key);
+        if (entry == null)
+            return false;
+
+        Delete(entry.Id, fieldName, fromTimestamp, toTimestamp);
+        return true;
+    }
+
+    /// <summary>
     /// 主动触发一次 Flush：把 MemTable 写出为 Segment，追加 WAL Checkpoint，Roll WAL，回收旧段，重置 MemTable。
     /// </summary>
     /// <returns>Segment 构建结果；MemTable 为空时返回 null。</returns>
@@ -268,18 +345,30 @@ public sealed class Tsdb : IDisposable
             {
                 if (walSetToDispose != null)
                 {
-                    // 尝试 Flush 剩余数据
+                    // 尝试 Flush 剩余数据（Flush 内部会保存 manifest）
                     if (MemTable.PointCount > 0)
                     {
                         try
                         {
-                            var result = _flushCoordinator.Flush(MemTable, walSetToDispose, _nextSegmentId++);
+                            var result = _flushCoordinator.Flush(MemTable, walSetToDispose, _nextSegmentId++, Tombstones);
                             if (result != null)
                                 _checkpointLsn = MemTable.LastLsn;
                         }
                         catch
                         {
                             // Flush 失败不应阻止 catalog 保存和 WAL 关闭
+                        }
+                    }
+                    else
+                    {
+                        // MemTable 为空时，仍需持久化 manifest（可能有 Delete 操作但没有写入）
+                        try
+                        {
+                            TombstoneManifestCodec.Save(TsdbPaths.TombstoneManifestPath(RootDirectory), Tombstones.All);
+                        }
+                        catch
+                        {
+                            // manifest 保存失败不阻止关闭（WAL 仍可作为恢复手段）
                         }
                     }
 
@@ -307,7 +396,7 @@ public sealed class Tsdb : IDisposable
 
         long lsnBeforeFlush = MemTable.LastLsn;
         long segId = _nextSegmentId++;
-        var result = _flushCoordinator.Flush(MemTable, _walSet, segId);
+        var result = _flushCoordinator.Flush(MemTable, _walSet, segId, Tombstones);
 
         // Flush 成功后，向新 WAL 重写所有 catalog 条目的 CreateSeries 记录，
         // 确保在 .tslcat 未落盘的情况下崩溃恢复仍能从 WAL 重建 catalog。

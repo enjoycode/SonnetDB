@@ -164,6 +164,26 @@ public sealed class WalWriter : IDisposable
     }
 
     /// <summary>
+    /// 追加一条 Delete 记录，返回分配的 LSN。
+    /// </summary>
+    /// <param name="seriesId">序列唯一标识。</param>
+    /// <param name="fieldName">字段名称。</param>
+    /// <param name="fromTimestamp">删除时间窗起始时间戳（Unix 毫秒，闭区间）。</param>
+    /// <param name="toTimestamp">删除时间窗结束时间戳（Unix 毫秒，闭区间）。</param>
+    /// <returns>分配的 LSN。</returns>
+    /// <exception cref="ObjectDisposedException">写入器已关闭时抛出。</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="fieldName"/> 为 null 时抛出。</exception>
+    public long AppendDelete(ulong seriesId, string fieldName, long fromTimestamp, long toTimestamp)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(fieldName);
+
+        int payloadSize = WalPayloadCodec.MeasureDelete(fieldName);
+        return AppendRecord(WalRecordType.Delete, payloadSize, (ref SpanWriter w) =>
+            WalPayloadCodec.WriteDeletePayload(ref w, seriesId, fieldName, fromTimestamp, toTimestamp));
+    }
+
+    /// <summary>
     /// 把缓冲区刷到 OS（不强制 fsync）。
     /// </summary>
     /// <exception cref="ObjectDisposedException">写入器已关闭时抛出。</exception>

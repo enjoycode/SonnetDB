@@ -38,14 +38,24 @@ public sealed class FlushCoordinator
     /// <param name="memTable">要 Flush 的 MemTable 实例。</param>
     /// <param name="walSet">当前活跃的 WAL segment 集合管理器。</param>
     /// <param name="segmentId">本次生成 Segment 的唯一标识符（单调递增）。</param>
+    /// <param name="tombstones">可选的 <see cref="TombstoneTable"/>；若非 null，Flush 前先持久化墓碑清单。</param>
     /// <returns>
     /// Segment 构建结果；若 MemTable 为空则返回 null（不触碰 WAL，不创建 Segment）。
     /// </returns>
-    /// <exception cref="ArgumentNullException">任何参数为 null 时抛出。</exception>
-    public SegmentBuildResult? Flush(MemTable memTable, WalSegmentSet walSet, long segmentId)
+    /// <exception cref="ArgumentNullException">任何必选参数为 null 时抛出。</exception>
+    public SegmentBuildResult? Flush(MemTable memTable, WalSegmentSet walSet, long segmentId, TombstoneTable? tombstones = null)
     {
         ArgumentNullException.ThrowIfNull(memTable);
         ArgumentNullException.ThrowIfNull(walSet);
+
+        // 步骤 0：持久化墓碑清单（在 WriteSegment 之前；确保 checkpoint 后可安全回收含 delete 的旧 WAL segment）
+        // 仅当有墓碑或清单文件已存在（需要更新/清空）时才写入，避免不必要的 I/O
+        if (tombstones != null)
+        {
+            string manifestPath = TsdbPaths.TombstoneManifestPath(_options.RootDirectory);
+            if (tombstones.Count > 0 || File.Exists(manifestPath))
+                TombstoneManifestCodec.Save(manifestPath, tombstones.All);
+        }
 
         // 步骤 1：检查 MemTable 是否为空
         if (memTable.PointCount == 0)

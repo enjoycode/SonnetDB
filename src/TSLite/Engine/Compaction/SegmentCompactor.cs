@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using TSLite.Engine;
 using TSLite.Memory;
 using TSLite.Model;
 using TSLite.Storage.Format;
@@ -38,14 +39,16 @@ public sealed class SegmentCompactor
     /// <param name="readers">按 SegmentId 索引的所有已打开 Reader 字典。</param>
     /// <param name="newSegmentId">新段的 SegmentId。</param>
     /// <param name="newSegmentPath">新段的输出文件路径。</param>
+    /// <param name="tombstones">可选的墓碑集合；若非 null，合并时过滤被墓碑覆盖的数据点（物理删除）。</param>
     /// <returns>Compaction 执行结果统计。</returns>
-    /// <exception cref="ArgumentNullException">任何参数为 null 时抛出。</exception>
+    /// <exception cref="ArgumentNullException">任何必选参数为 null 时抛出。</exception>
     /// <exception cref="InvalidOperationException">同 (SeriesId, FieldName) 的 FieldType 不一致时抛出。</exception>
     public CompactionResult Execute(
         CompactionPlan plan,
         IReadOnlyDictionary<long, SegmentReader> readers,
         long newSegmentId,
-        string newSegmentPath)
+        string newSegmentPath,
+        TombstoneTable? tombstones = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(readers);
@@ -58,13 +61,15 @@ public sealed class SegmentCompactor
 
         int inputBlockCount = groups.Values.Sum(static g => g.Blocks.Count);
 
-        // 2. 为每个 group 构建 MemTableSeries（N 路合并）
+        // 2. 为每个 group 构建 MemTableSeries（N 路合并），并应用墓碑过滤
         var seriesList = new List<MemTableSeries>(groups.Count);
         foreach (var (key, group) in groups)
         {
             var mts = new MemTableSeries(key, group.FieldType);
-            MergeAndAppend(mts, group.Blocks, readers);
-            seriesList.Add(mts);
+            MergeAndAppend(mts, group.Blocks, readers, tombstones);
+            // 若该桶所有点均被墓碑覆盖，不生成空 Block（SegmentWriter 会跳过空 series）
+            if (mts.Count > 0)
+                seriesList.Add(mts);
         }
 
         // 3. 写入新段
@@ -123,14 +128,23 @@ public sealed class SegmentCompactor
 
     /// <summary>
     /// N 路堆合并多个 Block 的 DataPoint 到 <paramref name="mts"/>，按 timestamp 升序。
+    /// 若 <paramref name="tombstones"/> 非 null，过滤被墓碑覆盖的数据点。
     /// </summary>
     private static void MergeAndAppend(
         MemTableSeries mts,
         List<(long SegId, BlockDescriptor Block)> blockRefs,
-        IReadOnlyDictionary<long, SegmentReader> readers)
+        IReadOnlyDictionary<long, SegmentReader> readers,
+        TombstoneTable? tombstones)
     {
         if (blockRefs.Count == 0)
             return;
+
+        // 预先获取该 (SeriesId, FieldName) 对应的墓碑列表（避免重复查询）
+        IReadOnlyList<Tombstone>? tombstoneList = null;
+        if (tombstones != null)
+            tombstoneList = tombstones.GetForSeriesField(mts.Key.SeriesId, mts.Key.FieldName);
+
+        bool hasTombstones = tombstoneList is { Count: > 0 };
 
         if (blockRefs.Count == 1)
         {
@@ -140,7 +154,11 @@ public sealed class SegmentCompactor
             {
                 var points = reader.DecodeBlock(block);
                 foreach (var dp in points)
+                {
+                    if (hasTombstones && IsCoveredByTombstones(dp.Timestamp, tombstoneList!))
+                        continue;
                     mts.Append(dp.Timestamp, dp.Value);
+                }
             }
             return;
         }
@@ -172,7 +190,9 @@ public sealed class SegmentCompactor
         {
             var entry = pq.Dequeue();
             var dp = decoded[entry.SourceIndex][entry.PointIndex];
-            mts.Append(dp.Timestamp, dp.Value);
+
+            if (!hasTombstones || !IsCoveredByTombstones(dp.Timestamp, tombstoneList!))
+                mts.Append(dp.Timestamp, dp.Value);
 
             int nextIdx = entry.PointIndex + 1;
             if (nextIdx < decoded[entry.SourceIndex].Length)
@@ -182,6 +202,19 @@ public sealed class SegmentCompactor
                     new HeapKey(decoded[entry.SourceIndex][nextIdx].Timestamp, entry.SourceIndex, nextIdx));
             }
         }
+    }
+
+    /// <summary>
+    /// 判定 timestamp 是否被列表中任意墓碑覆盖。
+    /// </summary>
+    private static bool IsCoveredByTombstones(long timestamp, IReadOnlyList<Tombstone> tombstones)
+    {
+        foreach (var tomb in tombstones)
+        {
+            if (timestamp >= tomb.FromTimestamp && timestamp <= tomb.ToTimestamp)
+                return true;
+        }
+        return false;
     }
 
     private readonly record struct HeapEntry(int SourceIndex, int PointIndex);

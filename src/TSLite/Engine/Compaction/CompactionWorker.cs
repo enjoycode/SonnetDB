@@ -1,5 +1,7 @@
 namespace TSLite.Engine.Compaction;
 
+using TSLite.Wal;
+
 /// <summary>
 /// 后台 Compaction 工作线程：周期性执行 Plan + Execute + Swap。
 /// <para>
@@ -121,13 +123,16 @@ internal sealed class CompactionWorker : IDisposable
                     var newId = _owner.AllocateSegmentId();
                     var newPath = TsdbPaths.SegmentPath(_owner.RootDirectory, newId);
                     var readerDict = readers.ToDictionary(static r => r.Header.SegmentId);
-                    var result = _compactor.Execute(plan, readerDict, newId, newPath);
+                    var result = _compactor.Execute(plan, readerDict, newId, newPath, _owner.Tombstones);
 
                     _owner.Segments.SwapSegments(plan.SourceSegmentIds, newPath);
 
                     // SwapSegments 已 Dispose 旧 reader；删除旧文件（失败不抛）
                     foreach (long oldId in plan.SourceSegmentIds)
                         TryDelete(TsdbPaths.SegmentPath(_owner.RootDirectory, oldId));
+
+                    // 回收已被消化的墓碑（不再覆盖任何活段的墓碑可以丢弃）
+                    RecycleDiscardedTombstones();
 
                     Interlocked.Increment(ref _executedCount);
                 }
@@ -150,6 +155,44 @@ internal sealed class CompactionWorker : IDisposable
         catch
         {
             // 删除旧段文件失败不阻塞（Windows 文件锁等情况），下次 Compaction 会再处理
+        }
+    }
+
+    /// <summary>
+    /// Compaction Swap 后，回收不再覆盖任何活段的墓碑：
+    /// 遍历所有当前墓碑，若 Index.LookupCandidates 返回空（即无任何活段包含被覆盖点），
+    /// 则将其标记为可丢弃，从 TombstoneTable 移除，并重写 manifest。
+    /// </summary>
+    private void RecycleDiscardedTombstones()
+    {
+        var tombstones = _owner.Tombstones;
+        var all = tombstones.All;
+        if (all.Count == 0)
+            return;
+
+        var discarded = new List<Tombstone>();
+        var index = _owner.Segments.Index;
+
+        foreach (var tomb in all)
+        {
+            var candidates = index.LookupCandidates(tomb.SeriesId, tomb.FieldName, tomb.FromTimestamp, tomb.ToTimestamp);
+            if (candidates.Count == 0)
+                discarded.Add(tomb);
+        }
+
+        if (discarded.Count == 0)
+            return;
+
+        tombstones.RemoveAll(discarded);
+        try
+        {
+            TombstoneManifestCodec.Save(
+                TsdbPaths.TombstoneManifestPath(_owner.RootDirectory),
+                tombstones.All);
+        }
+        catch
+        {
+            // manifest 写入失败不应中断 Compaction（下次 Flush 或启动时会重写）
         }
     }
 }

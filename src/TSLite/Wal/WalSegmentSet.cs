@@ -188,6 +188,27 @@ public sealed class WalSegmentSet : IDisposable
     }
 
     /// <summary>
+    /// 追加一条 Delete 记录，返回分配的 LSN。若超过滚动阈值则自动 Roll。
+    /// </summary>
+    /// <param name="seriesId">序列唯一标识。</param>
+    /// <param name="fieldName">字段名称。</param>
+    /// <param name="fromTimestamp">删除时间窗起始时间戳（Unix 毫秒，闭区间）。</param>
+    /// <param name="toTimestamp">删除时间窗结束时间戳（Unix 毫秒，闭区间）。</param>
+    /// <returns>分配的 LSN。</returns>
+    /// <exception cref="ObjectDisposedException">实例已关闭时抛出。</exception>
+    public long AppendDelete(ulong seriesId, string fieldName, long fromTimestamp, long toTimestamp)
+    {
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            long lsn = _activeWriter!.AppendDelete(seriesId, fieldName, fromTimestamp, toTimestamp);
+            _activeRecordCount++;
+            RollIfNeeded();
+            return lsn;
+        }
+    }
+
+    /// <summary>
     /// 强制 fsync，确保 active segment 数据持久化到磁盘。
     /// </summary>
     /// <exception cref="ObjectDisposedException">实例已关闭时抛出。</exception>
@@ -291,6 +312,7 @@ public sealed class WalSegmentSet : IDisposable
 
         // 第二遍：应用 catalog + 按 checkpointLsn 过滤 WritePoint
         var writePoints = new List<WritePointRecord>();
+        var deleteRecords = new List<DeleteRecord>();
 
         foreach (var seg in snapshot)
         {
@@ -313,11 +335,16 @@ public sealed class WalSegmentSet : IDisposable
                         if (wp.Lsn > checkpointLsn)
                             writePoints.Add(wp);
                         break;
+
+                    case DeleteRecord del:
+                        if (del.Lsn > checkpointLsn)
+                            deleteRecords.Add(del);
+                        break;
                 }
             }
         }
 
-        return new WalReplayResult(checkpointLsn, lastLsn, writePoints);
+        return new WalReplayResult(checkpointLsn, lastLsn, writePoints, deleteRecords);
     }
 
     /// <summary>
