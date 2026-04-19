@@ -19,6 +19,11 @@ public sealed class SegmentWriterOptions
     /// </summary>
     internal Action<long>? FailAt { get; init; }
 
+    /// <summary>
+    /// 原子 rename 完成后的回调（仅供测试）：可抛出异常以模拟 rename 之后、Checkpoint 之前的崩溃。
+    /// </summary>
+    internal Action? PostRenameAction { get; init; }
+
     /// <summary>默认选项实例。</summary>
     public static SegmentWriterOptions Default { get; } = new();
 }

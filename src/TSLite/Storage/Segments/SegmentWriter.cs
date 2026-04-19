@@ -279,6 +279,9 @@ public sealed class SegmentWriter
         // 原子替换：临时文件 → 目标文件
         File.Move(tempPath, path, overwrite: true);
 
+        // 崩溃注入钩子（仅测试使用）：rename 完成后、Checkpoint 写入之前
+        _options.PostRenameAction?.Invoke();
+
         sw.Stop();
         long durationMicros = sw.ElapsedTicks * 1_000_000L / Stopwatch.Frequency;
 
