@@ -63,6 +63,11 @@
   - `WalReader`：迭代式回放，支持文件尾截断与 CRC 校验失败的优雅停止，暴露 `LastValidOffset`
   - `WalReplay`：将 WAL 回放到 `SeriesCatalog`，并 yield 出 `WritePointRecord` 流
   - `WalPayloadCodec`（internal）：4 种 RecordType × 4 种 FieldType 的 payload 编解码
+- 新增 `TSLite.Memory.MemTableSeries`：单 (SeriesId, FieldName, FieldType) 桶，
+  支持顺序与乱序追加，Snapshot 稳定排序（`_isSorted` 快速路径 + 索引辅助稳定排序）
+- 新增 `TSLite.Memory.MemTable`：以 SeriesFieldKey 为主键的写入内存层，
+  支持 WAL Replay 装载（`ReplayFrom`）、阈值触发 Flush（`ShouldFlush`）、Reset 与 SnapshotAll（PR #11）
+- 新增 `TSLite.Memory.MemTableFlushPolicy`：MaxBytes / MaxPoints / MaxAge 三种阈值策略
 
 ---
 
