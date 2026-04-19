@@ -102,8 +102,8 @@ public sealed class MemTableIntegrationTests : IDisposable
         {
             writer.AppendCreateSeries(entry.Id, "sensor", tags);
             writer.AppendWritePoint(entry.Id, 5000L, "v", FieldValue.FromDouble(5.0));
-            writer.AppendWritePoint(entry.Id, 1000L, FieldValue.FromDouble(1.0), "v");
-            writer.AppendWritePoint(entry.Id, 3000L, FieldValue.FromDouble(3.0), "v");
+            writer.AppendWritePoint(entry.Id, 1000L, "v", FieldValue.FromDouble(1.0));
+            writer.AppendWritePoint(entry.Id, 3000L, "v", FieldValue.FromDouble(3.0));
             writer.Sync();
         }
 
@@ -157,12 +157,4 @@ public sealed class MemTableIntegrationTests : IDisposable
         Assert.Equal(1, memTable.SeriesCount);
         Assert.Equal(10L, memTable.FirstLsn);
     }
-}
-
-// Extension helper for WalWriter to allow positional field parameter ordering in tests
-internal static class WalWriterTestExtensions
-{
-    public static long AppendWritePoint(this WalWriter writer, ulong seriesId, long timestamp,
-        FieldValue value, string fieldName)
-        => writer.AppendWritePoint(seriesId, timestamp, fieldName, value);
 }

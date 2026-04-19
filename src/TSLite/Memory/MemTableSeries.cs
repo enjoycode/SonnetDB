@@ -144,7 +144,7 @@ public sealed class MemTableSeries
         int lo = 0, hi = span.Length - 1;
         while (lo <= hi)
         {
-            int mid = (lo + hi) / 2;
+            int mid = lo + (hi - lo) / 2;
             if (span[mid].Timestamp < fromInclusive)
                 lo = mid + 1;
             else
@@ -157,7 +157,7 @@ public sealed class MemTableSeries
         hi = span.Length - 1;
         while (lo <= hi)
         {
-            int mid = (lo + hi) / 2;
+            int mid = lo + (hi - lo) / 2;
             if (span[mid].Timestamp <= toInclusive)
                 lo = mid + 1;
             else

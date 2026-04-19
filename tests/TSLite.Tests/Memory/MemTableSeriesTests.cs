@@ -32,7 +32,7 @@ public sealed class MemTableSeriesTests
     }
 
     [Fact]
-    public void Append_OrderedTimestamps_MinMaxCorrect()
+    public void Append_UnorderedTimestamps_MinMaxCorrect()
     {
         var series = new MemTableSeries(MakeKey(), FieldType.Int64);
 
