@@ -130,6 +130,35 @@ internal static class WalPayloadCodec
     internal static void WriteCheckpointPayload(ref SpanWriter writer, long checkpointLsn)
         => writer.WriteInt64(checkpointLsn);
 
+    /// <summary>
+    /// 计算 Delete 载荷的字节大小。
+    /// </summary>
+    internal static int MeasureDelete(string fieldName)
+    {
+        int fieldNameBytes = _utf8.GetByteCount(fieldName);
+        // SeriesId(8) + FromTimestamp(8) + ToTimestamp(8) + FieldNameLen(2) + FieldNameBytes
+        return 8 + 8 + 8 + 2 + fieldNameBytes;
+    }
+
+    /// <summary>
+    /// 将 Delete 载荷写入 <see cref="SpanWriter"/>。
+    /// </summary>
+    internal static void WriteDeletePayload(
+        ref SpanWriter writer,
+        ulong seriesId,
+        string fieldName,
+        long fromTimestamp,
+        long toTimestamp)
+    {
+        writer.WriteUInt64(seriesId);
+        writer.WriteInt64(fromTimestamp);
+        writer.WriteInt64(toTimestamp);
+        int fieldNameBytes = _utf8.GetByteCount(fieldName);
+        writer.WriteUInt16((ushort)fieldNameBytes);
+        int written = _utf8.GetBytes(fieldName, writer.FreeSpan);
+        writer.Advance(written);
+    }
+
     // ─────────────────────────── 读取 ──────────────────────────────────────
 
     /// <summary>
@@ -198,5 +227,21 @@ internal static class WalPayloadCodec
     {
         long checkpointLsn = reader.ReadInt64();
         return new CheckpointRecord(lsn, timestampUtcTicks, checkpointLsn);
+    }
+
+    /// <summary>
+    /// 从 <see cref="SpanReader"/> 读取 Delete 载荷。
+    /// </summary>
+    internal static DeleteRecord ReadDeletePayload(
+        SpanReader reader,
+        long lsn,
+        long timestampUtcTicks)
+    {
+        ulong seriesId = reader.ReadUInt64();
+        long fromTimestamp = reader.ReadInt64();
+        long toTimestamp = reader.ReadInt64();
+        int fieldNameLen = reader.ReadUInt16();
+        string fieldName = _utf8.GetString(reader.ReadBytes(fieldNameLen));
+        return new DeleteRecord(lsn, timestampUtcTicks, seriesId, fieldName, fromTimestamp, toTimestamp);
     }
 }

@@ -84,6 +84,7 @@ public static class WalReplay
 
         // 第二遍：应用 catalog + 按 checkpointLsn 过滤 WritePoint
         var writePoints = new List<WritePointRecord>();
+        var deleteRecords = new List<DeleteRecord>();
 
         using (var reader2 = WalReader.Open(walPath))
         {
@@ -104,11 +105,16 @@ public static class WalReplay
                         if (wpRecord.Lsn > checkpointLsn)
                             writePoints.Add(wpRecord);
                         break;
+
+                    case DeleteRecord delRecord:
+                        if (delRecord.Lsn > checkpointLsn)
+                            deleteRecords.Add(delRecord);
+                        break;
                 }
             }
         }
 
-        return new WalReplayResult(checkpointLsn, lastLsn, writePoints);
+        return new WalReplayResult(checkpointLsn, lastLsn, writePoints, deleteRecords);
     }
 }
 
@@ -118,7 +124,9 @@ public static class WalReplay
 /// <param name="CheckpointLsn">WAL 中见到的最大 Checkpoint LSN；0 表示未见到任何 Checkpoint。</param>
 /// <param name="LastLsn">WAL 中最后一条合法记录的 LSN（含被跳过的记录）；0 表示 WAL 为空。</param>
 /// <param name="WritePoints">按 LSN 升序排列的写入点列表，仅包含 LSN 严格大于 CheckpointLsn 的记录。</param>
+/// <param name="DeleteRecords">按 LSN 升序排列的删除记录列表，仅包含 LSN 严格大于 CheckpointLsn 的记录。</param>
 public sealed record WalReplayResult(
     long CheckpointLsn,
     long LastLsn,
-    IReadOnlyList<WritePointRecord> WritePoints);
+    IReadOnlyList<WritePointRecord> WritePoints,
+    IReadOnlyList<DeleteRecord> DeleteRecords);

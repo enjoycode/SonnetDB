@@ -62,3 +62,21 @@ public sealed record CheckpointRecord(
 /// <param name="TimestampUtcTicks">记录写入时刻（UTC Ticks）。</param>
 public sealed record TruncateRecord(long Lsn, long TimestampUtcTicks)
     : WalRecord(Lsn, TimestampUtcTicks);
+
+/// <summary>
+/// 删除记录，声明 (SeriesId, FieldName) 在 [FromTimestamp, ToTimestamp] 闭区间内的所有数据点已被墓碑标记。
+/// </summary>
+/// <param name="Lsn">日志序列号。</param>
+/// <param name="TimestampUtcTicks">记录写入时刻（UTC Ticks）。</param>
+/// <param name="SeriesId">序列唯一标识。</param>
+/// <param name="FieldName">字段名称。</param>
+/// <param name="FromTimestamp">删除时间窗起始时间戳（Unix 毫秒，闭区间）。</param>
+/// <param name="ToTimestamp">删除时间窗结束时间戳（Unix 毫秒，闭区间）。</param>
+public sealed record DeleteRecord(
+    long Lsn,
+    long TimestampUtcTicks,
+    ulong SeriesId,
+    string FieldName,
+    long FromTimestamp,
+    long ToTimestamp)
+    : WalRecord(Lsn, TimestampUtcTicks);

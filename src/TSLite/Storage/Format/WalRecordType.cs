@@ -19,4 +19,7 @@ public enum WalRecordType : byte
 
     /// <summary>WAL 截断记录（标记该位置之前的记录已全部落盘）。</summary>
     Truncate = 4,
+
+    /// <summary>删除记录（声明某 (SeriesId, FieldName) 在时间窗内的数据已被墓碑标记）。</summary>
+    Delete = 5,
 }

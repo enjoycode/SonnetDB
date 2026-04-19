@@ -21,6 +21,7 @@ public sealed class QueryEngine
     private readonly MemTable _memTable;
     private readonly SegmentManager _segments;
     private readonly SeriesCatalog _catalog;
+    private readonly TombstoneTable? _tombstones;
 
     /// <summary>
     /// 初始化 <see cref="QueryEngine"/> 实例。
@@ -28,8 +29,9 @@ public sealed class QueryEngine
     /// <param name="memTable">内存层数据源。</param>
     /// <param name="segments">段集合与索引快照管理器。</param>
     /// <param name="catalog">序列目录。</param>
-    /// <exception cref="ArgumentNullException">任意参数为 null 时抛出。</exception>
-    public QueryEngine(MemTable memTable, SegmentManager segments, SeriesCatalog catalog)
+    /// <param name="tombstones">可选的墓碑集合，用于查询时过滤被删除的数据点；为 null 时不过滤。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="memTable"/>、<paramref name="segments"/> 或 <paramref name="catalog"/> 为 null 时抛出。</exception>
+    public QueryEngine(MemTable memTable, SegmentManager segments, SeriesCatalog catalog, TombstoneTable? tombstones = null)
     {
         ArgumentNullException.ThrowIfNull(memTable);
         ArgumentNullException.ThrowIfNull(segments);
@@ -38,6 +40,7 @@ public sealed class QueryEngine
         _memTable = memTable;
         _segments = segments;
         _catalog = catalog;
+        _tombstones = tombstones;
     }
 
     /// <summary>
@@ -91,12 +94,21 @@ public sealed class QueryEngine
         // 4. N 路有序合并
         var merged = BlockSourceMerger.Merge(memSlice, segmentSlices);
 
-        // 5. 应用 Limit
+        // 5. 应用墓碑过滤
+        IEnumerable<DataPoint> filtered = merged;
+        if (_tombstones != null)
+        {
+            var tombstoneList = _tombstones.GetForSeriesField(query.SeriesId, query.FieldName);
+            if (tombstoneList.Count > 0)
+                filtered = merged.Where(p => !IsCoveredByTombstones(p.Timestamp, tombstoneList));
+        }
+
+        // 6. 应用 Limit
         if (query.Limit.HasValue)
         {
             int limit = query.Limit.Value;
             int count = 0;
-            foreach (var dp in merged)
+            foreach (var dp in filtered)
             {
                 if (count >= limit)
                     yield break;
@@ -106,7 +118,7 @@ public sealed class QueryEngine
         }
         else
         {
-            foreach (var dp in merged)
+            foreach (var dp in filtered)
                 yield return dp;
         }
     }
@@ -295,6 +307,20 @@ public sealed class QueryEngine
         foreach (var r in readers)
             map[r.Header.SegmentId] = r;
         return map;
+    }
+
+    /// <summary>
+    /// 判定 <paramref name="timestamp"/> 是否被 <paramref name="tombstones"/> 列表中的任意墓碑覆盖。
+    /// 对小集合（≤ 4 个）线性扫描；超过 4 个时仍线性扫描（v1 简化，通常墓碑数量很少）。
+    /// </summary>
+    private static bool IsCoveredByTombstones(long timestamp, IReadOnlyList<Tombstone> tombstones)
+    {
+        foreach (var tomb in tombstones)
+        {
+            if (timestamp >= tomb.FromTimestamp && timestamp <= tomb.ToTimestamp)
+                return true;
+        }
+        return false;
     }
 
     /// <summary>将 <see cref="FieldValue"/> 转换为 double，用于数值聚合。</summary>

@@ -148,6 +148,8 @@ public sealed class WalReader : IDisposable
                                 WalPayloadCodec.ReadCheckpointPayload(payloadReader, header.Lsn, header.Timestamp),
                             WalRecordType.Truncate =>
                                 new TruncateRecord(header.Lsn, header.Timestamp),
+                            WalRecordType.Delete =>
+                                WalPayloadCodec.ReadDeletePayload(payloadReader, header.Lsn, header.Timestamp),
                             _ => null,
                         };
                     }
