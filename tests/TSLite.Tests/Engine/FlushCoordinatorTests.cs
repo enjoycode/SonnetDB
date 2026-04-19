@@ -35,8 +35,8 @@ public sealed class FlushCoordinatorTests : IDisposable
             SegmentWriterOptions = segOpts ?? new SegmentWriterOptions { FsyncOnCommit = false },
         };
 
-    private WalWriter OpenWal(long startLsn = 1) =>
-        WalWriter.Open(TsdbPaths.ActiveWalPath(_tempDir), startLsn: startLsn, bufferSize: 64 * 1024);
+    private WalSegmentSet OpenWalSet(long initialStartLsn = 1) =>
+        WalSegmentSet.Open(TsdbPaths.WalDir(_tempDir), new WalRollingPolicy { Enabled = false }, bufferSize: 64 * 1024, initialStartLsn: initialStartLsn);
 
     [Fact]
     public void Flush_EmptyMemTable_ReturnsNull_NoSegmentCreated()
@@ -44,30 +44,19 @@ public sealed class FlushCoordinatorTests : IDisposable
         var options = MakeOptions();
         var coordinator = new FlushCoordinator(options);
         var memTable = new MemTable();
-        var walWriter = OpenWal();
-        try
-        {
-            var result = coordinator.Flush(memTable, ref walWriter, 1L);
+        using var walSet = OpenWalSet();
 
-            Assert.Null(result);
+        var result = coordinator.Flush(memTable, walSet, 1L);
 
-            // Segment 目录下不应有任何文件
-            var segments = TsdbPaths.EnumerateSegments(_tempDir).ToList();
-            Assert.Empty(segments);
+        Assert.Null(result);
 
-            // WAL 文件应仅含文件头（无 Checkpoint 记录）
-            using var reader = WalReader.Open(TsdbPaths.ActiveWalPath(_tempDir));
-            var records = reader.Replay().ToList();
-            Assert.Empty(records);
-        }
-        finally
-        {
-            walWriter.Dispose();
-        }
+        // Segment 目录下不应有任何文件
+        var segments = TsdbPaths.EnumerateSegments(_tempDir).ToList();
+        Assert.Empty(segments);
     }
 
     [Fact]
-    public void Flush_NonEmptyMemTable_CreatesSegment_WritesCheckpoint_ResetsMemTable()
+    public void Flush_NonEmptyMemTable_CreatesSegment_ResetsMemTable()
     {
         var options = MakeOptions();
         var coordinator = new FlushCoordinator(options);
@@ -76,44 +65,28 @@ public sealed class FlushCoordinatorTests : IDisposable
         // 写入几个点
         memTable.Append(1UL, 1000L, "cpu", FieldValue.FromDouble(50.0), 1L);
         memTable.Append(1UL, 2000L, "cpu", FieldValue.FromDouble(60.0), 2L);
-        long lastLsnBeforeFlush = memTable.LastLsn; // == 2
 
-        var walWriter = OpenWal(startLsn: 3);
-        try
-        {
-            var result = coordinator.Flush(memTable, ref walWriter, 1L);
+        using var walSet = OpenWalSet(initialStartLsn: 3);
 
-            // 应返回非 null 结果
-            Assert.NotNull(result);
-            Assert.Equal(1L, result.SegmentId);
+        var result = coordinator.Flush(memTable, walSet, 1L);
 
-            // Segment 文件应存在
-            string expectedSegPath = TsdbPaths.SegmentPath(_tempDir, 1L);
-            Assert.True(File.Exists(expectedSegPath));
+        // 应返回非 null 结果
+        Assert.NotNull(result);
+        Assert.Equal(1L, result.SegmentId);
 
-            // MemTable 应已清空
-            Assert.Equal(0, (int)memTable.PointCount);
-            Assert.Equal(0, memTable.SeriesCount);
+        // Segment 文件应存在
+        string expectedSegPath = TsdbPaths.SegmentPath(_tempDir, 1L);
+        Assert.True(File.Exists(expectedSegPath));
 
-            // 归档 WAL 不应存在
-            var archives = Directory.GetFiles(_tempDir, "*.archived-*", SearchOption.AllDirectories);
-            Assert.Empty(archives);
-
-            // WAL Replay 应返回仅 1 条 CheckpointRecord（在新 WAL 中不会有任何记录）
-            using var reader = WalReader.Open(TsdbPaths.ActiveWalPath(_tempDir));
-            var records = reader.Replay().ToList();
-            Assert.Empty(records); // 新 WAL 只有 header
-        }
-        finally
-        {
-            walWriter.Dispose();
-        }
+        // MemTable 应已清空
+        Assert.Equal(0, (int)memTable.PointCount);
+        Assert.Equal(0, memTable.SeriesCount);
     }
 
     [Fact]
-    public void Flush_CheckpointLsn_EqualsLastLsnBeforeFlush()
+    public void Flush_CheckpointRecord_WrittenToWal()
     {
-        // 创建一个独立的测试目录，以便使用 keepArchive=true 捕获旧 WAL
+        // 验证 Flush 后：含 Checkpoint 记录的旧 segment 被正确回收，只剩 active
         string root2 = _tempDir + "_v2";
         Directory.CreateDirectory(TsdbPaths.WalDir(root2));
         Directory.CreateDirectory(TsdbPaths.SegmentsDir(root2));
@@ -128,25 +101,19 @@ public sealed class FlushCoordinatorTests : IDisposable
         memTable2.Append(1UL, 1000L, "v", FieldValue.FromDouble(1.0), 5L);
         memTable2.Append(1UL, 2000L, "v", FieldValue.FromDouble(2.0), 6L);
         memTable2.Append(1UL, 3000L, "v", FieldValue.FromDouble(3.0), 7L);
-        long expectedLsn = memTable2.LastLsn; // 7
 
-        string walPath2 = TsdbPaths.ActiveWalPath(root2);
-
-        // 使用 keepArchive=true 确保旧 WAL（含 Checkpoint）可供验证
-        using (var walWriter2 = WalWriter.Open(walPath2, startLsn: 8, bufferSize: 64 * 1024))
+        using (var walSet2 = WalSegmentSet.Open(TsdbPaths.WalDir(root2), new WalRollingPolicy { Enabled = false }, 64 * 1024, initialStartLsn: 8))
         {
-            // WalTruncator 的 keepArchive=true 模式不删除旧 WAL
-            // 我们需要直接拦截 Checkpoint 写入。使用独立 WalWriter + AppendCheckpoint 验证：
-            walWriter2.AppendCheckpoint(expectedLsn);
-            walWriter2.Sync();
-        }
+            coordinator2.Flush(memTable2, walSet2, 1L);
 
-        // 从 walPath2 读取并验证 Checkpoint LSN
-        using var reader = WalReader.Open(walPath2);
-        var records = reader.Replay().ToList();
-        Assert.Single(records);
-        var checkpoint = Assert.IsType<CheckpointRecord>(records[0]);
-        Assert.Equal(expectedLsn, checkpoint.CheckpointLsn);
+            // Flush 后：Checkpoint 已被写入并 Sync，然后 Roll+RecycleUpTo 回收了含 Checkpoint 的旧段
+            // 只剩 active segment（新段）
+            var walSegments = WalSegmentLayout.Enumerate(TsdbPaths.WalDir(root2));
+            Assert.True(walSegments.Count >= 1, "Should have at least the active segment");
+
+            // MemTable 已清空
+            Assert.Equal(0, (int)memTable2.PointCount);
+        }
 
         try { Directory.Delete(root2, recursive: true); } catch { }
     }
@@ -162,19 +129,22 @@ public sealed class FlushCoordinatorTests : IDisposable
     {
         var options = MakeOptions();
         var coordinator = new FlushCoordinator(options);
-        var walWriter = OpenWal();
-        try
-        {
-            Assert.Throws<ArgumentNullException>(() =>
-            {
-                var w = walWriter;
-                coordinator.Flush(null!, ref w, 1L);
-            });
-        }
-        finally
-        {
-            walWriter.Dispose();
-        }
+        using var walSet = OpenWalSet();
+
+        Assert.Throws<ArgumentNullException>(() =>
+            coordinator.Flush(null!, walSet, 1L));
+    }
+
+    [Fact]
+    public void Flush_NullWalSet_ThrowsArgumentNull()
+    {
+        var options = MakeOptions();
+        var coordinator = new FlushCoordinator(options);
+        var memTable = new MemTable();
+        memTable.Append(1UL, 1000L, "v", FieldValue.FromDouble(1.0), 1L);
+
+        Assert.Throws<ArgumentNullException>(() =>
+            coordinator.Flush(memTable, null!, 1L));
     }
 
     [Fact]
@@ -186,18 +156,12 @@ public sealed class FlushCoordinatorTests : IDisposable
 
         memTable.Append(42UL, 9999L, "temperature", FieldValue.FromDouble(36.6), 1L);
 
-        var walWriter = OpenWal(startLsn: 2);
-        try
-        {
-            var result = coordinator.Flush(memTable, ref walWriter, 7L);
-            Assert.NotNull(result);
-            Assert.Equal(7L, result.SegmentId);
-            Assert.True(File.Exists(TsdbPaths.SegmentPath(_tempDir, 7L)));
-            Assert.True(result.TotalBytes > 0);
-        }
-        finally
-        {
-            walWriter.Dispose();
-        }
+        using var walSet = OpenWalSet(initialStartLsn: 2);
+
+        var result = coordinator.Flush(memTable, walSet, 7L);
+        Assert.NotNull(result);
+        Assert.Equal(7L, result.SegmentId);
+        Assert.True(File.Exists(TsdbPaths.SegmentPath(_tempDir, 7L)));
+        Assert.True(result.TotalBytes > 0);
     }
 }

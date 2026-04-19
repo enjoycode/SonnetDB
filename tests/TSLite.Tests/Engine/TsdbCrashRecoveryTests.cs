@@ -174,13 +174,16 @@ public sealed class TsdbCrashRecoveryTests : IDisposable
         // 强制关闭（崩溃模拟：不保存 catalog，不再次 Flush）
         db.CrashSimulationCloseWal();
 
-        // 验证：WAL 中没有 Checkpoint 记录
-        using (var walReader = WalReader.Open(TsdbPaths.ActiveWalPath(_tempDir)))
+        // 验证：WAL segment 中没有 Checkpoint 记录
+        var walDir = TsdbPaths.WalDir(_tempDir);
+        var walSegments = WalSegmentLayout.Enumerate(walDir);
+        var allCheckpoints = new List<CheckpointRecord>();
+        foreach (var seg in walSegments)
         {
-            var records = walReader.Replay().ToList();
-            var checkpoints = records.OfType<CheckpointRecord>().ToList();
-            Assert.Empty(checkpoints);
+            using var walReader = WalReader.Open(seg.Path);
+            allCheckpoints.AddRange(walReader.Replay().OfType<CheckpointRecord>());
         }
+        Assert.Empty(allCheckpoints);
 
         // 会话 2：重新打开（不使用崩溃注入选项）
         using var db2 = Tsdb.Open(MakeOptions());

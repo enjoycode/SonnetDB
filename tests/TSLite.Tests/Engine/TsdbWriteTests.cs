@@ -2,6 +2,7 @@ using TSLite.Engine;
 using TSLite.Memory;
 using TSLite.Model;
 using TSLite.Storage.Segments;
+using TSLite.Wal;
 using Xunit;
 
 namespace TSLite.Tests.Engine;
@@ -40,7 +41,9 @@ public sealed class TsdbWriteTests : IDisposable
 
         Assert.True(Directory.Exists(TsdbPaths.WalDir(_tempDir)));
         Assert.True(Directory.Exists(TsdbPaths.SegmentsDir(_tempDir)));
-        Assert.True(File.Exists(TsdbPaths.ActiveWalPath(_tempDir)));
+        // 新模型：WAL 以 segment 文件存在，wal/ 目录中应有至少一个 .tslwal 文件
+        var walSegments = WalSegmentLayout.Enumerate(TsdbPaths.WalDir(_tempDir));
+        Assert.NotEmpty(walSegments);
         Assert.Equal(0, db.Catalog.Count);
         Assert.Equal(0L, db.MemTable.PointCount);
     }
@@ -58,7 +61,9 @@ public sealed class TsdbWriteTests : IDisposable
 
         Assert.Equal(1, db.Catalog.Count);
         Assert.Equal(1L, db.MemTable.PointCount);
-        Assert.True(File.Exists(TsdbPaths.ActiveWalPath(_tempDir)));
+        // 新模型：WAL 以 segment 文件存在
+        var walSegments = WalSegmentLayout.Enumerate(TsdbPaths.WalDir(_tempDir));
+        Assert.NotEmpty(walSegments);
     }
 
     [Fact]
