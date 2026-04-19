@@ -162,24 +162,24 @@ public sealed class QueryEngine
                 }
 
                 if (firstPoint && query.Range.FromInclusive == long.MinValue)
+                {
                     bucketStart = dp.Timestamp;
+                    firstPoint = false;
+                }
 
                 double v = ToDouble(dp.Value);
                 count++;
                 sum += v;
                 if (v < min) min = v;
                 if (v > max) max = v;
-                if (firstPoint) { firstValue = v; firstPoint = false; }
+                if (count == 1) firstValue = v;
                 lastValue = v;
             }
 
             if (count == 0)
                 yield break;
 
-            if (query.Range.ToInclusive == long.MaxValue)
-                bucketEnd = lastValue == 0 ? bucketStart + 1 : long.MaxValue; // 无意义，用合理值
-
-            // 重新确定 bucketEnd（全局单桶时终点 = ToInclusive+1 或 MaxValue）
+            // 确定 bucketEnd（全局单桶时终点 = ToInclusive+1 或 MaxValue）
             bucketEnd = query.Range.ToInclusive < long.MaxValue
                 ? query.Range.ToInclusive + 1
                 : long.MaxValue;
