@@ -68,6 +68,12 @@
 - 新增 `TSLite.Memory.MemTable`：以 SeriesFieldKey 为主键的写入内存层，
   支持 WAL Replay 装载（`ReplayFrom`）、阈值触发 Flush（`ShouldFlush`）、Reset 与 SnapshotAll（PR #11）
 - 新增 `TSLite.Memory.MemTableFlushPolicy`：MaxBytes / MaxPoints / MaxAge 三种阈值策略
+- 新增 `TSLite.Storage.Segments.SegmentWriter`：把 MemTable 写为不可变 `.tslseg` 文件，使用临时文件 + 原子 rename 保证崩溃安全（PR #12）
+- 新增 `SegmentWriterOptions`：BufferSize / FsyncOnCommit / TempFileSuffix 写入选项
+- 新增 `SegmentBuildResult`：构建结果记录（路径、BlockCount、时间范围、各区偏移、耗时）
+- 新增 `ValuePayloadCodec`（internal）：Float64 / Int64 / Boolean / String 的 Raw 编码
+- 新增 `FieldNameHash`（internal）：基于 XxHash32 的字段名哈希，用于 BlockIndexEntry.FieldNameHash
+- 启用 `BlockHeader.Crc32`（CRC32(FieldNameUtf8 ++ TsPayload ++ ValPayload)）与 `SegmentFooter.Crc32`（IndexCrc32）
 
 ---
 

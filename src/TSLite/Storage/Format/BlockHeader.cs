@@ -65,8 +65,8 @@ public struct BlockHeader
     /// <summary>保留字节（全 0）。</summary>
     public InlineBytes16 Reserved16;
 
-    /// <summary>保留字节（全 0）。</summary>
-    public InlineBytes4 Reserved4;
+    /// <summary>块数据 CRC32 校验值（CRC32(FieldNameUtf8 ++ TimestampPayload ++ ValuePayload)）。</summary>
+    public uint Crc32;
 
     /// <summary>
     /// 创建一个新的 <see cref="BlockHeader"/>，填写所有关键字段。
