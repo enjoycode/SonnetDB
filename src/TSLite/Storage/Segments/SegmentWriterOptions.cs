@@ -25,6 +25,17 @@ public sealed class SegmentWriterOptions
     public Format.BlockEncoding TimestampEncoding { get; init; } = Format.BlockEncoding.None;
 
     /// <summary>
+    /// 值载荷编码方式：
+    /// <list type="bullet">
+    ///   <item><description><c>None</c>：原始 8B/1B/UTF-8 直存（V1 默认）。</description></item>
+    ///   <item><description><c>DeltaValue</c>：Float64 走简化版 Gorilla XOR；Boolean 走 RLE；
+    ///       String 走字典编码；Int64 仍按 8B LE 直存（PR #30 暂不压缩）。</description></item>
+    /// </list>
+    /// 默认 <c>None</c>；显式开启时会在 <c>BlockHeader.Encoding</c> 上叠加 <c>DeltaValue</c> 标志。
+    /// </summary>
+    public Format.BlockEncoding ValueEncoding { get; init; } = Format.BlockEncoding.None;
+
+    /// <summary>
     /// 崩溃注入钩子（仅供测试）：在写入指定字节偏移时被调用，可抛出异常以模拟崩溃。
     /// </summary>
     internal Action<long>? FailAt { get; init; }

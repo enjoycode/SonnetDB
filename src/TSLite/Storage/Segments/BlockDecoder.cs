@@ -29,7 +29,7 @@ internal static class BlockDecoder
 
         var result = new DataPoint[count];
         ReadTimestamps(d.TimestampEncoding, tsPayload, count, result);
-        ReadValues(d.FieldType, valPayload, count, result);
+        ReadValues(d.FieldType, d.ValueEncoding, valPayload, count, result);
         return result;
     }
 
@@ -71,7 +71,7 @@ internal static class BlockDecoder
             result[i] = new DataPoint(timestamps[start + i], default);
 
         // 解码对应范围的值
-        ReadValuesRange(d.FieldType, valPayload, count, start, rangeCount, result);
+        ReadValuesRange(d.FieldType, d.ValueEncoding, valPayload, count, start, rangeCount, result);
         return result;
     }
 
@@ -107,8 +107,16 @@ internal static class BlockDecoder
             timestamps[i] = BinaryPrimitives.ReadInt64LittleEndian(tsPayload.Slice(i * 8, 8));
     }
 
-    private static void ReadValues(FieldType fieldType, ReadOnlySpan<byte> valPayload, int count, DataPoint[] result)
+    private static void ReadValues(FieldType fieldType, BlockEncoding valEncoding, ReadOnlySpan<byte> valPayload, int count, DataPoint[] result)
     {
+        if ((valEncoding & BlockEncoding.DeltaValue) != 0)
+        {
+            var values = ValuePayloadCodecV2.Decode(fieldType, valPayload, count);
+            for (int i = 0; i < count; i++)
+                result[i] = new DataPoint(result[i].Timestamp, values[i]);
+            return;
+        }
+
         switch (fieldType)
         {
             case FieldType.Float64:
@@ -146,12 +154,22 @@ internal static class BlockDecoder
 
     private static void ReadValuesRange(
         FieldType fieldType,
+        BlockEncoding valEncoding,
         ReadOnlySpan<byte> valPayload,
         int totalCount,
         int start,
         int rangeCount,
         DataPoint[] result)
     {
+        if ((valEncoding & BlockEncoding.DeltaValue) != 0)
+        {
+            // V2 编码不支持随机访问，先全量解码再切片
+            var all = ValuePayloadCodecV2.Decode(fieldType, valPayload, totalCount);
+            for (int i = 0; i < rangeCount; i++)
+                result[i] = new DataPoint(result[i].Timestamp, all[start + i]);
+            return;
+        }
+
         switch (fieldType)
         {
             case FieldType.Float64:

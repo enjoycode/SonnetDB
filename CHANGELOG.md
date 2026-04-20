@@ -6,6 +6,17 @@
 ## [Unreleased]
 
 ### Added
+- 新增数值列 V2 编码：Float64 Gorilla XOR + Boolean RLE + String 字典（PR #30）
+  - 新增内部位流工具 `TSLite.Storage.Segments.BitIo`：`BitWriter` / `BitReader` ref struct，高位优先按位写读，最大 64 位/调用。
+  - 新增内部值列 V2 编解码器 `TSLite.Storage.Segments.ValuePayloadCodecV2`：
+    - **Float64**：简化版 Gorilla XOR — 第一个值 64 位锚点，之后每点 1 位控制位；变化点再写 6 位 leadingZeros + 6 位 (meaningful-1) + meaningful 位有效位。常量序列压缩到 ≈1 位/点。
+    - **Boolean**：游程长度编码（RLE）— 1 字节初值 + 交替 varint 段长。
+    - **String**：按出现顺序构建字典 — `varint(dictSize)` + `dictSize × (varint(byteLen) + UTF-8)` + `count × varint(idx)`，重复值高度压缩。
+    - **Int64**：本 PR 暂不压缩，仍为 8B LE 直存（与 V1 等价）。
+  - `SegmentWriterOptions.ValueEncoding`：默认 `None`（V1）以保证已有段文件与测试行为不变；显式设为 `DeltaValue` 启用 V2 并在 `BlockHeader.Encoding` 与 `TimestampEncoding` 标志位独立组合。
+  - `BlockDecoder.ReadValues` / `ReadValuesRange` 新增基于 `descriptor.ValueEncoding` 的 V1/V2 分发；V2 范围读取需先全量解码再切片（XOR/RLE/字典本质顺序）。
+  - 19 个新测试（`ValuePayloadCodecV2Tests`）覆盖：Float64 空/单点/常量序列压缩/递增序列/特殊值（NaN/±Inf/±0）round-trip；Bool 全 true/交替/混合 run/损坏 run 越界；String 全相同/含 unicode/含空串/字典索引越界；Int64 V2 透传；SegmentWriter 默认无标志、单独 `DeltaValue`（Float64/Bool/String 均显著小于 V1）、`DeltaTimestamp | DeltaValue` 双标志组合及 `DecodeBlockRange` 与 V1 一致。
+
 - 新增时间戳 Delta-of-Delta + ZigZag varint 编码（V2 block payload，向后兼容 V1）（PR #29）
   - 新增内部 `TSLite.Storage.Segments.TimestampCodec`：`MeasureDeltaOfDelta` / `WriteDeltaOfDelta` / `ReadDeltaOfDelta`。V2 格式：8 字节定点锐 + 1 个一阶差分 + 剩余二阶差分，常规采样间隔下压缩到 ≈1 字节/点。
   - `BlockEncoding` 改为 `[Flags]`：`DeltaTimestamp` (1) 与 `DeltaValue` (2) 可独立开关；`SegmentReader` 根据 bit 拆分到 `BlockDescriptor.{TimestampEncoding, ValueEncoding}`。

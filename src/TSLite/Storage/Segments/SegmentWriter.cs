@@ -274,7 +274,7 @@ public sealed class SegmentWriter
     /// <summary>
     /// 把已编码的时间戳载荷连同字段名/值载荷写入流，并构造对应的 BlockHeader 与 BlockIndexEntry。
     /// </summary>
-    private static void WriteOneBlock(
+    private void WriteOneBlock(
         Stream bs,
         MemTableSeries bucket,
         ReadOnlyMemory<TSLite.Model.DataPoint> points,
@@ -287,12 +287,21 @@ public sealed class SegmentWriter
         ref long segMaxTs,
         ref long currentOffset)
     {
-        int valPayloadLen = ValuePayloadCodec.MeasureValuePayload(bucket.FieldType, points);
+        bool useV2Val = (_options.ValueEncoding & BlockEncoding.DeltaValue) != 0
+            && points.Length > 0;
+        int valPayloadLen = useV2Val
+            ? ValuePayloadCodecV2.Measure(bucket.FieldType, points)
+            : ValuePayloadCodec.MeasureValuePayload(bucket.FieldType, points);
         byte[] valBuf = ArrayPool<byte>.Shared.Rent(Math.Max(valPayloadLen, 1));
         try
         {
             if (valPayloadLen > 0)
-                ValuePayloadCodec.WritePayload(bucket.FieldType, points, valBuf.AsSpan(0, valPayloadLen));
+            {
+                if (useV2Val)
+                    ValuePayloadCodecV2.Write(bucket.FieldType, points, valBuf.AsSpan(0, valPayloadLen));
+                else
+                    ValuePayloadCodec.WritePayload(bucket.FieldType, points, valBuf.AsSpan(0, valPayloadLen));
+            }
 
             ReadOnlySpan<byte> valSpan = valBuf.AsSpan(0, valPayloadLen);
 
@@ -316,7 +325,7 @@ public sealed class SegmentWriter
                 tsLen: tsSpan.Length,
                 valLen: valSpan.Length);
             bh.Crc32 = crc32;
-            bh.Encoding = tsEncoding;
+            bh.Encoding = tsEncoding | (useV2Val ? BlockEncoding.DeltaValue : BlockEncoding.None);
 
             WriteStructToStream(bs, in bh);
             bs.Write(fieldNameSpan);
