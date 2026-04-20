@@ -148,4 +148,43 @@ public class SqlLexerTests
         Assert.Equal(0, tokens[0].Position);
         Assert.Equal(7, tokens[1].Position);
     }
+
+    [Fact]
+    public void Tokenize_ControlPlaneKeywords_AreRecognized()
+    {
+        var tokens = SqlLexer.Tokenize("CREATE USER alice WITH PASSWORD 'pwd' GRANT READ WRITE ADMIN ON DATABASE TO REVOKE FROM DROP ALTER");
+        var kinds = System.Linq.Enumerable.Select(tokens, t => t.Kind).ToArray();
+        var expected = new[]
+        {
+            TokenKind.KeywordCreate, TokenKind.KeywordUser, TokenKind.IdentifierLiteral,
+            TokenKind.KeywordWith, TokenKind.KeywordPassword, TokenKind.StringLiteral,
+            TokenKind.KeywordGrant, TokenKind.KeywordRead, TokenKind.KeywordWrite, TokenKind.KeywordAdmin,
+            TokenKind.KeywordOn, TokenKind.KeywordDatabase, TokenKind.KeywordTo,
+            TokenKind.KeywordRevoke, TokenKind.KeywordFrom,
+            TokenKind.KeywordDrop, TokenKind.KeywordAlter,
+            TokenKind.EndOfFile,
+        };
+        Assert.Equal(expected, kinds);
+    }
+
+    [Fact]
+    public void Tokenize_ControlPlaneKeywords_AreCaseInsensitive()
+    {
+        var tokens = SqlLexer.Tokenize("create User wIth PaSSworD grant On to revoke from drop alter database read write admin");
+        var kinds = System.Linq.Enumerable.Select(tokens, t => t.Kind).ToArray();
+        Assert.Contains(TokenKind.KeywordCreate, kinds);
+        Assert.Contains(TokenKind.KeywordUser, kinds);
+        Assert.Contains(TokenKind.KeywordWith, kinds);
+        Assert.Contains(TokenKind.KeywordPassword, kinds);
+        Assert.Contains(TokenKind.KeywordGrant, kinds);
+        Assert.Contains(TokenKind.KeywordRevoke, kinds);
+        Assert.Contains(TokenKind.KeywordOn, kinds);
+        Assert.Contains(TokenKind.KeywordTo, kinds);
+        Assert.Contains(TokenKind.KeywordDrop, kinds);
+        Assert.Contains(TokenKind.KeywordAlter, kinds);
+        Assert.Contains(TokenKind.KeywordDatabase, kinds);
+        Assert.Contains(TokenKind.KeywordRead, kinds);
+        Assert.Contains(TokenKind.KeywordWrite, kinds);
+        Assert.Contains(TokenKind.KeywordAdmin, kinds);
+    }
 }

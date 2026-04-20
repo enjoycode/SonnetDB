@@ -63,19 +63,36 @@ public sealed class SqlParser
     {
         return Current.Kind switch
         {
-            TokenKind.KeywordCreate => ParseCreateMeasurement(),
+            TokenKind.KeywordCreate => ParseCreate(),
             TokenKind.KeywordInsert => ParseInsert(),
             TokenKind.KeywordSelect => ParseSelect(),
             TokenKind.KeywordDelete => ParseDelete(),
-            _ => throw Error("期望 CREATE / INSERT / SELECT / DELETE 关键字"),
+            TokenKind.KeywordDrop => ParseDrop(),
+            TokenKind.KeywordAlter => ParseAlterUser(),
+            TokenKind.KeywordGrant => ParseGrant(),
+            TokenKind.KeywordRevoke => ParseRevoke(),
+            _ => throw Error("期望 CREATE / INSERT / SELECT / DELETE / DROP / ALTER / GRANT / REVOKE 关键字"),
+        };
+    }
+
+    // ── CREATE 分发：MEASUREMENT / USER / DATABASE ─────────────────────────
+
+    private SqlStatement ParseCreate()
+    {
+        Expect(TokenKind.KeywordCreate);
+        return Current.Kind switch
+        {
+            TokenKind.KeywordMeasurement => ParseCreateMeasurementBody(),
+            TokenKind.KeywordUser => ParseCreateUserBody(),
+            TokenKind.KeywordDatabase => ParseCreateDatabaseBody(),
+            _ => throw Error("CREATE 后面期望 MEASUREMENT / USER / DATABASE"),
         };
     }
 
     // ── CREATE MEASUREMENT ─────────────────────────────────────────────────
 
-    private CreateMeasurementStatement ParseCreateMeasurement()
+    private CreateMeasurementStatement ParseCreateMeasurementBody()
     {
-        Expect(TokenKind.KeywordCreate);
         Expect(TokenKind.KeywordMeasurement);
         var name = ExpectIdentifierName();
         Expect(TokenKind.LeftParen);
@@ -533,6 +550,108 @@ public sealed class SqlParser
     {
         if (Current.Kind != TokenKind.EndOfFile)
             throw Error("语句末尾存在多余内容");
+    }
+
+    // ── 控制面 DDL（PR #34a）─────────────────────────────────────────────
+
+    /// <summary><c>CREATE USER name WITH PASSWORD 'pwd'</c>。</summary>
+    private CreateUserStatement ParseCreateUserBody()
+    {
+        Expect(TokenKind.KeywordUser);
+        var name = ExpectIdentifierName();
+        Expect(TokenKind.KeywordWith);
+        Expect(TokenKind.KeywordPassword);
+        var password = ExpectStringLiteral();
+        return new CreateUserStatement(name, password, IsSuperuser: false);
+    }
+
+    /// <summary><c>CREATE DATABASE name</c>。</summary>
+    private CreateDatabaseStatement ParseCreateDatabaseBody()
+    {
+        Expect(TokenKind.KeywordDatabase);
+        var name = ExpectIdentifierName();
+        return new CreateDatabaseStatement(name);
+    }
+
+    /// <summary><c>DROP USER name</c> 或 <c>DROP DATABASE name</c>。</summary>
+    private SqlStatement ParseDrop()
+    {
+        Expect(TokenKind.KeywordDrop);
+        switch (Current.Kind)
+        {
+            case TokenKind.KeywordUser:
+                Advance();
+                return new DropUserStatement(ExpectIdentifierName());
+            case TokenKind.KeywordDatabase:
+                Advance();
+                return new DropDatabaseStatement(ExpectIdentifierName());
+            default:
+                throw Error("DROP 后面期望 USER 或 DATABASE");
+        }
+    }
+
+    /// <summary><c>ALTER USER name WITH PASSWORD 'pwd'</c>。</summary>
+    private AlterUserPasswordStatement ParseAlterUser()
+    {
+        Expect(TokenKind.KeywordAlter);
+        Expect(TokenKind.KeywordUser);
+        var name = ExpectIdentifierName();
+        Expect(TokenKind.KeywordWith);
+        Expect(TokenKind.KeywordPassword);
+        var password = ExpectStringLiteral();
+        return new AlterUserPasswordStatement(name, password);
+    }
+
+    /// <summary><c>GRANT READ|WRITE|ADMIN ON DATABASE db TO user</c>。</summary>
+    private GrantStatement ParseGrant()
+    {
+        Expect(TokenKind.KeywordGrant);
+        var perm = Current.Kind switch
+        {
+            TokenKind.KeywordRead => GrantPermission.Read,
+            TokenKind.KeywordWrite => GrantPermission.Write,
+            TokenKind.KeywordAdmin => GrantPermission.Admin,
+            _ => throw Error("GRANT 后面期望 READ / WRITE / ADMIN"),
+        };
+        Advance();
+        Expect(TokenKind.KeywordOn);
+        Expect(TokenKind.KeywordDatabase);
+        var db = ExpectDatabaseNameOrStar();
+        Expect(TokenKind.KeywordTo);
+        var user = ExpectIdentifierName();
+        return new GrantStatement(perm, db, user);
+    }
+
+    /// <summary><c>REVOKE ON DATABASE db FROM user</c>。撤销 (user, db) 的全部权限。</summary>
+    private RevokeStatement ParseRevoke()
+    {
+        Expect(TokenKind.KeywordRevoke);
+        Expect(TokenKind.KeywordOn);
+        Expect(TokenKind.KeywordDatabase);
+        var db = ExpectDatabaseNameOrStar();
+        Expect(TokenKind.KeywordFrom);
+        var user = ExpectIdentifierName();
+        return new RevokeStatement(db, user);
+    }
+
+    private string ExpectStringLiteral()
+    {
+        if (Current.Kind != TokenKind.StringLiteral)
+            throw Error("期望字符串字面量");
+        var value = Current.Text;
+        Advance();
+        return value;
+    }
+
+    /// <summary>数据库名：标识符或 <c>*</c>（通配）。</summary>
+    private string ExpectDatabaseNameOrStar()
+    {
+        if (Current.Kind == TokenKind.Star)
+        {
+            Advance();
+            return "*";
+        }
+        return ExpectIdentifierName();
     }
 
     private SqlParseException Error(string message)

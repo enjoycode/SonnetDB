@@ -60,4 +60,19 @@ public enum TokenKind
     KeywordInt,
     KeywordBool,
     KeywordString,
+
+    // PR #34a：控制面 DDL
+    KeywordUser,
+    KeywordPassword,
+    KeywordGrant,
+    KeywordRevoke,
+    KeywordOn,
+    KeywordTo,
+    KeywordWith,
+    KeywordRead,
+    KeywordWrite,
+    KeywordAdmin,
+    KeywordDatabase,
+    KeywordDrop,
+    KeywordAlter,
 }

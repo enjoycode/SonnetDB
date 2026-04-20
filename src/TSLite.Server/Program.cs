@@ -100,16 +100,28 @@ public static class Program
             return registry;
         });
 
+        // PR #34a：用户 / 权限 / 控制面存储全局只实例。文件位于 <DataRoot>/.system/。
+        var systemDirectory = Path.Combine(serverOptions.DataRoot, ".system");
+        Directory.CreateDirectory(systemDirectory);
+        builder.Services.AddSingleton(_ => new UserStore(systemDirectory));
+        builder.Services.AddSingleton(_ => new GrantsStore(systemDirectory));
+        builder.Services.AddSingleton<TSLite.Sql.Execution.IControlPlane>(sp =>
+            new ControlPlane(
+                sp.GetRequiredService<UserStore>(),
+                sp.GetRequiredService<GrantsStore>(),
+                sp.GetRequiredService<TsdbRegistry>()));
+
         // 在应用关闭时优雅释放所有 Tsdb 实例
         builder.Services.AddSingleton<IHostedService>(sp => new RegistryShutdownHook(sp.GetRequiredService<TsdbRegistry>()));
     }
 
     private static void ConfigureMiddleware(WebApplication app, ServerOptions serverOptions)
     {
+        var userStore = app.Services.GetRequiredService<UserStore>();
         // Bearer 认证（在所有 endpoint 之前）
         app.Use(async (context, next) =>
         {
-            var status = BearerAuthMiddleware.Authenticate(context, serverOptions);
+            var status = BearerAuthMiddleware.Authenticate(context, serverOptions, userStore);
             if (status is not null)
             {
                 context.Response.StatusCode = status.Value;
@@ -178,6 +190,7 @@ public static class Program
         });
 
         // ---- SQL ----
+        var controlPlane = app.Services.GetRequiredService<TSLite.Sql.Execution.IControlPlane>();
         app.MapPost("/v1/db/{db}/sql", async (HttpContext ctx, string db) =>
         {
             if (!TryResolveDatabase(ctx, registry, db, out var tsdb))
@@ -189,7 +202,8 @@ public static class Program
                 return;
             }
             var role = BearerAuthMiddleware.GetRole(ctx);
-            await SqlEndpointHandler.HandleSingleAsync(ctx, tsdb, req, metrics, BearerAuthMiddleware.CanWrite(role)).ConfigureAwait(false);
+            await SqlEndpointHandler.HandleSingleAsync(ctx, tsdb, req, metrics,
+                BearerAuthMiddleware.CanWrite(role), BearerAuthMiddleware.IsAdmin(role), controlPlane).ConfigureAwait(false);
         });
 
         app.MapPost("/v1/db/{db}/sql/batch", async (HttpContext ctx, string db) =>
@@ -203,8 +217,31 @@ public static class Program
                 return;
             }
             var role = BearerAuthMiddleware.GetRole(ctx);
-            await SqlEndpointHandler.HandleBatchAsync(ctx, tsdb, req, metrics, BearerAuthMiddleware.CanWrite(role)).ConfigureAwait(false);
+            await SqlEndpointHandler.HandleBatchAsync(ctx, tsdb, req, metrics,
+                BearerAuthMiddleware.CanWrite(role), BearerAuthMiddleware.IsAdmin(role), controlPlane).ConfigureAwait(false);
         });
+
+        // ---- 认证 ----
+        var users = app.Services.GetRequiredService<UserStore>();
+        app.MapMethods("/v1/auth/login", new[] { "POST" }, (RequestDelegate)(async ctx =>
+        {
+            var req = await ReadJsonAsync(ctx, ServerJsonContext.Default.LoginRequest).ConfigureAwait(false);
+            if (req is null || string.IsNullOrEmpty(req.Username) || string.IsNullOrEmpty(req.Password))
+            {
+                await WriteSimpleErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体需包含 username 与 password。").ConfigureAwait(false);
+                return;
+            }
+            if (!users.VerifyPassword(req.Username, req.Password))
+            {
+                await WriteSimpleErrorAsync(ctx, StatusCodes.Status401Unauthorized, "unauthorized", "用户名或密码错误。").ConfigureAwait(false);
+                return;
+            }
+            var (token, tokenId) = users.IssueToken(req.Username);
+            var resp = new LoginResponse(req.Username, token, tokenId, users.IsSuperuser(req.Username));
+            ctx.Response.StatusCode = StatusCodes.Status200OK;
+            ctx.Response.ContentType = "application/json; charset=utf-8";
+            await JsonSerializer.SerializeAsync(ctx.Response.Body, resp, ServerJsonContext.Default.LoginResponse).ConfigureAwait(false);
+        }));
     }
 
     private static bool TryResolveDatabase(HttpContext ctx, TsdbRegistry registry, string db, out Engine.Tsdb tsdb)

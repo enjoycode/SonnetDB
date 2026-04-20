@@ -36,6 +36,21 @@ public sealed class SqlLexer
         ["int"] = TokenKind.KeywordInt,
         ["bool"] = TokenKind.KeywordBool,
         ["string"] = TokenKind.KeywordString,
+
+        // PR #34a：控制面 DDL 关键字
+        ["user"] = TokenKind.KeywordUser,
+        ["password"] = TokenKind.KeywordPassword,
+        ["grant"] = TokenKind.KeywordGrant,
+        ["revoke"] = TokenKind.KeywordRevoke,
+        ["on"] = TokenKind.KeywordOn,
+        ["to"] = TokenKind.KeywordTo,
+        ["with"] = TokenKind.KeywordWith,
+        ["read"] = TokenKind.KeywordRead,
+        ["write"] = TokenKind.KeywordWrite,
+        ["admin"] = TokenKind.KeywordAdmin,
+        ["database"] = TokenKind.KeywordDatabase,
+        ["drop"] = TokenKind.KeywordDrop,
+        ["alter"] = TokenKind.KeywordAlter,
     };
 
     private readonly string _source;

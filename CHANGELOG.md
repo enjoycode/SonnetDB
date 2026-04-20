@@ -6,6 +6,31 @@
 ## [Unreleased]
 
 ### Added
+- **TSLite.Server 控制面：用户 / 权限 / 数据库 DDL（PR #34a）**
+  - 新增持久化用户与权限存储（仅服务端）：`src/TSLite.Server/Auth/UserStore.cs` + `GrantsStore.cs`，文件落 `<DataRoot>/.system/{users.json,grants.json}`，原子写入（temp + `Flush(true)` + `File.Move(overwrite=true)`）。
+  - 密码：PBKDF2-HMAC-SHA256，100 000 轮、16 字节随机 salt、32 字节 hash；校验用 `CryptographicOperations.FixedTimeEquals` 防侧信道。
+  - 动态 API token：32 字节随机（`RandomNumberGenerator`）→ Base64Url，仅存 SHA-256 hex 哈希；token id 形如 `tok_<8hex>`，便于审计与单条吊销。
+  - 权限模型：`enum DatabasePermission { Read=1, Write=2, Admin=3 }`，按 `(database,user)` 单条记录；`*` 通配整个集群。
+  - **SQL 控制面 DDL**：在 `src/TSLite/Sql/` 新增 7 条语句类型 + parser 分支（`ParseStatement` 添加 `Drop`/`Alter`/`Grant`/`Revoke`，新增 `ParseCreate` 二级分发）：
+    - `CREATE USER <name> WITH PASSWORD '<pwd>' [SUPERUSER]`
+    - `ALTER USER <name> WITH PASSWORD '<new>'`（成功后吊销该用户全部旧 token）
+    - `DROP USER <name>`（级联删除其所有 grants）
+    - `GRANT READ|WRITE|ADMIN ON DATABASE <db|*> TO <user>`
+    - `REVOKE ON DATABASE <db|*> FROM <user>`
+    - `CREATE DATABASE <name>` / `DROP DATABASE <name>`（通过 `IControlPlane` 触发 `TsdbRegistry.TryCreate/Drop`，并级联 grants）
+  - **执行层 `IControlPlane`**：`src/TSLite/Sql/Execution/IControlPlane.cs` 在核心库声明（零依赖），`SqlExecutor.ExecuteStatement` 新增 `IControlPlane?` 参数；嵌入式连接传入 `null` → 控制面 DDL 抛 `NotSupportedException`（"控制面 DDL（CREATE USER / GRANT / CREATE DATABASE 等）仅在服务端模式可用。"）。服务端在 `src/TSLite.Server/Auth/ControlPlane.cs` 提供桥接实现：用户/权限/数据库三向级联（DROP USER → DeleteUserGrants，DROP DATABASE → DeleteDatabaseGrants）。
+  - **认证扩展（PR #34a-5）**：`BearerAuthMiddleware.Authenticate` 新增 `UserStore?` 入参，先匹配 `ServerOptions.Tokens` 静态映射，未命中再走 `UserStore.TryAuthenticate`（哈希查表）；命中动态 token 时把 `AuthenticatedUser` 写入 `HttpContext.Items["tslite.user"]`，超级用户映射 `admin` 角色，普通用户映射 `readwrite`。`/v1/auth/login` 路径始终匿名。
+  - **新端点 `POST /v1/auth/login`**：接收 `{username,password}`，PBKDF2 校验通过后调用 `UserStore.IssueToken` 颁发新 token，返回 `{username,token,tokenId,isSuperuser}`。⚠️ 该端点用 `app.MapMethods(path, ["POST"], (RequestDelegate)(async ctx => ...))` 直接以 `RequestDelegate` 形式注册（详见 `Fixed`）。
+  - **SQL 端点权限收紧**：`src/TSLite.Server/Endpoints/SqlEndpointHandler.cs` 在执行前 parse 一次，识别为控制面 DDL 时要求 `isAdmin == true`，否则返回 `forbidden`；写操作（INSERT/DELETE）仍按 `canWrite` 判定。批处理同步收紧。
+  - **测试**：5 个端到端用例 `tests/TSLite.Server.Tests/AuthControlPlaneEndToEndTests.cs` 覆盖：登录字段缺失 → 400、未知用户 → 401、CREATE USER + GRANT + 登录拿 token + 用 token 调 `/healthz` 与 SQL 端点（普通用户控制面 DDL → forbidden）、动态非 admin token 控制面 DDL → forbidden、ALTER USER 改密后旧 token 立即失效 → 401。服务端测试总数：49 通过 / 0 失败。
+
+### Fixed
+- **AOT RequestDelegateGenerator workaround**：`WebApplication.CreateSlimBuilder` + `EnableRequestDelegateGenerator=true` 下，对于
+  `app.MapPost(path, async (HttpContext ctx) => Results.Json(value, typeInfo, statusCode: 4xx))` 形态的 lambda，生成的 interceptor 会
+  错误地把响应吞成 `200 + 空 body`（lambda 实际执行，但 statusCode 与 body 全部丢失）。`/v1/auth/login` 改为
+  `app.MapMethods(path, ["POST"], (RequestDelegate)(async ctx => { ctx.Response.StatusCode = ...; await JsonSerializer.SerializeAsync(...); }))`
+  绕过 generator 拦截，行为稳定（PR #34a）。
+
 - **TSLite.Data**：将 ADO.NET API 从 `TSLite` 核心库剥离为独立的 `src/TSLite.Data/`（PR #33）
   - 公共表面保持兼容：`TsdbConnection` / `TsdbCommand` / `TsdbDataReader` / `TsdbParameter` / `TsdbParameterCollection` / `TsdbConnectionStringBuilder` 命名空间从 `TSLite.Ado` 迁移到 `TSLite.Data`；`src/TSLite/Ado/` 目录整体删除。
   - **嵌入式 + 远程双模式**：通过连接字符串 scheme 自动分派，由内部接口 `IConnectionImpl` 统一抽象。

@@ -96,3 +96,20 @@ public sealed record DatabaseListResponse(IReadOnlyList<string> Databases);
 /// <param name="Databases">已加载的数据库数量。</param>
 /// <param name="UptimeSeconds">服务端运行秒数。</param>
 public sealed record HealthResponse(string Status, int Databases, double UptimeSeconds);
+
+/// <summary>
+/// <c>POST /v1/auth/login</c> 请求体。
+/// </summary>
+/// <param name="Username">用户名。</param>
+/// <param name="Password">明文密码。</param>
+public sealed record LoginRequest(string Username, string Password);
+
+/// <summary>
+/// 登录成功响应：返回新颁发的 API token。token 明文仅在此处返回一次，
+/// 服务端只持久化其 SHA-256 哈希。
+/// </summary>
+/// <param name="Username">用户名。</param>
+/// <param name="Token">Bearer token 明文。</param>
+/// <param name="TokenId">token 标识符（如 <c>tok_abcdef</c>）。</param>
+/// <param name="IsSuperuser">是否为超级用户。</param>
+public sealed record LoginResponse(string Username, string Token, string TokenId, bool IsSuperuser);

@@ -22,12 +22,22 @@ public static class SqlExecutor
     /// <exception cref="ArgumentNullException">任何参数为 null。</exception>
     /// <exception cref="NotSupportedException">语句类型尚未实现。</exception>
     public static object? Execute(Tsdb tsdb, string sql)
+        => Execute(tsdb, sql, controlPlane: null);
+
+    /// <summary>
+    /// 解析并执行单条 SQL 语句，可选传入控制面以支持 CREATE USER / GRANT 等 DDL。
+    /// </summary>
+    /// <param name="tsdb">目标数据库实例。</param>
+    /// <param name="sql">单条 SQL 文本。</param>
+    /// <param name="controlPlane">控制面实现；为 <c>null</c> 时控制面 DDL 抛 <see cref="NotSupportedException"/>。</param>
+    /// <returns>语句执行结果对象。</returns>
+    public static object? Execute(Tsdb tsdb, string sql, IControlPlane? controlPlane)
     {
         ArgumentNullException.ThrowIfNull(tsdb);
         ArgumentNullException.ThrowIfNull(sql);
 
         var statement = SqlParser.Parse(sql);
-        return ExecuteStatement(tsdb, statement);
+        return ExecuteStatement(tsdb, statement, controlPlane);
     }
 
     /// <summary>
@@ -39,6 +49,15 @@ public static class SqlExecutor
     /// <exception cref="ArgumentNullException">任何参数为 null。</exception>
     /// <exception cref="NotSupportedException">语句类型尚未实现。</exception>
     public static object? ExecuteStatement(Tsdb tsdb, SqlStatement statement)
+        => ExecuteStatement(tsdb, statement, controlPlane: null);
+
+    /// <summary>
+    /// 执行一条已解析的 SQL 语句，可选传入控制面以支持控制面 DDL。
+    /// </summary>
+    /// <param name="tsdb">目标数据库实例。</param>
+    /// <param name="statement">已解析的语句 AST。</param>
+    /// <param name="controlPlane">控制面实现；为 <c>null</c> 时控制面 DDL 抛 <see cref="NotSupportedException"/>。</param>
+    public static object? ExecuteStatement(Tsdb tsdb, SqlStatement statement, IControlPlane? controlPlane)
     {
         ArgumentNullException.ThrowIfNull(tsdb);
         ArgumentNullException.ThrowIfNull(statement);
@@ -49,9 +68,30 @@ public static class SqlExecutor
             InsertStatement insert => ExecuteInsert(tsdb, insert),
             SelectStatement select => ExecuteSelect(tsdb, select),
             DeleteStatement delete => ExecuteDelete(tsdb, delete),
+            CreateUserStatement createUser => ExecuteControlPlane(controlPlane,
+                cp => { cp.CreateUser(createUser.UserName, createUser.Password, createUser.IsSuperuser); return (object)1; }),
+            AlterUserPasswordStatement alterUser => ExecuteControlPlane(controlPlane,
+                cp => { cp.AlterUserPassword(alterUser.UserName, alterUser.NewPassword); return (object)1; }),
+            DropUserStatement dropUser => ExecuteControlPlane(controlPlane,
+                cp => { cp.DropUser(dropUser.UserName); return (object)1; }),
+            GrantStatement grant => ExecuteControlPlane(controlPlane,
+                cp => { cp.Grant(grant.UserName, grant.Database, grant.Permission); return (object)1; }),
+            RevokeStatement revoke => ExecuteControlPlane(controlPlane,
+                cp => { cp.Revoke(revoke.UserName, revoke.Database); return (object)1; }),
+            CreateDatabaseStatement createDb => ExecuteControlPlane(controlPlane,
+                cp => { cp.CreateDatabase(createDb.DatabaseName); return (object)1; }),
+            DropDatabaseStatement dropDb => ExecuteControlPlane(controlPlane,
+                cp => { cp.DropDatabase(dropDb.DatabaseName); return (object)1; }),
             _ => throw new NotSupportedException(
                 $"SQL 语句类型 '{statement.GetType().Name}' 尚未实现。"),
         };
+    }
+
+    private static object ExecuteControlPlane(IControlPlane? controlPlane, Func<IControlPlane, object> action)
+    {
+        if (controlPlane is null)
+            throw new NotSupportedException("控制面 DDL（CREATE USER / GRANT / CREATE DATABASE 等）仅在服务端模式可用。");
+        return action(controlPlane);
     }
 
     /// <summary>

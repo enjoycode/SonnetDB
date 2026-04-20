@@ -5,6 +5,8 @@ using TSLite.Engine;
 using TSLite.Server.Contracts;
 using TSLite.Server.Hosting;
 using TSLite.Server.Json;
+using TSLite.Sql;
+using TSLite.Sql.Ast;
 using TSLite.Sql.Execution;
 
 namespace TSLite.Server.Endpoints;
@@ -25,9 +27,11 @@ internal static class SqlEndpointHandler
         Tsdb tsdb,
         SqlRequest request,
         ServerMetrics metrics,
-        bool canWrite)
+        bool canWrite,
+        bool isAdmin,
+        IControlPlane? controlPlane)
     {
-        await ExecuteAsync(context, tsdb, [request], metrics, canWrite).ConfigureAwait(false);
+        await ExecuteAsync(context, tsdb, [request], metrics, canWrite, isAdmin, controlPlane).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -38,9 +42,11 @@ internal static class SqlEndpointHandler
         Tsdb tsdb,
         SqlBatchRequest request,
         ServerMetrics metrics,
-        bool canWrite)
+        bool canWrite,
+        bool isAdmin,
+        IControlPlane? controlPlane)
     {
-        await ExecuteAsync(context, tsdb, request.Statements, metrics, canWrite).ConfigureAwait(false);
+        await ExecuteAsync(context, tsdb, request.Statements, metrics, canWrite, isAdmin, controlPlane).ConfigureAwait(false);
     }
 
     private static async Task ExecuteAsync(
@@ -48,7 +54,9 @@ internal static class SqlEndpointHandler
         Tsdb tsdb,
         IReadOnlyList<SqlRequest> statements,
         ServerMetrics metrics,
-        bool canWrite)
+        bool canWrite,
+        bool isAdmin,
+        IControlPlane? controlPlane)
     {
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.ContentType = "application/x-ndjson; charset=utf-8";
@@ -60,10 +68,29 @@ internal static class SqlEndpointHandler
             metrics.RecordSqlRequest();
             var sw = Stopwatch.StartNew();
 
+            SqlStatement parsed;
+            try
+            {
+                parsed = SqlParser.Parse(stmt.Sql);
+            }
+            catch (Exception ex)
+            {
+                metrics.RecordSqlError();
+                await WriteErrorAsync(context, "sql_error", ex.Message).ConfigureAwait(false);
+                return;
+            }
+
+            if (IsControlPlaneStatement(parsed) && !isAdmin)
+            {
+                metrics.RecordSqlError();
+                await WriteErrorAsync(context, "forbidden", "控制面 DDL（CREATE USER / GRANT / CREATE DATABASE 等）仅 admin 可执行。").ConfigureAwait(false);
+                return;
+            }
+
             object? result;
             try
             {
-                result = SqlExecutor.Execute(tsdb, stmt.Sql);
+                result = SqlExecutor.ExecuteStatement(tsdb, parsed, controlPlane);
             }
             catch (Exception ex)
             {
@@ -106,8 +133,9 @@ internal static class SqlEndpointHandler
                 }
                 default:
                 {
-                    // CREATE MEASUREMENT 等 DDL：返回受影响行数 0
-                    if (!canWrite)
+                    // CREATE MEASUREMENT 、CREATE USER 等 DDL：返回受影响行数 0
+                    // 控制面 DDL 已在上面单独鉴权 isAdmin，这里仅校验需 canWrite 的普通 DDL。
+                    if (!IsControlPlaneStatement(parsed) && !canWrite)
                     {
                         metrics.RecordSqlError();
                         await WriteErrorAsync(context, "forbidden", "DDL 需要 readwrite 或 admin 角色。").ConfigureAwait(false);
@@ -186,4 +214,14 @@ internal static class SqlEndpointHandler
         await body.WriteAsync(s_newline, context.RequestAborted).ConfigureAwait(false);
         await body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
     }
+
+    /// <summary>判别是否为控制面 DDL（需要超级用户权限）。</summary>
+    private static bool IsControlPlaneStatement(SqlStatement statement) => statement is
+        CreateUserStatement or
+        AlterUserPasswordStatement or
+        DropUserStatement or
+        GrantStatement or
+        RevokeStatement or
+        CreateDatabaseStatement or
+        DropDatabaseStatement;
 }

@@ -138,9 +138,9 @@
 |----|------|------|
 | #32 | `TSLite.Server`：AOT Minimal API + 多 `Tsdb` 实例注册表 + `POST /v1/db/{db}/sql` + ndjson 流式结果 + Bearer token 三角色认证 + `/healthz` + `/metrics` | ✅ |
 | #33 | 远端 ADO.NET 客户端 `TSLite.Data`：与 PR #28 共享 `TsdbConnectionStringBuilder`，通过 scheme（`tslite://` 本地、`tslite+http://` 远程）切换实现，结果集流式反序列化 | ✅ |
-| #34 | Vue3 管理后台：数据库列表 / 状态、SQL 控制台、token 管理（读写配置文件） | 📋 |
-
-> WebSocket、订阅、用户级 SQL 权限均不在 M8 范围；如确有需求另立 Milestone。
+| #34a | 服务端控制面：用户/权限存储 + SQL DDL（CREATE/ALTER/DROP USER、GRANT/REVOKE、CREATE/DROP DATABASE）+ `POST /v1/auth/login` 颁发动态 token + Bearer 中间件接入 `UserStore` | ✅ |
+| #34b | Vue3 管理后台（Naive UI）：登录页、数据库列表/状态、SQL 控制台、用户/权限/Token 管理 | 📋 |
+| #34c | 实时推送：基于 SSE 的指标 / 慢查询 / 数据库事件流，前端订阅自动刷新 | 📋 |
 
 ---
 
@@ -167,10 +167,10 @@
 | 5 | 稳定性与性能（写入侧） | #17 ~ #21 | ✅ |
 | 6 | SQL 前端 + Tag 倒排索引 | #22 ~ #28 | ✅ |
 | 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | ✅ |
-| 8 | 服务器模式（HTTP + 远端 ADO + Vue3 后台） | #32 ~ #34 | 📋（前置：#21 + #35） |
+| 8 | 服务器模式（HTTP + 远端 ADO + 控制面 + Vue3 后台 + SSE） | #32 ~ #34c | 🚧（#32/#33/#34a 已完成，#34b/#34c 进行中） |
 | 9 | 性能基准与发布 | #35 ~ #39 | �（#35 进行中） |
 
-**当前推进顺序**：PR #35（嵌入式基准） → PR #32 → PR #33 → PR #34 → PR #36 → PR #37 ~ #39。
+**当前推进顺序**：PR #35（嵌入式基准） → PR #32 → PR #33 → PR #34a → PR #34b → PR #34c → PR #36 → PR #37 ~ #39。
 
 ---
 
