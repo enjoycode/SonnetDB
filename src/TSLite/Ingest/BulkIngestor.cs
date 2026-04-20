@@ -1,0 +1,115 @@
+using System.Buffers;
+using TSLite.Engine;
+using TSLite.Model;
+
+namespace TSLite.Ingest;
+
+/// <summary>
+/// 批量入库错误处理策略。
+/// </summary>
+public enum BulkErrorPolicy
+{
+    /// <summary>遇到第一行非法即抛出 <see cref="BulkIngestException"/>（默认）。</summary>
+    FailFast,
+
+    /// <summary>跳过非法行；返回结果中包含跳过计数。</summary>
+    Skip,
+}
+
+/// <summary>批量入库结果。</summary>
+public readonly record struct BulkIngestResult(int Written, int Skipped);
+
+/// <summary>
+/// 统一的批量入库消费入口：把 <see cref="IPointReader"/> 的输出按批喂给 <see cref="Tsdb"/>，
+/// 可选在结尾触发一次 <see cref="Tsdb.FlushNow"/>。
+/// </summary>
+public static class BulkIngestor
+{
+    /// <summary>批的容量；超过即调用一次 <see cref="Tsdb.WriteMany"/>。</summary>
+    public const int BatchSize = 8192;
+
+    /// <summary>
+    /// 消费 <paramref name="reader"/> 中的所有 <see cref="Point"/>，写入 <paramref name="tsdb"/>。
+    /// </summary>
+    /// <param name="tsdb">目标数据库实例。</param>
+    /// <param name="reader">点 reader（LineProtocol/JSON/BulkValues 的任一实现）。</param>
+    /// <param name="errorPolicy">错误策略。</param>
+    /// <param name="flushOnComplete">写入完成后是否调用 <see cref="Tsdb.FlushNow"/>（默认 <c>false</c>）。</param>
+    /// <returns>包含写入与跳过计数的 <see cref="BulkIngestResult"/>。</returns>
+    /// <exception cref="ArgumentNullException">任一参数为 null 时抛出。</exception>
+    /// <exception cref="BulkIngestException">FailFast 策略下解析或写入失败时抛出。</exception>
+    public static BulkIngestResult Ingest(
+        Tsdb tsdb,
+        IPointReader reader,
+        BulkErrorPolicy errorPolicy = BulkErrorPolicy.FailFast,
+        bool flushOnComplete = false)
+    {
+        ArgumentNullException.ThrowIfNull(tsdb);
+        ArgumentNullException.ThrowIfNull(reader);
+
+        var pool = ArrayPool<Point>.Shared;
+        var buffer = pool.Rent(BatchSize);
+        int written = 0;
+        int skipped = 0;
+        int batchCount = 0;
+        try
+        {
+            while (true)
+            {
+                Point point;
+                try
+                {
+                    if (!reader.TryRead(out point))
+                        break;
+                }
+                catch (BulkIngestException) when (errorPolicy == BulkErrorPolicy.Skip)
+                {
+                    skipped++;
+                    continue;
+                }
+
+                buffer[batchCount++] = point;
+                if (batchCount >= BatchSize)
+                {
+                    written += FlushBatch(tsdb, buffer, batchCount, errorPolicy, ref skipped);
+                    batchCount = 0;
+                }
+            }
+
+            if (batchCount > 0)
+                written += FlushBatch(tsdb, buffer, batchCount, errorPolicy, ref skipped);
+        }
+        finally
+        {
+            Array.Clear(buffer, 0, BatchSize);
+            pool.Return(buffer);
+        }
+
+        if (flushOnComplete && written > 0)
+            tsdb.FlushNow();
+
+        return new BulkIngestResult(written, skipped);
+    }
+
+    private static int FlushBatch(Tsdb tsdb, Point[] buffer, int count, BulkErrorPolicy policy, ref int skipped)
+    {
+        if (policy == BulkErrorPolicy.FailFast)
+            return tsdb.WriteMany(new ArraySegment<Point>(buffer, 0, count));
+
+        // Skip：逐点写，捕获写入侧异常
+        int written = 0;
+        for (int i = 0; i < count; i++)
+        {
+            try
+            {
+                tsdb.Write(buffer[i]);
+                written++;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or BulkIngestException)
+            {
+                skipped++;
+            }
+        }
+        return written;
+    }
+}

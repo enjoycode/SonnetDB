@@ -1,0 +1,86 @@
+using TSLite.Engine;
+using TSLite.Ingest;
+using TSLite.Memory;
+using TSLite.Storage.Segments;
+using Xunit;
+
+namespace TSLite.Tests.Ingest;
+
+public sealed class BulkIngestorTests : IDisposable
+{
+    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+
+    public BulkIngestorTests() => Directory.CreateDirectory(_tempDir);
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_tempDir, recursive: true); } catch { }
+    }
+
+    private TsdbOptions Opts() => new()
+    {
+        RootDirectory = _tempDir,
+        WalBufferSize = 64 * 1024,
+        FlushPolicy = new MemTableFlushPolicy { MaxPoints = 1_000_000, MaxBytes = 64 * 1024 * 1024 },
+        SegmentWriterOptions = new SegmentWriterOptions { FsyncOnCommit = false },
+    };
+
+    [Fact]
+    public void Ingest_LineProtocol_AllPointsWritten()
+    {
+        using var db = Tsdb.Open(Opts());
+        const string lp = "cpu,h=a v=1 1\ncpu,h=a v=2 2\ncpu,h=b v=3 3";
+        var reader = new LineProtocolReader(lp.AsMemory());
+        var result = BulkIngestor.Ingest(db, reader);
+        Assert.Equal(3, result.Written);
+        Assert.Equal(0, result.Skipped);
+        Assert.Equal(3L, db.MemTable.PointCount);
+        Assert.Equal(2, db.Catalog.Count);
+    }
+
+    [Fact]
+    public void Ingest_FailFastOnBadField_Throws()
+    {
+        using var db = Tsdb.Open(Opts());
+        const string lp = "cpu,h=a v=1 1\nbad-line-without-fields\n";
+        var reader = new LineProtocolReader(lp.AsMemory());
+        Assert.Throws<BulkIngestException>(() => BulkIngestor.Ingest(db, reader));
+    }
+
+    [Fact]
+    public void Ingest_SkipPolicy_SkipsBadLines()
+    {
+        using var db = Tsdb.Open(Opts());
+        // line 2 没有 fields → 抛 BulkIngestException → Skip 策略捕获
+        const string lp = "cpu,h=a v=1 1\nbad-line-without-fields\ncpu,h=a v=3 3";
+        var reader = new LineProtocolReader(lp.AsMemory());
+        var result = BulkIngestor.Ingest(db, reader, BulkErrorPolicy.Skip);
+        Assert.Equal(2, result.Written);
+        Assert.Equal(1, result.Skipped);
+    }
+
+    [Fact]
+    public void Ingest_FlushOnComplete_ClearsMemTable()
+    {
+        using var db = Tsdb.Open(Opts());
+        const string lp = "cpu,h=a v=1 1";
+        var reader = new LineProtocolReader(lp.AsMemory());
+        BulkIngestor.Ingest(db, reader, flushOnComplete: true);
+        Assert.Equal(0L, db.MemTable.PointCount);
+    }
+
+    [Fact]
+    public void Ingest_BatchBoundary_StillCorrect()
+    {
+        using var db = Tsdb.Open(Opts());
+        // 制造 > BulkIngestor.BatchSize 行
+        var sb = new System.Text.StringBuilder(BulkIngestor.BatchSize * 30);
+        int n = BulkIngestor.BatchSize + 17;
+        for (int i = 0; i < n; i++)
+            sb.Append("cpu,h=a v=").Append(i).Append(' ').Append(i + 1).Append('\n');
+        var reader = new LineProtocolReader(sb.ToString().AsMemory());
+        var result = BulkIngestor.Ingest(db, reader);
+        Assert.Equal(n, result.Written);
+        Assert.Equal((long)n, db.MemTable.PointCount);
+    }
+}

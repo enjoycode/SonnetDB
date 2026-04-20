@@ -6,6 +6,18 @@
 ## [Unreleased]
 
 ### Added
+- **PR #A：批量入库核心 `TSLite.Ingest` 命名空间（绕开 SQL 解析的快路径，第 1/4 步）**
+  - 新增 `src/TSLite/Ingest/BulkPayloadFormat.cs`：`BulkPayloadFormat` 枚举（`LineProtocol` / `Json` / `BulkValues`）+ `TimePrecision`（`Nanoseconds` / `Microseconds` / `Milliseconds` / `Seconds`）。
+  - 新增 `src/TSLite/Ingest/BulkPayloadDetector.cs`：O(1) 前后字节嗅探协议；`DetectWithPrefix` 支持可选首行 measurement 前缀（首行不含空白/`=`/`,`/`{}`/`()`/`;` 时视为 measurement）。
+  - 新增 `src/TSLite/Ingest/IPointReader.cs`（与 `LineProtocolReader.cs` 同文件）：流式 `TryRead(out Point)` 通用契约。
+  - 新增 `src/TSLite/Ingest/LineProtocolReader.cs`：InfluxDB Line Protocol 子集（`double` / `42i` / `t`/`f`/`true`/`false` / `"…"` field；`\,` `\=` `\空格` `\\` 转义；ns/us/ms/s 精度换算；`measurementOverride`；空行与 `#` 注释跳过）。
+  - 新增 `src/TSLite/Ingest/JsonPointsReader.cs`：基于 `Utf8JsonReader` 的流式 JSON reader，schema `{"m":"…","precision":"ms","points":[{"t":…,"tags":{…},"fields":{…}}]}`，避免一次性反序列化大 payload；支持 `measurementOverride` 与单点级 `measurement` 覆盖。
+  - 新增 `src/TSLite/Ingest/BulkValuesReader.cs`：`INSERT INTO m(cols) VALUES (…),(…),…;` 形式的快路径 reader；表头按需解析一次后，VALUES 走自写扫描器（支持单引号字符串 + `''` 转义 / 整数 / 浮点 / `TRUE`/`FALSE`/`NULL` / 双引号或反引号包裹的标识符）；列角色由调用方 `Func<string, BulkValuesColumnRole>` resolver 提供，便于与 measurement schema 解耦。
+  - 新增 `src/TSLite/Ingest/BulkIngestor.cs`：统一消费入口；`ArrayPool<Point>` 8192 批 → `Tsdb.WriteMany`；支持 `BulkErrorPolicy.FailFast` / `Skip` 与可选 `flushOnComplete`；返回 `BulkIngestResult(Written, Skipped)`。
+  - 新增 `src/TSLite/Ingest/BulkIngestException.cs`：批量入库专用异常类型。
+  - 新增 `tests/TSLite.Tests/Ingest/` 下 5 个测试类（`BulkPayloadDetectorTests` / `LineProtocolReaderTests` / `JsonPointsReaderTests` / `BulkValuesReaderTests` / `BulkIngestorTests`），共 38 个 xUnit 用例覆盖：协议嗅探、首行前缀切分、LP 与 JSON 与 Bulk INSERT VALUES 解析与异常路径、`BulkIngestor` 在 batch 边界（>8192 行）下的正确性、`Skip` 策略与 `flushOnComplete` 路径。
+  - 仍保持 `src/TSLite` 零第三方运行时依赖（仅 `System.IO.Hashing`），不引入新的 NuGet 包。
+
 - **PR #38：发布 `TSLite 0.1.0` 的 NuGet、二进制包、完整服务端包与安装包**
   - 新增 `src/TSLite/PackageReadme.md`、`src/TSLite.Data/PackageReadme.md`、`src/TSLite.Cli/PackageReadme.md`，并在三个项目文件中补齐 `PackageId`、`PackageReadmeFile`、版本元数据，支持直接生成 `TSLite`、`TSLite.Data`、`TSLite.Cli` 三个 `0.1.0` 包。
   - `TSLite.Cli` 从占位程序升级为可用命令行工具：支持 `tslite version`、`tslite sql --connection ... --command|--file ...` 和 `tslite repl --connection ...`，可直接连接本地嵌入式数据库或远程 `TSLite.Server`。

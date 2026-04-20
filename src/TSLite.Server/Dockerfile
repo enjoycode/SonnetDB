@@ -1,46 +1,49 @@
-# TSLite.Server — Docker 多阶段构建
-#
-# 从仓库根目录构建：
+# TSLite.Server multi-stage Docker build.
+# Build from the repository root:
 #   docker build -f src/TSLite.Server/Dockerfile -t tslite-server .
 #
-# 直接运行：
+# Run:
 #   docker run -p 5080:5080 -e TSLITE_TSLiteServer__Tokens__mytoken=admin tslite-server
 
-# ── 构建阶段 ────────────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /repo
 
-# 先复制项目文件以利用 Docker layer 缓存
-COPY Directory.Build.props .
-COPY Directory.Packages.props .
-COPY global.json .
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy project files first to maximize Docker layer reuse for restore.
+COPY Directory.Build.props ./
+COPY Directory.Packages.props ./
+COPY global.json ./
 COPY src/TSLite/TSLite.csproj src/TSLite/
 COPY src/TSLite.Server/TSLite.Server.csproj src/TSLite.Server/
+COPY web/admin/package.json web/admin/package-lock.json web/admin/
 
-# restore 依赖
 RUN dotnet restore src/TSLite.Server/TSLite.Server.csproj
+RUN cd web/admin && npm ci --no-audit --no-fund
 
-# 复制剩余源码
 COPY src/TSLite/ src/TSLite/
 COPY src/TSLite.Server/ src/TSLite.Server/
+COPY web/admin/index.html web/admin/env.d.ts web/admin/tsconfig.json web/admin/tsconfig.node.json web/admin/vite.config.ts web/admin/
+COPY web/admin/public web/admin/public
+COPY web/admin/src web/admin/src
 
-# 发布（Framework-dependent，不启用 AOT）
+RUN cd web/admin && npm run build
+
 RUN dotnet publish src/TSLite.Server/TSLite.Server.csproj \
     -c Release \
     -o /app/publish
 
-# ── 运行阶段 ────────────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
-COPY --from=build /app/publish .
+COPY --from=build /app/publish ./
 
-# 数据目录
 RUN mkdir -p /data
 
 EXPOSE 5080
 
-# 覆盖 DataRoot 为容器内路径，绑定 5080 端口
 ENV TSLITE_TSLiteServer__DataRoot=/data
 ENV TSLITE_TSLiteServer__AutoLoadExistingDatabases=true
 ENV TSLITE_TSLiteServer__AllowAnonymousProbes=true
