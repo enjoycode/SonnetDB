@@ -44,6 +44,12 @@ public static class BearerAuthMiddleware
         {
             return null;
         }
+        // Admin SPA 静态资源（HTML / JS / CSS / favicon 等）匿名可读；
+        // 真正的管理动作仍要求登录后通过 /v1/auth/login 拿 token，再调 SQL 端点。
+        if (path.StartsWith("/admin", StringComparison.Ordinal))
+        {
+            return null;
+        }
 
         var header = context.Request.Headers.Authorization.ToString();
         if (string.IsNullOrEmpty(header) || !header.StartsWith("Bearer ", StringComparison.Ordinal))

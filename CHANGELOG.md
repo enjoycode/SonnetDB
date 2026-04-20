@@ -31,6 +31,14 @@
   - 服务端 `UserStore.ListUsersDetailed()` 与 `GrantsStore.ListAll()` 提供枚举支撑；`ControlPlane` 用反向权限映射 (`MapPermissionBack`) 把 `DatabasePermission` 转回 `GrantPermission`。
   - 权限收紧：`SHOW USERS` / `SHOW GRANTS` 在 `SqlEndpointHandler.IsControlPlaneStatement` 中归为 admin-only；`SHOW DATABASES` 任何已认证用户均可执行。
   - 测试：parser 5 例（`Parse_ShowUsers/ShowDatabases/ShowGrants_NoFilter/WithFor` + 3 个 bad grammar Theory）+ ControlPlane 集成 3 例（`ListUsers_ReturnsCreatedUsersOrderedByName` / `ListGrants_NullFilter_ReturnsAll` / `ListDatabases_ReflectsRegistry`）+ E2E 3 例（`ShowUsers_AsAdmin_ReturnsRows` / `ShowUsers_AsRegularUser_Forbidden` / `ShowDatabases_AsAdmin_ReturnsRows`）。当前测试总数：1174 + 55 = 1229 全绿。
+- **TSLite.Server Admin SPA 脚手架：嵌入式静态资源管线（PR #34b-2）**
+  - 新增 `web/admin/` 完整 Vite + Vue 3 + TypeScript + Naive UI + Pinia + Vue Router 单页应用脚手架，含 `LoginView`（PBKDF2 登录 → token 存 localStorage）+ `DashboardView`（数据库 / 用户 / grants 概览，**全部走 SHOW SQL**，零额外 REST 端点）。
+  - 路由前缀固定为 `/admin/`；axios 拦截器自动注入 `Bearer <token>`；vite dev 反代 `/v1`、`/healthz`、`/metrics` → `:5000`。
+  - 服务端 `src/TSLite.Server/Hosting/AdminUiAssets.cs`：启动时一次性把 `web/admin/dist/**` 嵌入资源（`tslite.admin/...`）加载到 `FrozenDictionary`，AOT 友好的 MIME 类型 switch；`AdminUiEndpoints.MapAdminUi()` 注册 `GET /admin` 与 `GET /admin/{**path}`，命中具体文件返回原字节，未命中且无扩展名时回退 `index.html`（SPA 客户端路由），manifest 为空时返回 503 + 提示 `npm run build`。
+  - `BearerAuthMiddleware.Authenticate` 豁免 `/admin/*` 路径匿名访问（仅静态资源；任何管理动作仍需登录后凭 token 调 `/v1/db/{db}/sql`）。
+  - csproj 集成：`web/admin/dist/**` 通过 `<EmbeddedResource>` 自动嵌入，`LogicalName` 写为 `tslite.admin/%(RecursiveDir)%(Filename)%(Extension)`，C# 端把 `\` 规范化为 `/`；可选 target `BuildAdminUi=true` 自动跑 `npm install && npm run build`（默认 false，避免日常 `dotnet build` 被 npm 拖慢）。dist 目录通过 `web/admin/.gitignore` 排除，不入库。
+  - 缓存策略：`/admin`、`/admin/index.html` → `no-cache`；其他 hash 化资产 → `public, max-age=31536000, immutable`（与 Vite 默认 contenthash 命名匹配）。
+  - 测试：6 个端到端用例 `tests/TSLite.Server.Tests/AdminUiEndToEndTests.cs` 覆盖 `GET /admin` 返回 HTML、SPA fallback (`/admin/login` → index.html)、带扩展名缺失 → 404、匿名可访问、favicon → image/svg+xml、`/v1/db` 仍要求 Bearer。当 dist 未 build 时所有用例自动跳过断言（CI 友好）。当前测试总数：1174 + 61 = **1235 全绿**。
 
 ### Fixed
 - **AOT RequestDelegateGenerator workaround**：`WebApplication.CreateSlimBuilder` + `EnableRequestDelegateGenerator=true` 下，对于

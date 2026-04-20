@@ -38,4 +38,31 @@
     </None>
   </ItemGroup>
 
+  <!--
+    Admin UI 嵌入式静态资源。
+    - web/admin/dist/** 全部以 EmbeddedResource 嵌入，LogicalName 改写为 'tslite.admin/<相对路径>'，
+      与 AdminUiAssets.ResourcePrefix 对齐。
+    - 不依赖 npm；如果 dist 不存在（前端未 build），EmbeddedResource 集合为空，
+      运行时 /admin 端点返回 503 + 提示文案。
+    - 可选：设置 -p:BuildAdminUi=true 由 MSBuild 自动跑 `npm install && npm run build`。
+  -->
+  <PropertyGroup>
+    <AdminUiSourceDir>$(MSBuildThisFileDirectory)..\..\web\admin</AdminUiSourceDir>
+    <AdminUiDistDir>$(AdminUiSourceDir)\dist</AdminUiDistDir>
+    <BuildAdminUi Condition="'$(BuildAdminUi)' == ''">false</BuildAdminUi>
+  </PropertyGroup>
+
+  <Target Name="BuildAdminUi"
+          BeforeTargets="AssignTargetPaths"
+          Condition="'$(BuildAdminUi)' == 'true' AND Exists('$(AdminUiSourceDir)\package.json')">
+    <Exec Command="npm install --no-audit --no-fund" WorkingDirectory="$(AdminUiSourceDir)" />
+    <Exec Command="npm run build" WorkingDirectory="$(AdminUiSourceDir)" />
+  </Target>
+
+  <ItemGroup Condition="Exists('$(AdminUiDistDir)')">
+    <EmbeddedResource Include="$(AdminUiDistDir)\**\*.*">
+      <LogicalName>tslite.admin/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
 </Project>

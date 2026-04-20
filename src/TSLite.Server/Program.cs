@@ -140,6 +140,9 @@ public static class Program
         var registry = app.Services.GetRequiredService<TsdbRegistry>();
         var metrics = app.Services.GetRequiredService<ServerMetrics>();
 
+        // ---- Admin SPA（嵌入式静态资源；匿名可读，所有管理动作都走 SQL 端点）----
+        app.MapAdminUi();
+
         // ---- 健康 / 指标 ----
         app.MapGet("/healthz", () =>
         {
