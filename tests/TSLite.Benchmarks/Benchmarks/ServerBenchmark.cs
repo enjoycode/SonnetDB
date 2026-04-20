@@ -144,7 +144,7 @@ public class ServerInsertBenchmark
             {
                 await _http!.DeleteAsync($"/v1/db/{DbName}").ConfigureAwait(false);
             }
-            catch { /* 清理失败不影响结果 */ }
+            catch (Exception ex) { Console.Error.WriteLine($"[WARN] 清理失败（不影响结果）: {ex.Message}"); }
         }
 
         _http?.Dispose();
@@ -154,6 +154,8 @@ public class ServerInsertBenchmark
     {
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var resp = await _http!.PostAsync(path, content).ConfigureAwait(false);
+        // 200/201 均为正常（已存在或新建）；4xx 如 409 Conflict 也属幂等成功；
+        // 仅 5xx 代表服务器内部故障，需要传播失败
         if ((int)resp.StatusCode >= 500)
             resp.EnsureSuccessStatusCode();
     }
@@ -165,6 +167,8 @@ public class ServerInsertBenchmark
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var resp = await _http!.PostAsync(
             $"/v1/db/{Uri.EscapeDataString(db)}/sql", content).ConfigureAwait(false);
+        // 幂等 DDL（如 CREATE MEASUREMENT）若已存在会返回 4xx sql_error；
+        // 仅 5xx 代表服务器内部故障，需要传播失败
         if ((int)resp.StatusCode >= 500)
             resp.EnsureSuccessStatusCode();
     }
@@ -310,7 +314,7 @@ public class ServerQueryBenchmark
             {
                 await _http!.DeleteAsync($"/v1/db/{DbName}").ConfigureAwait(false);
             }
-            catch { /* 清理失败不影响结果 */ }
+            catch (Exception ex) { Console.Error.WriteLine($"[WARN] 清理失败（不影响结果）: {ex.Message}"); }
         }
 
         _http?.Dispose();
@@ -320,6 +324,8 @@ public class ServerQueryBenchmark
     {
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var resp = await _http!.PostAsync(path, content).ConfigureAwait(false);
+        // 200/201 均为正常（已存在或新建）；4xx 如 409 Conflict 也属幂等成功；
+        // 仅 5xx 代表服务器内部故障，需要传播失败
         if ((int)resp.StatusCode >= 500)
             resp.EnsureSuccessStatusCode();
     }
@@ -331,6 +337,8 @@ public class ServerQueryBenchmark
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var resp = await _http!.PostAsync(
             $"/v1/db/{Uri.EscapeDataString(db)}/sql", content).ConfigureAwait(false);
+        // 幂等 DDL（如 CREATE MEASUREMENT）若已存在会返回 4xx sql_error；
+        // 仅 5xx 代表服务器内部故障，需要传播失败
         if ((int)resp.StatusCode >= 500)
             resp.EnsureSuccessStatusCode();
     }
@@ -460,7 +468,7 @@ public class ServerAggregateBenchmark
             {
                 await _http!.DeleteAsync($"/v1/db/{DbName}").ConfigureAwait(false);
             }
-            catch { /* 清理失败不影响结果 */ }
+            catch (Exception ex) { Console.Error.WriteLine($"[WARN] 清理失败（不影响结果）: {ex.Message}"); }
         }
 
         _http?.Dispose();
@@ -470,6 +478,8 @@ public class ServerAggregateBenchmark
     {
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var resp = await _http!.PostAsync(path, content).ConfigureAwait(false);
+        // 200/201 均为正常（已存在或新建）；4xx 如 409 Conflict 也属幂等成功；
+        // 仅 5xx 代表服务器内部故障，需要传播失败
         if ((int)resp.StatusCode >= 500)
             resp.EnsureSuccessStatusCode();
     }
@@ -481,6 +491,8 @@ public class ServerAggregateBenchmark
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var resp = await _http!.PostAsync(
             $"/v1/db/{Uri.EscapeDataString(db)}/sql", content).ConfigureAwait(false);
+        // 幂等 DDL（如 CREATE MEASUREMENT）若已存在会返回 4xx sql_error；
+        // 仅 5xx 代表服务器内部故障，需要传播失败
         if ((int)resp.StatusCode >= 500)
             resp.EnsureSuccessStatusCode();
     }
