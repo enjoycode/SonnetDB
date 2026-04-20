@@ -161,6 +161,28 @@ public sealed class BulkIngestEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task LineProtocolEndpoint_FlushAsync_Succeeds()
+    {
+        using var c = CreateClient(ReadWriteToken);
+        var resp = await c.PostAsync($"/v1/db/{DbName}/measurements/cpu/lp?flush=async",
+            Text("cpu,host=a value=10 100\ncpu,host=a value=20 200"));
+        var parsed = await ParseAsync(resp);
+        // PR #48：?flush=async 仅向后台 Flush 线程发信号，立即返回；写入计数与 sync/none 一致。
+        Assert.Equal(2, parsed.WrittenRows);
+    }
+
+    [Fact]
+    public async Task LineProtocolEndpoint_FlushFalse_Succeeds()
+    {
+        using var c = CreateClient(ReadWriteToken);
+        var resp = await c.PostAsync($"/v1/db/{DbName}/measurements/cpu/lp?flush=false",
+            Text("cpu,host=a value=11 110\ncpu,host=a value=22 220"));
+        var parsed = await ParseAsync(resp);
+        // PR #48：?flush=false（默认）仅入 MemTable + WAL，不触发 Flush。
+        Assert.Equal(2, parsed.WrittenRows);
+    }
+
+    [Fact]
     public async Task BulkEndpoint_RequiresWriteRole()
     {
         using var c = CreateClient(ReadOnlyToken);

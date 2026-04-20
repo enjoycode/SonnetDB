@@ -427,6 +427,25 @@ public sealed class Tsdb : IDisposable
     }
 
     /// <summary>
+    /// 异步触发一次后台 Flush：仅向 <see cref="BackgroundFlushWorker"/> 发信号后立即返回，
+    /// 由后台线程实际执行 Flush。若未启用后台 Flush，则降级为同步 <see cref="FlushNow"/>。
+    /// </summary>
+    /// <remarks>用于批量入库端点的 <c>?flush=async</c> 档位：低延迟通知 + 不阻塞调用方。</remarks>
+    /// <exception cref="ObjectDisposedException">实例已关闭时抛出。</exception>
+    public void SignalFlush()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var worker = _flushWorker;
+        if (worker is not null)
+        {
+            worker.Signal();
+            return;
+        }
+        // 未启用后台 Flush：降级为同步执行，保证 flush=async 始终具有"已入盘"语义的最终一致。
+        FlushNow();
+    }
+
+    /// <summary>
     /// 枚举当前已落盘的 Segment 文件，按 SegmentId 升序排列。
     /// </summary>
     /// <returns>已落盘段文件的 (SegmentId, FilePath) 只读列表。</returns>

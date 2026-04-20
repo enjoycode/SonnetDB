@@ -177,10 +177,10 @@
 |----|------|------|
 | #46 | **引擎真批量**（已落地，最小切片）：`Tsdb.WriteMany(ReadOnlySpan<Point>)` 整批仅取一次 `_writeSync` 锁、批末仅 `Signal` 一次；`WriteMany(IEnumerable<Point>)` 自动嗅探 `Point[]` / `List<Point>` / `ArraySegment<Point>` 下沉到 span 重载。**WAL 记录格式与 `FileHeader.Version` 保持不变**（向后兼容；`WalRecordType.WriteBatch` 实测 ROI 偏低，留给后续按需追加）。`BulkIngestor`、三端点、`RemoteConnectionImpl` 自动受益。基准（100k 点）：Mean 持平、**Allocated −42~58%**。 | ✅ |
 | #47 | **服务端 + Reader 零拷贝**：`BulkIngestEndpointHandler.ReadAllAsync` 改 `ArrayPool<byte>` 租借（精确长度优先，未知则翻倍扩容），消除 LOH；`JsonPointsReader` 字段重构为 `ReadOnlyMemory<byte> _utf8Memory + byte[]? _pooledBuffer`，ROM ctor 零拷贝持有 caller buffer，string ctor 走 ArrayPool；`BulkIngestEndpointHandler.HandleAsync` JSON 直接喂 `ReadOnlyMemory<byte>`，LP 走 `ArrayPool<char>` rent + `Encoding.UTF8.GetChars`，BulkValues 用精确长度 `GetString(buffer,0,length)`；三端点追加 `DisableRequestSizeLimitAttribute` 解除 Kestrel 30MB 上限。**基准（1M 点 / 本地 dotnet run）**：LP `1.20s / 52MB`、JSON `1.20s / 71MB`、Bulk `1.10s / 34MB`、`/sql/batch` `5.09s / 668MB`，三端点 ~17–19× faster vs PR #45 baseline、alloc −89~95%。Reader 接口仍保 `ROM<char>` / `string`，byte 化留作未来独立 PR。 | ✅ |
-| #48 | **端点 flush 三档位**：`?flush=false\|true\|async`，默认 `false`（最快，仅入 MemTable+WAL）；`async` 仅 `_flushWorker.Signal()` 后返回；`true` 保持现行同步 `FlushNow`。同步调整 `Tsdb.Write` 在批量路径中批后只 Signal 一次。服务端 + RemoteConnectionImpl + ADO TableDirect 参数同步。补齐三路端到端测试。 | 📋 |
+| #48 | **端点 flush 三档位**：`?flush=false\|true\|async`，默认 `false`（最快，仅入 MemTable+WAL）；`async` 走新 `Tsdb.SignalFlush()` 仅向 `BackgroundFlushWorker.Signal()` 发信号后立即返回（未启用后台 Flush 时降级为同步 `FlushNow`）；`true|sync|yes|1` 保持同步 `FlushNow`。新增 `BulkFlushMode { None, Async, Sync }` 枚举与 `BulkIngestor.Ingest` 新主重载（旧 `bool flushOnComplete` 重载向后兼容）。`BulkIngestEndpointHandler.ParseFlush` + ADO `EmbeddedConnectionImpl.ParseFlushMode` 同步解析；`RemoteConnectionImpl` 自然透传 query string。补齐三档位 × 三端点端到端 + BulkIngestor 直测，全量回归 1241 + 97 通过。 | ✅ |
 | #49 | **基准刷新 + 对外对比**：重跑 `BulkIngestBenchmark` 与 `ServerInsertBenchmark` （含 PR #44 三端点 + #46~#48 后果）；增加 `InfluxDB LP write` / `TDengine schemaless LP` 同机供参考；刷新 README 「写入 100 万点」与「批量入库快路径」两表，补记引擎变更后的嵌入式 vs 服务端 vs InfluxDB LP 对比。 | 📋 |
 
-**推进顺序**：PR #46 ✅ → PR #47 ✅ → PR #48 → PR #49。PR #47 已让服务端三端点进入「秒级 1M 点 + ≤ 80MB 分配」区间，超额完成 Milestone 11 ≥ 700k pts/s 的目标。下一步 PR #48 关注 `?flush=false|true|async` 三档位以进一步降 RTT；PR #49 做对外（InfluxDB / TDengine）对比刷新。
+**推进顺序**：PR #46 ✅ → PR #47 ✅ → PR #48 ✅ → PR #49。PR #47 已让服务端三端点进入「秒级 1M 点 + ≤ 80MB 分配」区间，超额完成 Milestone 11 ≥ 700k pts/s 的目标。PR #48 引入 `?flush=false|true|async` 三档位 + 新 `Tsdb.SignalFlush()` API，进一步降低批量入库 RTT；下一步 PR #49 做对外（InfluxDB / TDengine）对比刷新。
 
 
 
@@ -200,9 +200,9 @@
 | 8 | 服务器模式（HTTP + 远端 ADO + 控制面 + Vue3 后台 + SSE） | #32 ~ #34c | ✅ |
 | 9 | 性能基准与发布 | #35 ~ #39 | 🚧（#35 已完成） |
 | 10 | 扩展和第三方 | #40, #41 + #42~#45 批量入库专题 | 🚧（#42~#45 ✅） |
-| 11 | 写入快路径（PR #45 瓶颈收尾） | #46 ~ #49 | 🚧 #46 ✅ #47 ✅ |
+| 11 | 写入快路径（PR #45 瓶颈收尾） | #46 ~ #49 | 🚧 #46 ✅ #47 ✅ #48 ✅ |
 
-**当前推进顺序**：PR #48 → PR #49（写入快路径专题剩余）→ PR #37 → PR #38 → PR #39。
+**当前推进顺序**：PR #49（写入快路径专题剩余）→ PR #37 → PR #38 → PR #39。
 
 ---
 

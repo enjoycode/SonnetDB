@@ -87,7 +87,7 @@ internal sealed class EmbeddedConnectionImpl : IConnectionImpl
 
         // 参数：measurement / onerror / flush
         string? measurementOverride = TryGetParam(parameters, "measurement");
-        bool flushOnComplete = string.Equals(TryGetParam(parameters, "flush"), "true", StringComparison.OrdinalIgnoreCase);
+        BulkFlushMode flushMode = ParseFlushMode(TryGetParam(parameters, "flush"));
         var errorPolicy = string.Equals(TryGetParam(parameters, "onerror"), "skip", StringComparison.OrdinalIgnoreCase)
             ? BulkErrorPolicy.Skip
             : BulkErrorPolicy.FailFast;
@@ -107,7 +107,7 @@ internal sealed class EmbeddedConnectionImpl : IConnectionImpl
 
         try
         {
-            var result = BulkIngestor.Ingest(_tsdb, reader, errorPolicy, flushOnComplete);
+            var result = BulkIngestor.Ingest(_tsdb, reader, errorPolicy, flushMode);
             return MaterializedExecutionResult.NonQuery(result.Written);
         }
         finally
@@ -125,6 +125,24 @@ internal sealed class EmbeddedConnectionImpl : IConnectionImpl
                 return p.Value?.ToString();
         }
         return null;
+    }
+
+    /// <summary>
+    /// 解析 <c>flush</c> 参数为 <see cref="BulkFlushMode"/>（PR #48）。
+    /// 接受 <c>"async"</c>（异步信号）/ <c>"true"|"sync"|"yes"|"1"</c>（同步 FlushNow）/
+    /// 其它值（含 null、空、<c>"false"</c>）一律为 <see cref="BulkFlushMode.None"/>。
+    /// </summary>
+    internal static BulkFlushMode ParseFlushMode(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return BulkFlushMode.None;
+        if (string.Equals(value, "async", StringComparison.OrdinalIgnoreCase))
+            return BulkFlushMode.Async;
+        if (string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "sync", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase)
+            || value == "1")
+            return BulkFlushMode.Sync;
+        return BulkFlushMode.None;
     }
 
     /// <summary>

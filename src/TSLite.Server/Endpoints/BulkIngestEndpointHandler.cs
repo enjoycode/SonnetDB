@@ -41,7 +41,7 @@ internal static class BulkIngestEndpointHandler
     {
         var sw = Stopwatch.StartNew();
         BulkErrorPolicy errorPolicy = ParseOnError(context);
-        bool flushOnComplete = ParseFlush(context);
+        BulkFlushMode flushMode = ParseFlush(context);
 
         // PR #47：从 ArrayPool 租借请求体缓冲区，避免大 payload（>85KB）落入 LOH。
         // 体积通常 MB 级，仍一次性读取（无需流式），但全程零分配复用。
@@ -67,7 +67,7 @@ internal static class BulkIngestEndpointHandler
             BulkIngestResult result;
             try
             {
-                result = BulkIngestor.Ingest(tsdb, reader, errorPolicy, flushOnComplete);
+                result = BulkIngestor.Ingest(tsdb, reader, errorPolicy, flushMode);
             }
             catch (BulkIngestException ex)
             {
@@ -117,12 +117,24 @@ internal static class BulkIngestEndpointHandler
         return BulkErrorPolicy.FailFast;
     }
 
-    private static bool ParseFlush(HttpContext context)
+    private static BulkFlushMode ParseFlush(HttpContext context)
     {
-        if (context.Request.Query.TryGetValue("flush", out var v)
-            && bool.TryParse(v.ToString(), out var b))
-            return b;
-        return false;
+        // PR #48：?flush 三档位
+        //   缺省 / "false" / "0" / "no"   → None  （最快，仅入 MemTable + WAL）
+        //   "async"                       → Async （仅 _flushWorker.Signal()，不阻塞）
+        //   "true" / "1" / "sync" / "yes" → Sync  （同步 FlushNow，等待落盘）
+        if (!context.Request.Query.TryGetValue("flush", out var v))
+            return BulkFlushMode.None;
+        var s = v.ToString();
+        if (string.IsNullOrEmpty(s)) return BulkFlushMode.None;
+        if (string.Equals(s, "async", StringComparison.OrdinalIgnoreCase))
+            return BulkFlushMode.Async;
+        if (string.Equals(s, "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(s, "sync", StringComparison.OrdinalIgnoreCase)
+            || s == "1"
+            || string.Equals(s, "yes", StringComparison.OrdinalIgnoreCase))
+            return BulkFlushMode.Sync;
+        return BulkFlushMode.None;
     }
 
     private static async Task<(byte[] Buffer, int Length)> ReadAllAsync(HttpContext context)

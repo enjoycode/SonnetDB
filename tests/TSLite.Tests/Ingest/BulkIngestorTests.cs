@@ -70,6 +70,45 @@ public sealed class BulkIngestorTests : IDisposable
     }
 
     [Fact]
+    public void Ingest_FlushSync_EquivalentToFlushOnCompleteTrue()
+    {
+        using var db = Tsdb.Open(Opts());
+        const string lp = "cpu,h=a v=1 1\ncpu,h=a v=2 2";
+        var reader = new LineProtocolReader(lp.AsMemory());
+        var result = BulkIngestor.Ingest(db, reader, BulkErrorPolicy.FailFast, BulkFlushMode.Sync);
+        Assert.Equal(2, result.Written);
+        // Sync 档位等价于 FlushNow，MemTable 应被清空。
+        Assert.Equal(0L, db.MemTable.PointCount);
+    }
+
+    [Fact]
+    public void Ingest_FlushNone_KeepsPointsInMemTable()
+    {
+        using var db = Tsdb.Open(Opts());
+        const string lp = "cpu,h=a v=3 3\ncpu,h=a v=4 4";
+        var reader = new LineProtocolReader(lp.AsMemory());
+        var result = BulkIngestor.Ingest(db, reader, BulkErrorPolicy.FailFast, BulkFlushMode.None);
+        Assert.Equal(2, result.Written);
+        // None：不触发 Flush，点仍在 MemTable。
+        Assert.Equal(2L, db.MemTable.PointCount);
+    }
+
+    [Fact]
+    public void Ingest_FlushAsync_DoesNotBlock()
+    {
+        // 异步档位：Ingest 调用立即返回（仅向后台 Flush 线程发信号），不阻塞等待落盘。
+        // 后台线程是否真的执行 Flush 取决于 FlushPolicy 阈值（此处不做断言，由 BackgroundFlushWorker 测试覆盖）。
+        using var db = Tsdb.Open(Opts());
+        const string lp = "cpu,h=a v=5 5\ncpu,h=a v=6 6";
+        var reader = new LineProtocolReader(lp.AsMemory());
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var result = BulkIngestor.Ingest(db, reader, BulkErrorPolicy.FailFast, BulkFlushMode.Async);
+        sw.Stop();
+        Assert.Equal(2, result.Written);
+        Assert.True(sw.ElapsedMilliseconds < 1000, $"async flush should not block, took {sw.ElapsedMilliseconds} ms");
+    }
+
+    [Fact]
     public void Ingest_BatchBoundary_StillCorrect()
     {
         using var db = Tsdb.Open(Opts());

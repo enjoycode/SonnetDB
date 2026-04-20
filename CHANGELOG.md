@@ -6,6 +6,16 @@
 ## [Unreleased]
 
 ### Added
+- **PR #48：批量入库端点 Flush 三档位 `?flush=false|true|async`（写入快路径专题，第 3/4 步）**
+  - `Tsdb` 新增 `public void SignalFlush()`：仅向 `BackgroundFlushWorker` 发信号后立即返回，不阻塞调用方；若未启用后台 Flush（`BackgroundFlush.Enabled = false`），降级为同步 `FlushNow()`，保证 `flush=async` 始终具备「最终一致」语义。
+  - `BulkIngestor` 新增 `enum BulkFlushMode { None, Async, Sync }` 与新主重载 `Ingest(tsdb, reader, errorPolicy, BulkFlushMode flushMode)`；旧 `Ingest(..., bool flushOnComplete)` 重载保留，转发到新重载（`true → Sync` / `false → None`），向后兼容现有调用方。
+  - `BulkIngestEndpointHandler.ParseFlush` 重写为 `BulkFlushMode` 解析：`async` → Async；`true|sync|yes|1` → Sync；其它（含缺省、`false`）→ None。三个端点 `/lp` / `/json` / `/bulk` 共享同一档位。
+  - ADO 嵌入式 `EmbeddedConnectionImpl.ExecuteBulk` 新增 `internal static BulkFlushMode ParseFlushMode(string?)` 并改用 `BulkFlushMode` 透传到引擎；远程 `RemoteConnectionImpl.ExecuteBulk` 自然透传 `flush=` query string，无需改动。
+  - 默认行为（缺省 `flush` 参数）维持 PR #45 / #47 一致：`BulkFlushMode.None`，仅入 MemTable + WAL，最快路径。
+  - 测试：`TSLite.Tests` 新增 3 项（Sync/None/Async 三档位的 BulkIngestor 直测，包括 async 不阻塞 < 1s 验证）；`TSLite.Server.Tests` 新增 2 项（端点 `?flush=async` / `?flush=false`）。全量回归 `TSLite.Tests` 1241/1241 + `TSLite.Server.Tests` 97/97 通过。
+  - 不修改文件二进制格式与 `FileHeader.Version`。
+
+### Added
 - **PR #37：JekyllNet 帮助文档站点 + 镜像内 `/help` 帮助中心**
   - 新增 `.config/dotnet-tools.json`，将 `JekyllNet 0.2.5` 固化为仓库本地工具，统一 `dotnet tool restore` 与 `dotnet tool run jekyllnet build` 的构建入口。
   - `docs/` 现在作为 JekyllNet 站点源目录，新增帮助中心布局、样式以及 `index / getting-started / data-model / sql-reference / file-format / releases` 页面。

@@ -20,8 +20,23 @@ public enum BulkErrorPolicy
 public readonly record struct BulkIngestResult(int Written, int Skipped);
 
 /// <summary>
+/// 批量入库结尾的 Flush 行为档位（PR #48）。
+/// </summary>
+public enum BulkFlushMode
+{
+    /// <summary>不触发 Flush（默认，最快；MemTable 由后台 Flush 线程异步落盘）。</summary>
+    None,
+
+    /// <summary>异步触发：仅向 <see cref="BackgroundFlushWorker"/> 发信号后立即返回，不阻塞调用方。</summary>
+    Async,
+
+    /// <summary>同步触发：调用 <see cref="Tsdb.FlushNow"/>，等待落盘完成后返回。</summary>
+    Sync,
+}
+
+/// <summary>
 /// 统一的批量入库消费入口：把 <see cref="IPointReader"/> 的输出按批喂给 <see cref="Tsdb"/>，
-/// 可选在结尾触发一次 <see cref="Tsdb.FlushNow"/>。
+/// 可选在结尾触发一次 Flush（同步 / 异步 / 不触发）。
 /// </summary>
 public static class BulkIngestor
 {
@@ -43,6 +58,17 @@ public static class BulkIngestor
         IPointReader reader,
         BulkErrorPolicy errorPolicy = BulkErrorPolicy.FailFast,
         bool flushOnComplete = false)
+        => Ingest(tsdb, reader, errorPolicy, flushOnComplete ? BulkFlushMode.Sync : BulkFlushMode.None);
+
+    /// <summary>
+    /// 消费 <paramref name="reader"/> 中的所有 <see cref="Point"/>，写入 <paramref name="tsdb"/>，
+    /// 并按 <paramref name="flushMode"/> 控制结尾 Flush 行为（PR #48）。
+    /// </summary>
+    public static BulkIngestResult Ingest(
+        Tsdb tsdb,
+        IPointReader reader,
+        BulkErrorPolicy errorPolicy,
+        BulkFlushMode flushMode)
     {
         ArgumentNullException.ThrowIfNull(tsdb);
         ArgumentNullException.ThrowIfNull(reader);
@@ -85,8 +111,18 @@ public static class BulkIngestor
             pool.Return(buffer);
         }
 
-        if (flushOnComplete && written > 0)
-            tsdb.FlushNow();
+        if (written > 0)
+        {
+            switch (flushMode)
+            {
+                case BulkFlushMode.Sync:
+                    tsdb.FlushNow();
+                    break;
+                case BulkFlushMode.Async:
+                    tsdb.SignalFlush();
+                    break;
+            }
+        }
 
         return new BulkIngestResult(written, skipped);
     }
