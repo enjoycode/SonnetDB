@@ -5,6 +5,14 @@
 
 ## [Unreleased]
 
+### Added
+- **PR #37：JekyllNet 帮助文档站点 + 镜像内 `/help` 帮助中心**
+  - 新增 `.config/dotnet-tools.json`，将 `JekyllNet 0.2.5` 固化为仓库本地工具，统一 `dotnet tool restore` 与 `dotnet tool run jekyllnet build` 的构建入口。
+  - `docs/` 现在作为 JekyllNet 站点源目录，新增帮助中心布局、样式以及 `index / getting-started / data-model / sql-reference / file-format / releases` 页面。
+  - `TSLite.Server` 新增匿名可访问的 `/help/*` 静态文档端点，运行时从 `wwwroot/help` 提供帮助中心，并支持目录式 URL。
+  - `src/TSLite.Server/Dockerfile` 新增文档构建步骤，在镜像构建时执行 `jekyllnet build --source docs --destination src/TSLite.Server/wwwroot/help`，再随 `dotnet publish` 一起打包进镜像。
+  - `web/admin` 首页与管理后台头部新增“帮助”入口，直接打开 `/help/`。
+
 ### Changed
 - **PR #46：`Tsdb.WriteMany` 真批量快路径（写入快路径专题，第 1/4 步）**
   - 新增 `Tsdb.WriteMany(ReadOnlySpan<Point>)` 重载：整批写入只获取 **一次** `_writeSync` 锁、批末仅调用 **一次** `BackgroundFlushWorker.Signal`，消除原 `foreach Write(point)` 退化批量在 N 次入锁/信号上的开销。

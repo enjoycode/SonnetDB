@@ -37,7 +37,9 @@ public class ServerInsertBenchmark
 {
     private const int DataPointCount = 1_000_000;
     private const string ServerUrl = "http://localhost:5080";
-    private const string AdminToken = "bench-admin-token";
+    // PR #47：允许环境变量 TSLITE_BENCH_TOKEN 覆盖，便于本地手工启动的容器使用其他 token。
+    private static readonly string AdminToken =
+        Environment.GetEnvironmentVariable("TSLITE_BENCH_TOKEN") ?? "bench-admin-token";
     private const string DbName = "bench_server_insert";
     private const int BatchSize = 2_000;
 
@@ -279,7 +281,8 @@ public class ServerQueryBenchmark
 {
     private const int DataPointCount = 1_000_000;
     private const string ServerUrl = "http://localhost:5080";
-    private const string AdminToken = "bench-admin-token";
+    private static readonly string AdminToken =
+        Environment.GetEnvironmentVariable("TSLITE_BENCH_TOKEN") ?? "bench-admin-token";
     private const string DbName = "bench_server_query";
     private const int BatchSize = 2_000;
 
@@ -438,7 +441,8 @@ public class ServerAggregateBenchmark
 {
     private const int DataPointCount = 1_000_000;
     private const string ServerUrl = "http://localhost:5080";
-    private const string AdminToken = "bench-admin-token";
+    private static readonly string AdminToken =
+        Environment.GetEnvironmentVariable("TSLITE_BENCH_TOKEN") ?? "bench-admin-token";
     private const string DbName = "bench_server_aggregate";
     private const int BatchSize = 2_000;
 

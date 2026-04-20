@@ -24,6 +24,9 @@ mono_crash.*
 [Rr]eleases/
 !docs/releases/
 !docs/releases/*.md
+docs/_site/
+src/TSLite.Server/wwwroot/help/
+.jekyll-cache/
 x64/
 x86/
 [Ww][Ii][Nn]32/

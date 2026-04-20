@@ -43,24 +43,23 @@ internal static class BulkIngestEndpointHandler
         BulkErrorPolicy errorPolicy = ParseOnError(context);
         bool flushOnComplete = ParseFlush(context);
 
-        // 一次性读取请求体；批量入库的 payload 通常不算大（MB 级），无需流式。
-        // 若未来需要更大 payload，可改为分块读取并按 reader 协议增量解析。
-        byte[] body = await ReadAllAsync(context).ConfigureAwait(false);
-
+        // PR #47：从 ArrayPool 租借请求体缓冲区，避免大 payload（>85KB）落入 LOH。
+        // 体积通常 MB 级，仍一次性读取（无需流式），但全程零分配复用。
+        var (bodyBuffer, bodyLength) = await ReadAllAsync(context).ConfigureAwait(false);
+        char[]? lpCharBuffer = null;
         IPointReader? reader = null;
         try
         {
             reader = format switch
             {
-                Format.LineProtocol => new LineProtocolReader(
-                    Encoding.UTF8.GetString(body).AsMemory(),
-                    measurementOverride: measurement),
+                Format.LineProtocol => CreateLineProtocolReader(
+                    bodyBuffer, bodyLength, measurement, out lpCharBuffer),
                 Format.Json => new JsonPointsReader(
-                    new ReadOnlyMemory<byte>(body),
+                    new ReadOnlyMemory<byte>(bodyBuffer, 0, bodyLength),
                     measurementOverride: measurement),
                 Format.BulkValues => SchemaBoundBulkValuesReader.Create(
                     tsdb,
-                    Encoding.UTF8.GetString(body),
+                    Encoding.UTF8.GetString(bodyBuffer, 0, bodyLength),
                     measurementOverride: measurement),
                 _ => throw new InvalidOperationException($"未知格式 {format}。"),
             };
@@ -89,7 +88,25 @@ internal static class BulkIngestEndpointHandler
         finally
         {
             (reader as IDisposable)?.Dispose();
+            if (lpCharBuffer is not null)
+                ArrayPool<char>.Shared.Return(lpCharBuffer);
+            ArrayPool<byte>.Shared.Return(bodyBuffer);
         }
+    }
+
+    private static LineProtocolReader CreateLineProtocolReader(
+        byte[] bodyBuffer, int bodyLength, string measurement, out char[] charBuffer)
+    {
+        // 解码 UTF-8 → char[]（从 ArrayPool 租借）。LineProtocolReader 仅持有 ReadOnlyMemory<char>，
+        // 调用方负责在 reader 释放后归还 char[]。
+        int maxChars = Encoding.UTF8.GetMaxCharCount(bodyLength);
+        charBuffer = ArrayPool<char>.Shared.Rent(maxChars);
+        int charCount = Encoding.UTF8.GetChars(
+            new ReadOnlySpan<byte>(bodyBuffer, 0, bodyLength),
+            charBuffer);
+        return new LineProtocolReader(
+            new ReadOnlyMemory<char>(charBuffer, 0, charCount),
+            measurementOverride: measurement);
     }
 
     private static BulkErrorPolicy ParseOnError(HttpContext context)
@@ -108,28 +125,62 @@ internal static class BulkIngestEndpointHandler
         return false;
     }
 
-    private static async Task<byte[]> ReadAllAsync(HttpContext context)
+    private static async Task<(byte[] Buffer, int Length)> ReadAllAsync(HttpContext context)
     {
-        // 优先按 Content-Length 一次性分配，避免多次扩容。
+        // PR #47：所有路径均从 ArrayPool<byte>.Shared 租借（caller 在 finally 中归还），
+        // 避免 100MB+ payload 直接落入 LOH。
+        // 优先按 Content-Length 一次性租借精确大小。
         if (context.Request.ContentLength is long len && len > 0 && len <= int.MaxValue)
         {
-            var buffer = new byte[(int)len];
+            int size = (int)len;
+            var buffer = ArrayPool<byte>.Shared.Rent(size);
             int offset = 0;
-            while (offset < buffer.Length)
+            try
             {
-                int n = await context.Request.Body.ReadAsync(
-                    buffer.AsMemory(offset, buffer.Length - offset),
-                    context.RequestAborted).ConfigureAwait(false);
-                if (n == 0) break;
-                offset += n;
+                while (offset < size)
+                {
+                    int n = await context.Request.Body.ReadAsync(
+                        buffer.AsMemory(offset, size - offset),
+                        context.RequestAborted).ConfigureAwait(false);
+                    if (n == 0) break;
+                    offset += n;
+                }
             }
-            return offset == buffer.Length ? buffer : buffer.AsSpan(0, offset).ToArray();
+            catch
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+                throw;
+            }
+            return (buffer, offset);
         }
 
-        // 未知长度：用 MemoryStream 累积。
-        using var ms = new MemoryStream();
-        await context.Request.Body.CopyToAsync(ms, context.RequestAborted).ConfigureAwait(false);
-        return ms.ToArray();
+        // 未知长度：用初始 4KB 池缓冲增量扩容（每次翻倍）。
+        var rented = ArrayPool<byte>.Shared.Rent(4096);
+        int total = 0;
+        try
+        {
+            while (true)
+            {
+                if (total == rented.Length)
+                {
+                    var bigger = ArrayPool<byte>.Shared.Rent(rented.Length * 2);
+                    Buffer.BlockCopy(rented, 0, bigger, 0, total);
+                    ArrayPool<byte>.Shared.Return(rented);
+                    rented = bigger;
+                }
+                int n = await context.Request.Body.ReadAsync(
+                    rented.AsMemory(total, rented.Length - total),
+                    context.RequestAborted).ConfigureAwait(false);
+                if (n == 0) break;
+                total += n;
+            }
+        }
+        catch
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+            throw;
+        }
+        return (rented, total);
     }
 
     private static async Task WriteErrorAsync(HttpContext ctx, int statusCode, string code, string message)

@@ -74,6 +74,10 @@ public static class Program
         if (bool.TryParse(allowAnon, out var anon))
             options.AllowAnonymousProbes = anon;
 
+        var helpDocsRoot = section["HelpDocsRoot"];
+        if (!string.IsNullOrWhiteSpace(helpDocsRoot))
+            options.HelpDocsRoot = helpDocsRoot;
+
         var tokens = section.GetSection("Tokens");
         foreach (var child in tokens.GetChildren())
         {
@@ -148,6 +152,7 @@ public static class Program
 
         // ---- Admin SPA（嵌入式静态资源；匿名可读，所有管理动作都走 SQL 端点）----
         app.MapAdminUi();
+        app.MapHelpDocs(serverOptions);
 
         // ---- 健康 / 指标 ----
         app.MapGet("/healthz", () =>

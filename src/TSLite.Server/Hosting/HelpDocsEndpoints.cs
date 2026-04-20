@@ -30,10 +30,10 @@ internal static class HelpDocsEndpoints
         var path = relativePath.Trim('/');
 
         var candidates = string.IsNullOrEmpty(path)
-            ? ["index.html"]
+            ? new[] { "index.html" }
             : Path.HasExtension(path)
-                ? [path]
-                : [path, $"{path}.html", $"{path}/index.html"];
+                ? new[] { path }
+                : new[] { path, $"{path}.html", $"{path}/index.html" };
 
         foreach (var candidate in candidates)
         {
@@ -109,6 +109,6 @@ internal static class HelpDocsEndpoints
             ctx.Response.Headers.CacheControl = "public, max-age=86400";
         }
 
-        await ctx.Response.SendFileAsync(filePath, ctx.RequestAborted).ConfigureAwait(false);
+        await ctx.Response.SendFileAsync(filePath, 0, null, ctx.RequestAborted).ConfigureAwait(false);
     }
 }

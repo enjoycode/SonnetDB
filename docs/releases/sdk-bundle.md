@@ -1,38 +1,31 @@
-# SDK Bundle
+---
+layout: default
+title: SDK Bundle
+description: 面向开发者的 SDK 打包说明，包含 NuGet 包、本地 CLI 与配套文档。
+permalink: /releases/sdk-bundle/
+---
 
-SDK Bundle 面向开发者，目标是“一次下载，直接拥有三套包和本地 CLI”。
+SDK Bundle 面向开发者，目标是“一次下载，直接拥有完整开发接入包”。
 
 ## 包含内容
 
-- `packages/TSLite.0.1.0.nupkg`
-- `packages/TSLite.Data.0.1.0.nupkg`
-- `packages/TSLite.Cli.0.1.0.nupkg`
-- `cli/` 原生命令行工具
+- `packages/TSLite.<version>.nupkg`
+- `packages/TSLite.Data.<version>.nupkg`
+- `packages/TSLite.Cli.<version>.nupkg`
+- `cli/` 本地命令行工具
 - `docs/` 使用说明
-- `LICENSE`
 
-## 使用方式
-
-NuGet 包：
+## 常见使用方式
 
 ```bash
-dotnet add package TSLite --version 0.1.0
-dotnet add package TSLite.Data --version 0.1.0
-dotnet tool install --global TSLite.Cli --version 0.1.0
+dotnet add package TSLite --version <version>
+dotnet add package TSLite.Data --version <version>
+dotnet tool install --global TSLite.Cli --version <version>
 ```
 
-本地 CLI：
-
-Windows：
-
-```powershell
-.\tslite.cmd version
-.\tslite.cmd sql --connection "Data Source=./demo-data" --command "SELECT count(*) FROM cpu"
-```
-
-Linux：
+本地 CLI 示例：
 
 ```bash
-./tslite version
-./tslite sql --connection "Data Source=./demo-data" --command "SELECT count(*) FROM cpu"
+tslite version
+tslite sql --connection "Data Source=./demo-data" --command "SELECT count(*) FROM cpu"
 ```

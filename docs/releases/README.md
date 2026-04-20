@@ -1,31 +1,36 @@
-# TSLite 0.1.0 发布说明
+---
+layout: default
+title: 发布与打包
+description: 了解 NuGet、SDK Bundle、Server Bundle 和安装包的组成与默认启动方式。
+permalink: /releases/
+---
 
-`TSLite 0.1.0` 的发布产物分为 4 类：
+TSLite 当前的发布物主要分为四类：
 
 | 类型 | 产物 | 说明 |
-|------|------|------|
-| NuGet | `TSLite.0.1.0.nupkg` | 核心嵌入式时序引擎 |
-| NuGet | `TSLite.Data.0.1.0.nupkg` | ADO.NET 提供程序，支持本地与远程连接 |
-| NuGet / Tool | `TSLite.Cli.0.1.0.nupkg` | `dotnet tool` 命令行工具，命令名 `tslite` |
-| SDK Bundle | `tslite-sdk-0.1.0-win-x64.zip` / `tslite-sdk-0.1.0-linux-x64.tar.gz` | 含三套 NuGet 包、原生命令行工具与使用文档 |
-| Server Bundle | `tslite-server-full-0.1.0-win-x64.zip` / `tslite-server-full-0.1.0-linux-x64.tar.gz` | 含 `TSLite.Server`、内置前端、CLI、NuGet 包、默认本地启动配置 |
-| Installer | `tslite-server-0.1.0-win-x64.msi` | Windows 可安装版本 |
-| Installer | `tslite-server-0.1.0-linux-x64.deb` | Debian / Ubuntu 可安装版本 |
-| Installer | `tslite-server-0.1.0-linux-x64.rpm` | RHEL / CentOS / Fedora 可安装版本 |
+| --- | --- | --- |
+| NuGet | `TSLite.*.nupkg` | 嵌入式核心库、远程 ADO.NET 接入与 CLI 工具包 |
+| SDK Bundle | `tslite-sdk-<version>-<rid>` | 面向开发者，包含 NuGet 包、本地 CLI 与配套文档 |
+| Server Bundle | `tslite-server-full-<version>-<rid>` | 面向部署者，包含 `TSLite.Server`、前端、CLI 与默认启动配置 |
+| Installer | `.msi` / `.deb` / `.rpm` | 面向最终安装的操作系统包 |
 
-## 默认一键启动信息
+## 默认启动信息
 
-`TSLite.Server` 全量包与安装包都内置了本地演示用启动配置：
+完整服务端发布物通常默认监听：
 
-- 管理后台地址：`http://127.0.0.1:5080/admin`
-- 默认管理员：`admin`
-- 默认密码：`Admin123!`
-- 默认 Bearer Token：`tslite-admin-token`
+```text
+http://127.0.0.1:5080
+```
 
-这些默认凭据只用于本地开箱即用场景，生产环境请在首次启动后立即修改。
+常见入口包括：
 
-## 相关文档
+- `/admin/`
+- `/help/`
+- `/healthz`
+- `/metrics`
 
-- [SDK Bundle 说明](./sdk-bundle.md)
-- [Server Bundle 说明](./server-bundle.md)
-- [安装包说明](./installers.md)
+## 推荐阅读顺序
+
+1. [SDK Bundle](/help/releases/sdk-bundle/)
+2. [Server Bundle](/help/releases/server-bundle/)
+3. [安装包](/help/releases/installers/)

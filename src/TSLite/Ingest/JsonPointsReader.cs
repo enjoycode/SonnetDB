@@ -23,9 +23,8 @@ namespace TSLite.Ingest;
 /// </remarks>
 public sealed class JsonPointsReader : IPointReader, IDisposable
 {
-    private readonly byte[] _utf8Buffer;
-    private readonly bool _ownsBuffer;
-    private readonly int _utf8Length;
+    private readonly ReadOnlyMemory<byte> _utf8Memory;
+    private readonly byte[]? _pooledBuffer; // 非 null 时需在 Dispose 中返还到 ArrayPool
     private readonly TimePrecision _precision;
     private readonly string? _measurementOverride;
 
@@ -37,16 +36,15 @@ public sealed class JsonPointsReader : IPointReader, IDisposable
     private JsonReaderState _readerState;
     private int _readerPosition;
 
-    /// <summary>从已经解码为 UTF-8 的字节切片构造 reader。</summary>
+    /// <summary>从已经解码为 UTF-8 的字节切片构造 reader（零拷贝；caller 需保证 buffer 生命周期覆盖 reader）。</summary>
     public JsonPointsReader(
         ReadOnlyMemory<byte> utf8Json,
         TimePrecision precision = TimePrecision.Milliseconds,
         string? measurementOverride = null)
     {
-        // 由于 Utf8JsonReader 需要 ROS<byte>，这里直接复制到一个数组以满足生命周期
-        _utf8Buffer = utf8Json.ToArray();
-        _ownsBuffer = false;
-        _utf8Length = _utf8Buffer.Length;
+        // PR #47：直接持有 ROM<byte>，不再复制。Utf8JsonReader 按需 .Span 读取即可。
+        _utf8Memory = utf8Json;
+        _pooledBuffer = null;
         _precision = precision;
         _precisionFromBody = precision;
         _measurementOverride = measurementOverride;
@@ -59,9 +57,10 @@ public sealed class JsonPointsReader : IPointReader, IDisposable
         string? measurementOverride = null)
     {
         int max = Encoding.UTF8.GetMaxByteCount(json.Length);
-        _utf8Buffer = ArrayPool<byte>.Shared.Rent(max);
-        _ownsBuffer = true;
-        _utf8Length = Encoding.UTF8.GetBytes(json.Span, _utf8Buffer);
+        var buf = ArrayPool<byte>.Shared.Rent(max);
+        int len = Encoding.UTF8.GetBytes(json.Span, buf);
+        _pooledBuffer = buf;
+        _utf8Memory = new ReadOnlyMemory<byte>(buf, 0, len);
         _precision = precision;
         _precisionFromBody = precision;
         _measurementOverride = measurementOverride;
@@ -76,7 +75,7 @@ public sealed class JsonPointsReader : IPointReader, IDisposable
             _initialized = true;
         }
 
-        var slice = new ReadOnlySpan<byte>(_utf8Buffer, _readerPosition, _utf8Length - _readerPosition);
+        var slice = _utf8Memory.Span.Slice(_readerPosition);
         var reader = new Utf8JsonReader(slice, isFinalBlock: true, _readerState);
 
         // 在 points 数组内：下一个 token 应是 StartObject 或 EndArray
@@ -112,7 +111,7 @@ public sealed class JsonPointsReader : IPointReader, IDisposable
 
     private void InitializeAndSeekIntoPoints()
     {
-        var span = new ReadOnlySpan<byte>(_utf8Buffer, 0, _utf8Length);
+        var span = _utf8Memory.Span;
         var reader = new Utf8JsonReader(span, isFinalBlock: true, default);
 
         // 期望 StartObject
@@ -297,7 +296,7 @@ public sealed class JsonPointsReader : IPointReader, IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        if (_ownsBuffer)
-            ArrayPool<byte>.Shared.Return(_utf8Buffer);
+        if (_pooledBuffer is not null)
+            ArrayPool<byte>.Shared.Return(_pooledBuffer);
     }
 }

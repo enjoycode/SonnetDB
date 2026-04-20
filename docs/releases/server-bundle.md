@@ -1,52 +1,50 @@
-# Server Bundle
+---
+layout: default
+title: Server Bundle
+description: 下载即运行的完整服务端发布包，包含后台、CLI、文档和默认配置。
+permalink: /releases/server-bundle/
+---
 
-Server Bundle 面向“下载即启动”的部署场景，默认已经包含：
+Server Bundle 面向“下载即启动”的部署场景，默认包含：
 
-- `TSLite.Server` 原生可执行文件
-- 嵌入式管理前端
-- `TSLite.Cli` 原生命令行工具
-- `TSLite` / `TSLite.Data` / `TSLite.Cli` 的 NuGet 包
-- 本地数据目录 `tslite-data/`
-- 默认管理员账号与 Bearer Token
-- 启动脚本与使用文档
+- `TSLite.Server` 可执行文件
+- 管理后台前端
+- `/help` 帮助文档静态站点
+- `TSLite.Cli`
+- `TSLite` / `TSLite.Data` / `TSLite.Cli` NuGet 包
+- 启动脚本与说明文档
 
 ## 启动方式
 
-Windows：
+Windows:
 
 ```powershell
 .\start-tslite-server.cmd
 ```
 
-Linux：
+Linux:
 
 ```bash
 chmod +x ./start-tslite-server.sh ./tslite
 ./start-tslite-server.sh
 ```
 
-启动后可直接访问：
+## 常用访问地址
 
-- 管理后台：`http://127.0.0.1:5080/admin`
-- 健康检查：`http://127.0.0.1:5080/healthz`
-- 指标接口：`http://127.0.0.1:5080/metrics`
+- 管理后台: `http://127.0.0.1:5080/admin/`
+- 帮助中心: `http://127.0.0.1:5080/help/`
+- 健康检查: `http://127.0.0.1:5080/healthz`
+- 指标接口: `http://127.0.0.1:5080/metrics`
 
-## 默认凭据
-
-- 用户名：`admin`
-- 密码：`Admin123!`
-- Bearer Token：`tslite-admin-token`
-
-## 目录结构
+## 目录结构示意
 
 ```text
-tslite-server-full-0.1.0-<rid>/
-├── TSLite.Server(.exe)
-├── appsettings.json
-├── cli/
-├── packages/
-├── docs/
-├── tslite-data/
-├── start-tslite-server.cmd|sh
-└── tslite.cmd|tslite
+tslite-server-full-<version>-<rid>/
+├─ TSLite.Server(.exe)
+├─ appsettings.json
+├─ cli/
+├─ packages/
+├─ docs/
+├─ tslite-data/
+└─ start-tslite-server.cmd|sh
 ```

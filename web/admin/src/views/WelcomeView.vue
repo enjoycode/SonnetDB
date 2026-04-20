@@ -4,7 +4,7 @@
       <BrandLogo />
       <nav class="hero-nav">
         <button type="button" class="nav-link" @click="scrollToSection('overview')">产品</button>
-        <button type="button" class="nav-link" @click="scrollToSection('help')">帮助</button>
+        <button type="button" class="nav-link" @click="openHelp">帮助</button>
         <button type="button" class="nav-cta" @click="goManage">{{ manageLabel }}</button>
       </nav>
     </header>
@@ -21,7 +21,7 @@
 
           <div class="hero-actions">
             <button type="button" class="primary-action" @click="goManage">{{ primaryActionLabel }}</button>
-            <button type="button" class="secondary-action" @click="scrollToSection('help')">查看帮助</button>
+            <button type="button" class="secondary-action" @click="openHelp">查看帮助</button>
           </div>
 
           <div class="hero-status-grid">
@@ -178,6 +178,13 @@ function goManage(): void {
     return;
   }
   router.push({ name: 'login' });
+}
+
+function openHelp(): void {
+  const popup = window.open('/help/', '_blank', 'noopener,noreferrer');
+  if (!popup) {
+    window.location.assign('/help/');
+  }
 }
 
 onMounted(async () => {

@@ -23,6 +23,7 @@
       <n-layout-header bordered class="app-header">
         <div class="header-left">
           <button type="button" class="header-home" @click="goHome">产品首页</button>
+          <button type="button" class="header-home" @click="openHelp">帮助</button>
           <span class="header-title">{{ activeTitle }}</span>
         </div>
 
@@ -130,6 +131,13 @@ function onMenu(key: string): void {
 
 function goHome(): void {
   router.push({ name: 'home' });
+}
+
+function openHelp(): void {
+  const popup = window.open('/help/', '_blank', 'noopener,noreferrer');
+  if (!popup) {
+    window.location.assign('/help/');
+  }
 }
 
 function onLogout(): void {

@@ -16,20 +16,25 @@ RUN apt-get update \
 COPY Directory.Build.props ./
 COPY Directory.Packages.props ./
 COPY global.json ./
+COPY .config/dotnet-tools.json .config/
 COPY src/TSLite/TSLite.csproj src/TSLite/
 COPY src/TSLite.Server/TSLite.Server.csproj src/TSLite.Server/
 COPY web/admin/package.json web/admin/package-lock.json web/admin/
 
 RUN dotnet restore src/TSLite.Server/TSLite.Server.csproj
+RUN dotnet tool restore
 RUN cd web/admin && npm ci --no-audit --no-fund
 
 COPY src/TSLite/ src/TSLite/
 COPY src/TSLite.Server/ src/TSLite.Server/
+COPY docs/ docs/
 COPY web/admin/index.html web/admin/env.d.ts web/admin/tsconfig.json web/admin/tsconfig.node.json web/admin/vite.config.ts web/admin/
 COPY web/admin/public web/admin/public
 COPY web/admin/src web/admin/src
 
 RUN cd web/admin && npm run build
+RUN rm -rf src/TSLite.Server/wwwroot/help \
+    && dotnet tool run jekyllnet build --source docs --destination src/TSLite.Server/wwwroot/help
 
 RUN dotnet publish src/TSLite.Server/TSLite.Server.csproj \
     -c Release \
