@@ -201,6 +201,104 @@ TSLite/
 
 ---
 
+## 性能基准 (Benchmarks)
+
+下表为在本地开发机上对 **TSLite vs. SQLite vs. InfluxDB 2.x vs. TDengine 3.x** 四种时序/嵌入式数据库的实测结果。
+基准代码位于 [tests/TSLite.Benchmarks](tests/TSLite.Benchmarks)，使用 [BenchmarkDotNet](https://benchmarkdotnet.org/) 运行。
+
+### 测试环境
+
+| 项目 | 配置 |
+|------|------|
+| CPU | Intel Core Ultra 9 185H @ 2.50GHz（16 物理核 / 22 逻辑核） |
+| 内存 | 64 GB |
+| 操作系统 | Windows 11 26200 (25H2) x64 |
+| .NET SDK | 10.0.202 |
+| 运行时 | .NET 10.0.6, X64 RyuJIT x86-64-v3 |
+| BenchmarkDotNet | v0.15.8 (含 MemoryDiagnoser) |
+| TSLite | 当前主分支（参见 [CHANGELOG.md](CHANGELOG.md)） |
+| SQLite | `Microsoft.Data.Sqlite`（`journal_mode=WAL`、`synchronous=OFF`） |
+| InfluxDB | `influxdb:2.7` 容器，HTTP API（10k/批，毫秒精度） |
+| TDengine | `tdengine/tdengine:3.3.4.3` 容器，REST API（1k/批，超级表 + 子表） |
+
+### 工作负载
+
+- 数据规模：**1,000,000 个数据点**
+- Measurement：`sensor_data`
+- Tag：`host=server001`
+- Field：`value` (DOUBLE)
+- 时间戳：`2024-01-01T00:00:00Z` 起，每点 +1 ms
+- 写入基准每次迭代均使用全新的数据库 / bucket / 子表；查询/聚合基准在 `[GlobalSetup]` 中预先写入 1M 点
+
+### 写入：100 万点（单序列）
+
+| 实现 | Mean | 内存分配 | 相对 TSLite |
+|------|-----:|--------:|-----------:|
+| **TSLite** | **841.6 ms** | 529.7 MB | **1.00×** |
+| SQLite | 1,426.4 ms | 465.4 MB | 1.69× 慢 |
+| InfluxDB 2.7 | 6,617.9 ms | 1,457.5 MB | 7.86× 慢 |
+| TDengine 3.3 (REST) | 44,198.4 ms | 156.1 MB | 52.5× 慢 |
+
+> TSLite 写入吞吐 ≈ **1.19 M points/s**（单序列、`FlushPolicy` 全部上限、后台 flush 与压缩关闭）。
+> InfluxDB / TDengine 走的是 HTTP/REST，受网络与协议序列化开销影响；本基准仅供水平参考，不代表生产部署吞吐上限。
+
+### 范围查询：扫描 1M 点（全时间范围）
+
+| 实现 | Mean | StdDev | 相对 TSLite |
+|------|-----:|-------:|-----------:|
+| **TSLite** | **10.43 ms** | 0.52 ms | **1.00×** |
+| SQLite | 78.96 ms | 1.08 ms | 7.57× 慢 |
+| InfluxDB 2.7 (Flux) | 704.93 ms | 36.31 ms | 67.6× 慢 |
+| TDengine 3.3 (REST) | 75.75 ms | 3.95 ms | 7.26× 慢 |
+
+### 时间桶聚合：`avg / 1 minute` over 1M 点
+
+| 实现 | Mean | StdDev | 相对 TSLite |
+|------|-----:|-------:|-----------:|
+| **TSLite** | **58.72 ms** | 2.19 ms | **1.00×** |
+| SQLite | 510.19 ms | 94.25 ms | 8.69× 慢 |
+| InfluxDB 2.7 (Flux) | 130.31 ms | 4.94 ms | 2.22× 慢 |
+| TDengine 3.3 (REST) | 77.44 ms | 3.76 ms | 1.32× 慢 |
+
+### 小结
+
+在本机配置下，TSLite 相对其它三个数据库：
+
+- **写入吞吐**：~1.7× 优于 SQLite，~7.9× 优于 InfluxDB，~52× 优于 TDengine（REST 批量场景）
+- **范围查询**：~7.6× 优于 SQLite 与 TDengine，~68× 优于 InfluxDB（按时间排序的 Segment 直读 vs Flux/B-Tree）
+- **1 分钟桶聚合**：~8.7× 优于 SQLite，~2.2× 优于 InfluxDB，~1.3× 优于 TDengine（按 series 内序解码后流式聚合）
+
+> InfluxDB / TDengine 对比为单机容器 + 客户端跨进程 HTTP 调用；TSLite 是嵌入式 in-process 引擎。
+> 这是**嵌入式 vs 服务化**的架构差异，结果用于水平参考，不能直接映射到独立部署的生产集群。
+
+### 启用 InfluxDB / TDengine 对照（可选）
+
+```bash
+cd tests/TSLite.Benchmarks/docker
+docker compose up -d        # 启动 influxdb:2.7 + tdengine:3.3.x（首次拉取 ~700MB）
+cd ../../..
+dotnet run -c Release --project tests/TSLite.Benchmarks
+```
+
+如果对应服务不可用，相关测项会自动 `[SKIP]`，仅运行 TSLite + SQLite 对比。
+
+### 复现命令
+
+```bash
+# 全部基准（含 Compaction）
+dotnet run -c Release --project tests/TSLite.Benchmarks
+
+# 仅嵌入式对比（TSLite + SQLite）
+dotnet run -c Release --project tests/TSLite.Benchmarks -- \
+  --filter "*InsertBenchmark.*" "*QueryBenchmark.*" "*AggregateBenchmark.*"
+```
+
+完整报告（CSV / HTML / Markdown）会输出到 `BenchmarkDotNet.Artifacts/results/`。
+
+> 注：基准结果与硬件、电源策略、后台负载强相关，请以你自己机器上的复现结果为准。
+
+---
+
 ## 路线图
 
 详见 [ROADMAP.md](ROADMAP.md)。

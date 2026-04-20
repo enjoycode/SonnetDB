@@ -108,7 +108,10 @@ public class QueryBenchmark
             _influxClient = new InfluxDBClient(InfluxUrl, InfluxToken);
             _influxAvailable = await _influxClient.PingAsync().ConfigureAwait(false);
             if (_influxAvailable)
+            {
+                await EnsureInfluxBucketAsync().ConfigureAwait(false);
                 await WriteInfluxDataAsync(_dataPoints).ConfigureAwait(false);
+            }
         }
         catch
         {
@@ -125,7 +128,7 @@ public class QueryBenchmark
                 .ConfigureAwait(false);
             await _tdengineClient.ExecuteAsync(
                 $"CREATE STABLE IF NOT EXISTS {TDengineDb}.sensor_data " +
-                "(ts TIMESTAMP, value DOUBLE) TAGS (host BINARY(64))").ConfigureAwait(false);
+                "(ts TIMESTAMP, `value` DOUBLE) TAGS (`host` BINARY(64))").ConfigureAwait(false);
             await _tdengineClient.ExecuteAsync(
                 $"CREATE TABLE IF NOT EXISTS {TDengineSubTable} " +
                 $"USING {TDengineDb}.sensor_data TAGS ('server001')").ConfigureAwait(false);
@@ -216,7 +219,7 @@ public class QueryBenchmark
         }
 
         return await _tdengineClient!.ExecuteAsync(
-            $"SELECT ts, host, value FROM {TDengineSubTable} " +
+            $"SELECT ts, `host`, `value` FROM {TDengineSubTable} " +
             $"WHERE ts >= {_queryFromMs} AND ts < {_queryToMs} ORDER BY ts")
             .ConfigureAwait(false);
     }
@@ -269,6 +272,18 @@ public class QueryBenchmark
     // ─────────────────────────────────────────────────────────────────────
     // 辅助方法
     // ─────────────────────────────────────────────────────────────────────
+
+    private async Task EnsureInfluxBucketAsync()
+    {
+        var bucketsApi = _influxClient!.GetBucketsApi();
+        var existing = await bucketsApi.FindBucketByNameAsync(InfluxBucket).ConfigureAwait(false);
+        if (existing is not null) return;
+        var orgs = await _influxClient.GetOrganizationsApi()
+            .FindOrganizationsAsync(org: InfluxOrg).ConfigureAwait(false);
+        if (orgs is null || orgs.Count == 0)
+            throw new InvalidOperationException($"InfluxDB org '{InfluxOrg}' not found");
+        await bucketsApi.CreateBucketAsync(InfluxBucket, orgs[0].Id).ConfigureAwait(false);
+    }
 
     private static SqliteConnection OpenSqlite(string path)
     {

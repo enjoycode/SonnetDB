@@ -76,6 +76,8 @@ public class InsertBenchmark
         {
             _influxClient = new InfluxDBClient(InfluxUrl, InfluxToken);
             _influxAvailable = await _influxClient.PingAsync().ConfigureAwait(false);
+            if (_influxAvailable)
+                await EnsureInfluxBucketAsync().ConfigureAwait(false);
         }
         catch
         {
@@ -92,7 +94,7 @@ public class InsertBenchmark
                 .ConfigureAwait(false);
             await _tdengineClient.ExecuteAsync(
                 $"CREATE STABLE IF NOT EXISTS {TDengineDb}.sensor_data " +
-                "(ts TIMESTAMP, value DOUBLE) TAGS (host BINARY(64))").ConfigureAwait(false);
+                "(ts TIMESTAMP, `value` DOUBLE) TAGS (`host` BINARY(64))").ConfigureAwait(false);
             await _tdengineClient.ExecuteAsync(
                 $"CREATE TABLE IF NOT EXISTS {TDengineSubTable} " +
                 $"USING {TDengineDb}.sensor_data TAGS ('server001')").ConfigureAwait(false);
@@ -263,16 +265,15 @@ public class InsertBenchmark
         SqliteConnection.ClearAllPools();
         if (File.Exists(_sqliteDbPath))
             File.Delete(_sqliteDbPath);
-        // InfluxDB
+        // InfluxDB：仅删除数据，保留 bucket，避免后续基准进程因 bucket 不存在而失败。
         if (_influxAvailable)
         {
             try
             {
-                await _influxClient!.GetBucketsApi()
-                    .DeleteBucketAsync(
-                        (await _influxClient.GetBucketsApi()
-                            .FindBucketByNameAsync(InfluxBucket).ConfigureAwait(false))!)
-                    .ConfigureAwait(false);
+                _influxClient!.GetDeleteApi().Delete(
+                    new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(DataPointCount + 1),
+                    string.Empty, InfluxBucket, InfluxOrg).GetAwaiter().GetResult();
             }
             catch { /* 清理失败不影响结果 */ }
 
@@ -302,6 +303,18 @@ public class InsertBenchmark
     // ─────────────────────────────────────────────────────────────────────
     // 辅助方法
     // ─────────────────────────────────────────────────────────────────────
+
+    private async Task EnsureInfluxBucketAsync()
+    {
+        var bucketsApi = _influxClient!.GetBucketsApi();
+        var existing = await bucketsApi.FindBucketByNameAsync(InfluxBucket).ConfigureAwait(false);
+        if (existing is not null) return;
+        var orgs = await _influxClient.GetOrganizationsApi()
+            .FindOrganizationsAsync(org: InfluxOrg).ConfigureAwait(false);
+        if (orgs is null || orgs.Count == 0)
+            throw new InvalidOperationException($"InfluxDB org '{InfluxOrg}' not found");
+        await bucketsApi.CreateBucketAsync(InfluxBucket, orgs[0].Id).ConfigureAwait(false);
+    }
 
     private static SqliteConnection OpenSqlite(string path)
     {

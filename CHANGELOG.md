@@ -7,10 +7,14 @@
 
 ### Changed
 - `InsertBenchmark`、`QueryBenchmark`、`AggregateBenchmark`：将内存占位实现替换为真实 `Tsdb` 引擎调用（PR #35）
+- `README.md` 性能基准章节扩展为 **TSLite vs SQLite vs InfluxDB 2.7 vs TDengine 3.3.4** 四方对比（基于 1M 点数据集，单机容器）
 
 ### Fixed
 - 基准测试 `GlobalCleanup` 中 SQLite 连接池文件锁问题（`SqliteConnection.ClearAllPools()`）（PR #35）
 - `_influxAvailable` 现正确使用 `PingAsync()` 返回值而非无条件设为 `true`（PR #35）
+- `InsertBenchmark.GlobalCleanup` 不再删除 InfluxDB bucket，避免后续 benchmark 进程的 `IterationSetup` 因 bucket 缺失而抛 `NotFoundException`
+- `EnsureInfluxBucketAsync()`：三个 benchmark 在 `GlobalSetup` 中自动创建缺失的 `benchmarks` bucket
+- TDengine SQL：`value` / `host` 列名加反引号绕开保留字解析错误，确保 4-DB 全部产出有效结果
 
 
 ### Added
