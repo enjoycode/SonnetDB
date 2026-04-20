@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\TSLite\TSLite.csproj" />
+    <ProjectReference Include="..\..\src\TSLite.Data\TSLite.Data.csproj" />
   </ItemGroup>
 
 </Project>

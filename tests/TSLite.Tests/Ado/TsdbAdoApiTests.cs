@@ -1,5 +1,5 @@
 using System.Data;
-using TSLite.Ado;
+using TSLite.Data;
 using Xunit;
 
 namespace TSLite.Tests.Ado;

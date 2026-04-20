@@ -137,7 +137,7 @@
 | PR | 主题 | 状态 |
 |----|------|------|
 | #32 | `TSLite.Server`：AOT Minimal API + 多 `Tsdb` 实例注册表 + `POST /v1/db/{db}/sql` + ndjson 流式结果 + Bearer token 三角色认证 + `/healthz` + `/metrics` | ✅ |
-| #33 | 远端 ADO.NET 客户端 `TSLite.Client`：与 PR #28 共享 `TsdbConnectionStringBuilder`，通过 scheme（`tslite://` 本地、`tslite+http://` 远程）切换实现，结果集流式反序列化 | 📋 |
+| #33 | 远端 ADO.NET 客户端 `TSLite.Data`：与 PR #28 共享 `TsdbConnectionStringBuilder`，通过 scheme（`tslite://` 本地、`tslite+http://` 远程）切换实现，结果集流式反序列化 | ✅ |
 | #34 | Vue3 管理后台：数据库列表 / 状态、SQL 控制台、token 管理（读写配置文件） | 📋 |
 
 > WebSocket、订阅、用户级 SQL 权限均不在 M8 范围；如确有需求另立 Milestone。

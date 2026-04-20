@@ -6,6 +6,18 @@
 ## [Unreleased]
 
 ### Added
+- **TSLite.Data**：将 ADO.NET API 从 `TSLite` 核心库剥离为独立的 `src/TSLite.Data/`（PR #33）
+  - 公共表面保持兼容：`TsdbConnection` / `TsdbCommand` / `TsdbDataReader` / `TsdbParameter` / `TsdbParameterCollection` / `TsdbConnectionStringBuilder` 命名空间从 `TSLite.Ado` 迁移到 `TSLite.Data`；`src/TSLite/Ado/` 目录整体删除。
+  - **嵌入式 + 远程双模式**：通过连接字符串 scheme 自动分派，由内部接口 `IConnectionImpl` 统一抽象。
+    - 嵌入式：`Data Source=<path>` 或 `tslite://<path>` → `EmbeddedConnectionImpl` 复用 `SharedTsdbRegistry` + 进程内 `Tsdb`，行为与原 `TSLite.Ado` 完全一致。
+    - 远程：`Data Source=tslite+http://host:port/<db>;Token=<bearer>` 或 `http(s)://...` → `RemoteConnectionImpl` 通过 `HttpClient` + ndjson 流式协议直连 `TSLite.Server` 的 `POST /v1/db/{db}/sql` 端点；服务端错误抛 `TsdbServerException`（含 `Error` / `ServerMessage` / `StatusCode`）。
+    - `TsdbConnectionStringBuilder.ResolveMode()` 支持显式 `Mode=Embedded|Remote` 覆盖；新增 `Token` / `Timeout`（默认 100s）键。
+    - `TsdbConnection.ProviderMode` 暴露当前模式；`UnderlyingTsdb` 仅在嵌入式模式返回非空。
+  - 新增 `TsdbProviderFactory : DbProviderFactory`（单例 `Instance`），可注册到 `DbProviderFactories` 供通用 ADO 工具使用。
+  - `IsAotCompatible=false` 并附详细注释（理由：`DbConnection` / `DbCommand` 基类大量反射；主流 ADO 提供程序如 Npgsql、MySqlConnector 也未承诺 AOT；需要 AOT 的场景请直接使用 `Tsdb` API）。
+  - 远程客户端 ndjson 解析使用 `System.Text.Json` 源生成器（`RemoteJsonContext`）+ `JsonDocument` 解析行级数组，`HttpCompletionOption.ResponseHeadersRead` 实现真流式读取。
+  - 9 个端到端测试（`tests/TSLite.Server.Tests/RemoteAdoEndToEndTests.cs`）覆盖：scheme 分派、嵌入式回退、CREATE→INSERT→SELECT 全链路、参数绑定与单引号转义、`ExecuteScalar`、只读令牌 INSERT 拒绝、SQL 错误、缺失令牌 401、未知数据库 404；既有 31 个 `TsdbAdoApiTests` 全部保持通过。
+
 - **TSLite.Server**：Native AOT 友好的 Minimal API HTTP 服务器（PR #32）
   - 新项目 `src/TSLite.Server/`，基于 `Microsoft.NET.Sdk.Web` + `WebApplication.CreateSlimBuilder` + `EnableRequestDelegateGenerator=true`，全程零反射，可 `dotnet publish -p:PublishAot=true` 产出单文件可执行（win-x64 ~11.5MB），AOT 警告数为 0。
   - 多租户：进程内 `TsdbRegistry`（`ConcurrentDictionary<string, Tsdb>`）+ `DataRoot/<db>/` 子目录隔离，启动时按需加载已存在数据库；`POST /v1/db`（admin）创建、`DELETE /v1/db/{db}`（admin）销毁、`GET /v1/db` 列表；数据库名校验通过 `[GeneratedRegex]` 源生成器。

@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/TSLite.Cli/TSLite.Cli.csproj" />
+    <Project Path="src/TSLite.Data/TSLite.Data.csproj" />
     <Project Path="src/TSLite.Server/TSLite.Server.csproj" />
     <Project Path="src/TSLite/TSLite.csproj" />
   </Folder>
