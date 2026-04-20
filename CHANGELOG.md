@@ -6,6 +6,18 @@
 ## [Unreleased]
 
 ### Added
+- **TSLite Admin Vue3 管理后台完成（PR #34b）**
+  - `web/admin/`：Vite + Vue 3 + TypeScript + Naive UI + Pinia + Vue Router 单页应用，完整涵盖登录页、数据库列表/状态、SQL 控制台、用户/权限/Token 管理七个视图：
+    - `LoginView.vue`：Bearer token 登录，结果存 localStorage，axios 拦截器自动注入 `Authorization: Bearer`。
+    - `AppShell.vue`：响应式侧边栏 + 顶栏（用户名 / 角色标签 / 退出），超级用户额外显示用户 / 权限 / Token 菜单，路由 Guard 拦截未登录与越权访问。
+    - `DashboardView.vue`：数据库数量 / 用户数量 / 授权条目三个统计卡，数据库状态表格（在线状态 + Segment 数），admin 额外展示用户列表。
+    - `DatabasesView.vue`：`GET /v1/db` + `/metrics` 展示数据库列表/Segment 数，admin 可创建（`CREATE DATABASE`）与二次确认 DROP。
+    - `SqlConsoleView.vue`：目标数据库选择器（admin 额外有控制面选项）+ 多行 SQL 编辑器 + 运行/清空按钮 + ndjson 结果表格 + 行数/耗时 meta 行。
+    - `UsersView.vue`（admin only）：`SHOW USERS` 列表、`CREATE USER ... [SUPERUSER]` 表单、改密弹窗（`ALTER USER`）、二次确认 DROP。
+    - `TokensView.vue`（admin only）：`SHOW TOKENS [FOR user]` 列表、`ISSUE TOKEN FOR <user>` 签发并弹窗展示明文、按用户筛选、行级 `REVOKE TOKEN`。
+  - 服务端嵌入资源管线：`AdminUiAssets` / `AdminUiEndpoints` 把 `web/admin/dist/**` 以 `EmbeddedResource` 嵌入 dll，运行时按路径提供文件，SPA 路由 fallback 到 `index.html`，hash 化资产设 `immutable` 缓存，dist 未 build 时返回 503 提示。
+  - 专用控制面 SQL 端点 `POST /v1/sql`（admin only）运行控制面语句（CREATE USER / GRANT / SHOW USERS …），数据面 SQL 走 `POST /v1/db/{db}/sql`；前端通过 `execControlPlaneSql` / `execDataSql` 统一调用。
+  - `tsconfig.json` 添加 `"ignoreDeprecations": "6.0"` 抑制 TypeScript 对 `baseUrl` 的废弃警告（TS5101：`baseUrl` 将在 TypeScript 7.0 停止工作）。
 - **TSLite.Server Admin SPA：数据库状态 + Token 管理（PR #34b-4）**
   - 前端新增 `web/admin/src/views/TokensView.vue`，提供 admin-only 的 Token 管理页：`SHOW TOKENS [FOR user]` 列表、`ISSUE TOKEN FOR <user>` 一次性签发明文 token、`REVOKE TOKEN '<tokenId>'` 行级吊销，并在弹窗中提示“token 明文只展示一次”。
   - `web/admin/src/router/index.ts` / `views/AppShell.vue` 新增 `tokens` 路由与侧边栏菜单；用户 / 权限 / Token 三个控制面页面现在形成完整闭环。
