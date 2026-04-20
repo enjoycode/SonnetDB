@@ -6,6 +6,12 @@
 ## [Unreleased]
 
 ### Added
+- **TSLite.Server Docker 性能测试（PR #36）**
+  - 新增 `src/TSLite.Server/Dockerfile`：基于 `mcr.microsoft.com/dotnet/sdk:10.0` 多阶段构建，最终镜像基于 `mcr.microsoft.com/dotnet/aspnet:10.0`，框架依赖发布（Framework-dependent）。
+  - 更新 `tests/TSLite.Benchmarks/docker/docker-compose.yml`：新增 `tslite-server` 服务，暴露端口 5080，默认 token `bench-admin-token`，含健康检查（wget `/healthz`）和 Docker Volume 持久化。
+  - 新增 `tests/TSLite.Benchmarks/Benchmarks/ServerBenchmark.cs`：包含 `ServerInsertBenchmark`、`ServerQueryBenchmark`、`ServerAggregateBenchmark` 三个基准类，通过 `HttpClient` 直接调用 TSLite.Server HTTP API（Batch SQL insert / SELECT / GROUP BY 聚合），服务不可用时自动 `[SKIP]`。
+  - 更新 `README.md`：新增「TSLite.Server 服务器模式性能基准」章节，记录 Docker 容器测试环境（AMD EPYC 9V74，Ubuntu 24.04，.NET 10.0.5）及实测结果：写入 13.16 s（HTTP Batch 2k/批）、范围查询 210.8 ms、1 分钟桶聚合 138.3 ms，并对比嵌入式模式额外开销。
+
 - **TSLite.Server Admin SPA：数据库状态 + Token 管理（PR #34b-4）**
   - 前端新增 `web/admin/src/views/TokensView.vue`，提供 admin-only 的 Token 管理页：`SHOW TOKENS [FOR user]` 列表、`ISSUE TOKEN FOR <user>` 一次性签发明文 token、`REVOKE TOKEN '<tokenId>'` 行级吊销，并在弹窗中提示“token 明文只展示一次”。
   - `web/admin/src/router/index.ts` / `views/AppShell.vue` 新增 `tokens` 路由与侧边栏菜单；用户 / 权限 / Token 三个控制面页面现在形成完整闭环。

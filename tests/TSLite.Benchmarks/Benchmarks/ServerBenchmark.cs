@@ -71,7 +71,7 @@ public class ServerInsertBenchmark
 
             // 创建 Measurement（幂等）
             await PostSqlAsync(DbName,
-                "CREATE MEASUREMENT IF NOT EXISTS sensor_data (TAG host, FIELD value DOUBLE)")
+                "CREATE MEASUREMENT sensor_data (host TAG, value FIELD FLOAT)")
                 .ConfigureAwait(false);
 
             _serverAvailable = true;
@@ -94,7 +94,7 @@ public class ServerInsertBenchmark
         _http!.DeleteAsync($"/v1/db/{DbName}").GetAwaiter().GetResult();
         PostJsonAsync("/v1/db", $"{{\"name\":\"{DbName}\"}}").GetAwaiter().GetResult();
         PostSqlAsync(DbName,
-            "CREATE MEASUREMENT IF NOT EXISTS sensor_data (TAG host, FIELD value DOUBLE)")
+            "CREATE MEASUREMENT sensor_data (host TAG, value FIELD FLOAT)")
             .GetAwaiter().GetResult();
     }
 
@@ -227,7 +227,7 @@ public class ServerQueryBenchmark
 
             await PostJsonAsync("/v1/db", $"{{\"name\":\"{DbName}\"}}").ConfigureAwait(false);
             await PostSqlAsync(DbName,
-                "CREATE MEASUREMENT IF NOT EXISTS sensor_data (TAG host, FIELD value DOUBLE)")
+                "CREATE MEASUREMENT sensor_data (host TAG, value FIELD FLOAT)")
                 .ConfigureAwait(false);
 
             // 写入 100 万条数据
@@ -378,7 +378,7 @@ public class ServerAggregateBenchmark
 
             await PostJsonAsync("/v1/db", $"{{\"name\":\"{DbName}\"}}").ConfigureAwait(false);
             await PostSqlAsync(DbName,
-                "CREATE MEASUREMENT IF NOT EXISTS sensor_data (TAG host, FIELD value DOUBLE)")
+                "CREATE MEASUREMENT sensor_data (host TAG, value FIELD FLOAT)")
                 .ConfigureAwait(false);
 
             for (int offset = 0; offset < points.Length; offset += BatchSize)
@@ -427,9 +427,9 @@ public class ServerAggregateBenchmark
 
         var startMs = DataGenerator.StartTimestampMs.ToString(CultureInfo.InvariantCulture);
         var endMs = DataGenerator.QueryToMs(DataPointCount).ToString(CultureInfo.InvariantCulture);
-        var sql = $"SELECT mean(value) FROM sensor_data " +
+        var sql = $"SELECT avg(value) FROM sensor_data " +
                   $"WHERE time >= {startMs} AND time < {endMs} " +
-                  $"GROUP BY time(60000)";
+                  $"GROUP BY time(1m)";
 
         var req = new ServerSqlRequest { Sql = sql };
         var json = JsonSerializer.Serialize(req);

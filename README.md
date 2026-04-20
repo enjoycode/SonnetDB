@@ -271,11 +271,81 @@ TSLite/
 > InfluxDB / TDengine 对比为单机容器 + 客户端跨进程 HTTP 调用；TSLite 是嵌入式 in-process 引擎。
 > 这是**嵌入式 vs 服务化**的架构差异，结果用于水平参考，不能直接映射到独立部署的生产集群。
 
-### 启用 InfluxDB / TDengine 对照（可选）
+---
+
+## TSLite.Server 服务器模式性能基准
+
+TSLite 同时提供 **服务器模式**（`TSLite.Server`，AOT-friendly Minimal API），客户端通过 HTTP `POST /v1/db/{db}/sql` 提交 SQL，结果以 **ndjson** 流式输出。
+
+本节记录在 **Docker 容器环境**中运行 TSLite.Server，并由基准进程通过 `localhost:5080` HTTP 调用的实测结果，以量化 HTTP + JSON 协议层带来的额外开销。
+
+### 测试环境（服务器模式）
+
+| 项目 | 配置 |
+|------|------|
+| CPU | AMD EPYC 9V74 2.87GHz（2 逻辑核 / 1 物理核） |
+| 操作系统 | Linux Ubuntu 24.04.4 LTS (Noble Numbat) |
+| .NET SDK | 10.0.201 |
+| 运行时 | .NET 10.0.5, X64 RyuJIT x86-64-v3 |
+| BenchmarkDotNet | v0.15.8 (含 MemoryDiagnoser) |
+| TSLite.Server | `tslite-server:bench` 镜像（源码构建，Release 模式，Framework-dependent） |
+| 容器引擎 | Docker 28.0.4 |
+| 网络 | 容器 → 宿主机 `localhost:5080`（bridge 网络，loopback） |
+
+### 工作负载（服务器模式）
+
+- 数据规模：**1,000,000 个数据点**
+- Measurement：`sensor_data`，Tag：`host=server001`，Field：`value FLOAT`
+- 时间戳：`2024-01-01T00:00:00Z` 起，每点 +1 s
+- 写入：每次迭代重建空数据库，HTTP Batch API（每批 2,000 条 INSERT SQL）
+- 查询：查询最后 10% 时间段（约 100,000 条），流式消费 ndjson 响应
+- 聚合：全量 1M 点按 1 分钟桶计算 avg，结果约含 16,667 个桶
+
+### 服务器模式实测结果
+
+| 基准 | Mean | StdDev | 内存分配（客户端） |
+|------|-----:|-------:|------------------:|
+| **TSLite Server 写入 100 万条**（HTTP Batch 2k/批） | 13,160 ms | 294 ms | 654.19 MB |
+| **TSLite Server 范围查询**（约 10 万条，ndjson 流） | 210.8 ms | 36.8 ms | 16.04 MB |
+| **TSLite Server 1 分钟桶聚合**（avg，全量 1M 点） | 138.3 ms | 6.5 ms | 2.46 MB |
+
+### 嵌入式 vs. 服务器模式对比
+
+| 操作 | 嵌入式模式（in-process） | 服务器模式（HTTP） | 额外开销 |
+|------|------------------------:|------------------:|---------:|
+| 写入 100 万条 | 841.6 ms | 13,160 ms | ~15.6× |
+| 范围查询（10 万条） | 10.43 ms | 210.8 ms | ~20× |
+| 1 分钟桶聚合 | 58.72 ms | 138.3 ms | ~2.4× |
+
+> **开销来源分析**：
+> - **写入**：主要来自每批 2,000 条 INSERT SQL 的 HTTP 往返（500 次请求）及服务端 SQL 解析开销；改用更大的批次（如 10,000 条/批）可显著降低延迟。
+> - **范围查询**：ndjson 序列化 + 逐行网络传输 + 客户端流式解析引入约 200ms 延迟；查询结果越小开销越接近单次 HTTP 往返。
+> - **聚合**：服务端引擎聚合计算后返回约 16,667 行结果，协议开销相对较小，额外开销最低。
+
+### 启动 TSLite.Server Docker 服务
 
 ```bash
 cd tests/TSLite.Benchmarks/docker
-docker compose up -d        # 启动 influxdb:2.7 + tdengine:3.3.x（首次拉取 ~700MB）
+docker compose up -d tslite-server    # 构建并启动 tslite-server（首次构建约 30s）
+
+# 健康检查
+curl http://localhost:5080/healthz
+# → {"status":"ok","databases":0,"uptimeSeconds":...}
+```
+
+容器默认配置：
+
+| 参数 | 值 |
+|------|----|
+| URL | `http://localhost:5080` |
+| Admin Token | `bench-admin-token` |
+| 数据目录 | Docker Volume `tslite-server-data` |
+
+### 启用所有外部服务对照
+
+```bash
+cd tests/TSLite.Benchmarks/docker
+docker compose up -d        # 启动 tslite-server + influxdb:2.7 + tdengine:3.3.x
 cd ../../..
 dotnet run -c Release --project tests/TSLite.Benchmarks
 ```
@@ -287,6 +357,9 @@ dotnet run -c Release --project tests/TSLite.Benchmarks
 ```bash
 # 全部基准（含 Compaction）
 dotnet run -c Release --project tests/TSLite.Benchmarks
+
+# 仅服务器模式基准
+dotnet run -c Release --project tests/TSLite.Benchmarks -- --filter "*Server*"
 
 # 仅嵌入式对比（TSLite + SQLite）
 dotnet run -c Release --project tests/TSLite.Benchmarks -- \
