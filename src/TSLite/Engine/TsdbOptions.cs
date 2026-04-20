@@ -1,4 +1,5 @@
 using TSLite.Engine.Compaction;
+using TSLite.Engine.Retention;
 using TSLite.Memory;
 using TSLite.Storage.Segments;
 using TSLite.Wal;
@@ -38,6 +39,9 @@ public sealed class TsdbOptions
 
     /// <summary>WAL 滚动策略（默认启用，64MB / 百万条双阈值）。</summary>
     public WalRollingPolicy WalRolling { get; init; } = WalRollingPolicy.Default;
+
+    /// <summary>Retention TTL 策略（默认禁用，保持向后兼容）。</summary>
+    public RetentionPolicy Retention { get; init; } = RetentionPolicy.Default;
 
     /// <summary>默认配置实例。</summary>
     public static TsdbOptions Default { get; } = new();

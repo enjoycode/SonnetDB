@@ -140,6 +140,49 @@ public sealed class SegmentManager : IDisposable
     }
 
     /// <summary>
+    /// 原子地移除多个段（仅移除，不添加新段），重建并发布索引快照。
+    /// <para>
+    /// 与 <see cref="SwapSegments"/> 不同：<c>DropSegments</c> 仅移除，不添加。
+    /// 适用于 Retention TTL 直接淘汰整段过期数据。
+    /// </para>
+    /// </summary>
+    /// <param name="ids">要移除的段 ID 列表。</param>
+    /// <returns>被成功移除的 <see cref="SegmentReader"/> 列表（仅供诊断；调用方不应再 Dispose）。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="ids"/> 为 null 时抛出。</exception>
+    /// <exception cref="ObjectDisposedException">实例已关闭时抛出。</exception>
+    public IReadOnlyList<SegmentReader> DropSegments(IReadOnlyList<long> ids)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+
+        List<SegmentReader> toDispose;
+
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            toDispose = new List<SegmentReader>(ids.Count);
+            foreach (long segId in ids)
+            {
+                if (_readerById.TryGetValue(segId, out var old))
+                {
+                    _readerById.Remove(segId);
+                    toDispose.Add(old);
+                }
+            }
+
+            RebuildSnapshotsLocked();
+        }
+
+        // 锁外 Dispose 旧 reader
+        foreach (var old in toDispose)
+        {
+            try { old.Dispose(); } catch { }
+        }
+
+        return toDispose.AsReadOnly();
+    }
+
+    /// <summary>
     /// 移除指定段（用于未来 Compaction），关闭对应 <see cref="SegmentReader"/> 后重建索引。
     /// </summary>
     /// <param name="segmentId">要移除的段唯一标识符。</param>

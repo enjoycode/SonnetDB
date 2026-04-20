@@ -1,5 +1,6 @@
 using TSLite.Catalog;
 using TSLite.Engine.Compaction;
+using TSLite.Engine.Retention;
 using TSLite.Memory;
 using TSLite.Model;
 using TSLite.Query;
@@ -29,6 +30,7 @@ public sealed class Tsdb : IDisposable
     private bool _disposed;
     private BackgroundFlushWorker? _flushWorker;
     private CompactionWorker? _compactionWorker;
+    private RetentionWorker? _retentionWorker;
     private long _checkpointLsn;
 
     /// <summary>数据库根目录路径。</summary>
@@ -48,6 +50,11 @@ public sealed class Tsdb : IDisposable
 
     /// <summary>进程内墓碑集合，支持查询过滤与 Compaction 消化。</summary>
     public TombstoneTable Tombstones { get; private set; } = new TombstoneTable();
+
+    /// <summary>
+    /// 后台 Retention 工作线程；仅当 <see cref="TsdbOptions.Retention"/> 启用时非 null。
+    /// </summary>
+    public RetentionWorker? Retention { get; private set; }
 
     /// <summary>下一个将分配的 SegmentId（线程安全读取）。</summary>
     public long NextSegmentId
@@ -170,6 +177,14 @@ public sealed class Tsdb : IDisposable
         {
             tsdb._compactionWorker = new CompactionWorker(tsdb, options.Compaction);
             tsdb._compactionWorker.Start();
+        }
+
+        // 启动后台 Retention 线程
+        if (options.Retention.Enabled)
+        {
+            tsdb._retentionWorker = new RetentionWorker(tsdb, options.Retention);
+            tsdb.Retention = tsdb._retentionWorker;
+            tsdb._retentionWorker.Start();
         }
 
         return tsdb;
@@ -324,7 +339,11 @@ public sealed class Tsdb : IDisposable
     /// </summary>
     public void Dispose()
     {
-        // 先关闭 Compaction 后台线程（在锁外，防止与内部操作死锁）
+        // 先关闭 Retention 后台线程（在锁外，防止与内部操作死锁）
+        _retentionWorker?.Dispose();
+        _retentionWorker = null;
+
+        // 再关闭 Compaction 后台线程（在锁外，防止与内部操作死锁）
         _compactionWorker?.Dispose();
         _compactionWorker = null;
 
