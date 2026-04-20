@@ -203,4 +203,86 @@ public sealed class RetentionWorkerTests : IDisposable
 
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8), $"Dispose 耗时过长：{sw.Elapsed}");
     }
+
+    // ── 并发读写场景：写入 + RunOnce + 查询 → 无异常 ─────────────────────────
+
+    [Fact]
+    public async Task ConcurrentWriteAndRetention_NoException()
+    {
+        long nowValue = 1000L;
+        var policy = new RetentionPolicy
+        {
+            Enabled = true,
+            TtlInTimestampUnits = 1000,
+            NowFn = () => Volatile.Read(ref nowValue),
+            PollInterval = TimeSpan.FromHours(24), // 不自动触发，手动 RunOnce
+        };
+
+        using var db = Tsdb.Open(MakeOptions(policy, maxPoints: 100_000));
+
+        // 预先写入足量数据并落盘
+        for (int i = 0; i < 20; i++)
+            db.Write(MakePoint(100L + i * 10, i));
+        db.FlushNow();
+
+        var writeExceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+        var readExceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+        var retentionExceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+
+        using var cts = new CancellationTokenSource();
+
+        // 后台持续写入新鲜数据
+        var writeTask = Task.Run(() =>
+        {
+            int seq = 0;
+            while (!cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    db.Write(MakePoint(9000L + seq++, seq));
+                }
+                catch (ObjectDisposedException) { break; }
+                catch (Exception ex) { writeExceptions.Add(ex); }
+            }
+        });
+
+        // 后台持续读取（通过 SegmentManager.Readers 快照模拟查询侧压力）
+        var readTask = Task.Run(() =>
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    _ = db.Segments.Readers.Count;
+                    _ = db.Tombstones.Count;
+                }
+                catch (ObjectDisposedException) { break; }
+                catch (Exception ex) { readExceptions.Add(ex); }
+            }
+        });
+
+        // 推进时钟，多次执行 Retention
+        await Task.Delay(50);
+        Volatile.Write(ref nowValue, 10000L); // cutoff=9000，使预写数据（ts<=400）全部过期
+
+        for (int round = 0; round < 5; round++)
+        {
+            try
+            {
+                db.Retention!.RunOnce();
+            }
+            catch (Exception ex)
+            {
+                retentionExceptions.Add(ex);
+            }
+            await Task.Delay(10);
+        }
+
+        await cts.CancelAsync();
+        await Task.WhenAll(writeTask, readTask);
+
+        Assert.Empty(writeExceptions);
+        Assert.Empty(readExceptions);
+        Assert.Empty(retentionExceptions);
+    }
 }
