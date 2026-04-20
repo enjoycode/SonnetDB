@@ -22,6 +22,8 @@ public sealed class SeriesCatalog
 
     private readonly ConcurrentDictionary<ulong, SeriesEntry> _byId = new();
 
+    private readonly TagInvertedIndex _tagIndex = new();
+
     /// <summary>目录中的序列数量。</summary>
     public int Count => _byCanonical.Count;
 
@@ -69,7 +71,10 @@ public sealed class SeriesCatalog
         => _byCanonical.TryGetValue(key.Canonical, out var entry) ? entry : null;
 
     /// <summary>
-    /// 按 measurement 和部分 tag 过滤匹配的 series（第一版线性扫描）。
+    /// 按 measurement 和部分 tag 过滤匹配的 series。
+    /// 背后由 <see cref="TagInvertedIndex"/> 在 <c>(measurement, tagKey, tagValue)</c> 三级映射上
+    /// 做候选交集，避免全表扫描；带 tag 过滤时复杂度 = 最小候选集大小 × 过滤条目数。
+    /// 返回前依然在上层做防御性 tag 重校验，以容忍倒排索引与 _byCanonical 瞬间不一致。
     /// </summary>
     /// <param name="measurement">要筛选的 Measurement 名称。</param>
     /// <param name="tagFilter">Tag 子集过滤条件；为 null 或空时仅按 measurement 筛选。</param>
@@ -78,35 +83,36 @@ public sealed class SeriesCatalog
         string measurement,
         IReadOnlyDictionary<string, string>? tagFilter)
     {
-        var snapshot = Snapshot();
-        var results = new List<SeriesEntry>();
+        ArgumentNullException.ThrowIfNull(measurement);
 
-        foreach (var entry in snapshot)
+        var candidateIds = _tagIndex.Find(measurement, tagFilter);
+        if (candidateIds.Count == 0)
+            return [];
+
+        var results = new List<SeriesEntry>(candidateIds.Count);
+        foreach (var id in candidateIds)
         {
+            if (!_byId.TryGetValue(id, out var entry))
+                continue;
+            // 防御性二次校验：measurement 与 tag 过滤全部命中才返回。
             if (!string.Equals(entry.Measurement, measurement, StringComparison.Ordinal))
                 continue;
-
-            if (tagFilter != null && tagFilter.Count > 0)
-            {
-                bool allMatch = true;
-                foreach (var (k, v) in tagFilter)
-                {
-                    if (!entry.Tags.TryGetValue(k, out var entryVal) ||
-                        !string.Equals(entryVal, v, StringComparison.Ordinal))
-                    {
-                        allMatch = false;
-                        break;
-                    }
-                }
-
-                if (!allMatch)
-                    continue;
-            }
-
+            if (tagFilter != null && tagFilter.Count > 0 && !MatchesTags(entry, tagFilter))
+                continue;
             results.Add(entry);
         }
-
         return results;
+    }
+
+    private static bool MatchesTags(SeriesEntry entry, IReadOnlyDictionary<string, string> tagFilter)
+    {
+        foreach (var (k, v) in tagFilter)
+        {
+            if (!entry.Tags.TryGetValue(k, out var entryVal) ||
+                !string.Equals(entryVal, v, StringComparison.Ordinal))
+                return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -123,6 +129,7 @@ public sealed class SeriesCatalog
     {
         _byCanonical.Clear();
         _byId.Clear();
+        _tagIndex.Clear();
     }
 
     // ── 内部辅助 ──────────────────────────────────────────────────────────────
@@ -150,7 +157,10 @@ public sealed class SeriesCatalog
             throw new InvalidOperationException(
                 $"SeriesId hash collision detected for series: {key.Canonical}");
         }
-
+        // 仅在当前线程胜出（candidate 被存入）时才追加到倒排索引，避免重复填充；
+        // TagInvertedIndex.Add 本身也是幂等的（块内动作为 set 幂等写入）。
+        if (ReferenceEquals(entry, candidate))
+            _tagIndex.Add(entry);
         return entry;
     }
 
@@ -163,5 +173,6 @@ public sealed class SeriesCatalog
     {
         _byCanonical.TryAdd(entry.Key.Canonical, entry);
         _byId.TryAdd(entry.Id, entry);
+        _tagIndex.Add(entry);
     }
 }

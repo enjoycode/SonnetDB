@@ -99,7 +99,7 @@
 | #24 | `INSERT INTO ... VALUES (...)`（含批量、TAG/FIELD 类型校验、时间戳缺省） | ✅ |
 | #25 | `SELECT ... WHERE ... GROUP BY time(...)`（含 tag 过滤、聚合下推） | ✅ |
 | #26 | `DELETE FROM ... WHERE time >= a AND time <= b`（落到 PR #20 的 Tombstone） | ✅ |
-| #27 | Tag 倒排索引：`(tagKey, tagValue) → [SeriesId]`（加速 WHERE tag=...） | 📋 |
+| #27 | Tag 倒排索引：`(tagKey, tagValue) → [SeriesId]`（加速 WHERE tag=...） | ✅ |
 | #28 | 按照标准的ADO.NET  API, 实现`TsdbConnection / TsdbCommand / TsdbDataReader`等等。 | 📋 |
 
 ---
@@ -145,7 +145,7 @@
 | 3 | 写入路径 | #10 ~ #13 | ✅ |
 | 4 | 查询路径 | #14 ~ #16 | ✅ |
 | 5 | 稳定性与性能（写入侧） | #17 ~ #21 | 🚧（#17 ~ #20 完成，#21 待派单） |
-| 6 | SQL 前端 + Tag 倒排索引 | #22 ~ #28 | 🚧（#22 ~ #26 完成） |
+| 6 | SQL 前端 + Tag 倒排索引 | #22 ~ #28 | 🚧（#22 ~ #27 完成） |
 | 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | 📋 |
 | 8 | 单文件容器（可选） | #32 ~ #33 | 📋 |
 | 9 | 性能基准与发布 | #34 ~ #36 | 📋 |

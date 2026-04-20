@@ -6,6 +6,12 @@
 ## [Unreleased]
 
 ### Added
+- 新增 Tag 倒排索引以加速 `SELECT/DELETE` 的 `WHERE tag = '...'` 过滤（PR #27）
+  - `TSLite.Catalog.TagInvertedIndex`（internal）：维护 `measurement → SeriesId 集合` 与 `measurement → tagKey → tagValue → SeriesId 集合` 两级映射；全部使用 `ConcurrentDictionary` 实现单写多读线程安全；集合本身用 `ConcurrentDictionary<ulong, byte>` 模拟并发集合
+  - `TSLite.Catalog.SeriesCatalog.Find(measurement, tagFilter)`：从全表线性扫描改为基于倒排索引的候选集交集（基准选最小集合，规模上界为 `min(|S_i|)`）；返回前仍执行一次防御性 measurement+tag 重校验以容忍倒排索引与 `_byCanonical` 的瞬间不一致
+  - 索引在 `GetOrAddInternal` 中仅由胜出的 `candidate` 线程写入（`ReferenceEquals(entry, candidate)`），并在 `LoadEntry`（`CatalogFileCodec` 重放路径）与 `Clear` 中维护——索引本身不进入持久化格式，启动时由现有持久化条目重建，因此**未变更磁盘 catalog 文件格式**
+  - 单元测试：11 个新增测试（`TagInvertedIndexTests`）覆盖无 tag 过滤 / 单 tag / 多 tag 交集 / 未命中值 / 缺失 tagKey / 未知 measurement / measurement 隔离 / `Clear` 后清空 / 重复 `GetOrAdd` 索引不膨胀 / `LoadEntry` 重建 / 并发写读
+
 - 新增 SQL `DELETE FROM ... WHERE ...` 执行支持（PR #26）
   - `TSLite.Sql.Execution.DeleteExecutionResult`（record，含 `Measurement` / `SeriesAffected` / `TombstonesAdded`）
   - `TSLite.Sql.Execution.DeleteExecutor`（internal）：复用 `WhereClauseDecomposer` 解析 tag 等值过滤 + 时间窗，对所有命中 tag 过滤的 series × schema 中所有 Field 列调用 `Tsdb.Delete(seriesId, fieldName, from, to)`，落到 PR #20 的 Tombstone 体系（WAL 追加 + 内存墓碑表 + 查询时过滤）
