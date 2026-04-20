@@ -34,7 +34,23 @@ public sealed class ControlPlaneTests : IDisposable
     public void Dispose()
     {
         _registry.Dispose();
-        try { Directory.Delete(_dir, recursive: true); } catch { /* best-effort */ }
+        TryDeleteDirectory(_dir);
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException ex)
+        {
+            Console.Error.WriteLine($"清理临时目录失败（IO）：{path} / {ex.Message}");
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Console.Error.WriteLine($"清理临时目录失败（权限）：{path} / {ex.Message}");
+        }
     }
 
     [Fact]
@@ -163,6 +179,29 @@ public sealed class ControlPlaneTests : IDisposable
         var dbs = _controlPlane.ListDatabases();
         Assert.Contains("alpha", dbs);
         Assert.Contains("beta", dbs);
+    }
+
+    [Fact]
+    public void TokenStatements_ViaSql_IssueListAndRevoke()
+    {
+        using var bootstrap = Tsdb.Open(new TSLite.Engine.TsdbOptions { RootDirectory = Path.Combine(_dir, "_bootstrap") });
+        SqlExecutor.Execute(bootstrap, "CREATE USER alice WITH PASSWORD 'p'", _controlPlane);
+
+        var issued = Assert.IsType<SelectExecutionResult>(
+            SqlExecutor.ExecuteControlPlaneStatement(SqlParser.Parse("ISSUE TOKEN FOR alice"), _controlPlane));
+        Assert.Single(issued.Rows);
+        var tokenId = Assert.IsType<string>(issued.Rows[0][0]);
+        var token = Assert.IsType<string>(issued.Rows[0][1]);
+        Assert.True(_users.TryAuthenticate(token, out var user));
+        Assert.Equal("alice", user.UserName);
+
+        var listed = Assert.IsType<SelectExecutionResult>(
+            SqlExecutor.ExecuteControlPlaneStatement(SqlParser.Parse("SHOW TOKENS FOR alice"), _controlPlane));
+        Assert.Single(listed.Rows);
+        Assert.Equal(tokenId, listed.Rows[0][0]);
+
+        SqlExecutor.ExecuteControlPlaneStatement(SqlParser.Parse($"REVOKE TOKEN '{tokenId}'"), _controlPlane);
+        Assert.False(_users.TryAuthenticate(token, out _));
     }
 
     [Fact]

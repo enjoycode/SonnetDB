@@ -6,6 +6,10 @@
 ## [Unreleased]
 
 ### Added
+- **TSLite.Server Admin SPA：数据库状态 + Token 管理（PR #34b-4）**
+  - 前端新增 `web/admin/src/views/TokensView.vue`，提供 admin-only 的 Token 管理页：`SHOW TOKENS [FOR user]` 列表、`ISSUE TOKEN FOR <user>` 一次性签发明文 token、`REVOKE TOKEN '<tokenId>'` 行级吊销，并在弹窗中提示“token 明文只展示一次”。
+  - `web/admin/src/router/index.ts` / `views/AppShell.vue` 新增 `tokens` 路由与侧边栏菜单；用户 / 权限 / Token 三个控制面页面现在形成完整闭环。
+  - `UserStore` / `ControlPlane` / `SqlExecutor` 的 token 查询与吊销链路补齐单元/集成/E2E 覆盖：新增 `ListTokensDetailed` + `RevokeTokenById` 验证、控制面 SQL 的 `ISSUE/SHOW/REVOKE TOKEN` round-trip，以及 token 吊销后旧 Bearer 立即失效的端到端断言。
 - **TSLite.Server 控制面：用户 / 权限 / 数据库 DDL（PR #34a）**
   - 新增持久化用户与权限存储（仅服务端）：`src/TSLite.Server/Auth/UserStore.cs` + `GrantsStore.cs`，文件落 `<DataRoot>/.system/{users.json,grants.json}`，原子写入（temp + `Flush(true)` + `File.Move(overwrite=true)`）。
   - 密码：PBKDF2-HMAC-SHA256，100 000 轮、16 字节随机 salt、32 字节 hash；校验用 `CryptographicOperations.FixedTimeEquals` 防侧信道。
@@ -54,6 +58,9 @@
   - 测试：parser 新增 2 例（`Parse_CreateUser_WithSuperuserKeyword_SetsFlag` / `Parse_CreateUser_SuperuserKeyword_CaseInsensitive`）+ 服务端 E2E 新增 4 例（`ControlPlaneEndpoint_AsAdmin_RunsCreateUserAndShowUsers` / `ControlPlaneEndpoint_CreateSuperuser_FlagPersisted` / `ControlPlaneEndpoint_AsRegularUser_Forbidden` / `ControlPlaneEndpoint_RejectsDataPlaneStatement`）。当前测试总数：1176 + 65 = **1241 全绿**。
 
 ### Fixed
+- **Admin SPA 普通用户数据库列表修正（PR #34b-4）**
+  - `DashboardView` / `DatabasesView` / `SqlConsoleView` 不再错误地把 `SHOW DATABASES` 走到 admin-only 的 `POST /v1/sql`；数据库列表改走 `GET /v1/db`，数据库状态通过 `GET /metrics` 读取 `tslite_segments{db="..."}`，因此普通已登录用户也能查看数据库概览与段数量。
+  - `SqlConsoleView` 的“控制面”目标选择现在仅对 admin 显示；普通用户默认落到首个可访问数据库，避免一进控制台就遇到 `/v1/sql 仅 admin 可调用` 的无意义报错。
 - **AOT RequestDelegateGenerator workaround**：`WebApplication.CreateSlimBuilder` + `EnableRequestDelegateGenerator=true` 下，对于
   `app.MapPost(path, async (HttpContext ctx) => Results.Json(value, typeInfo, statusCode: 4xx))` 形态的 lambda，生成的 interceptor 会
   错误地把响应吞成 `200 + 空 body`（lambda 实际执行，但 statusCode 与 body 全部丢失）。`/v1/auth/login` 改为

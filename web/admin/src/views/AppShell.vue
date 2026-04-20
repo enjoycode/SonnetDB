@@ -48,6 +48,7 @@ const baseMenu: MenuOption[] = [
 const adminMenu: MenuOption[] = [
   { label: '用户', key: 'users' },
   { label: '权限', key: 'grants' },
+  { label: 'Token', key: 'tokens' },
 ];
 
 const menuOptions = computed<MenuOption[]>(() => auth.isSuperuser ? [...baseMenu, ...adminMenu] : baseMenu);
@@ -58,6 +59,7 @@ const titleByKey: Record<string, string> = {
   databases: '数据库',
   users: '用户',
   grants: '权限',
+  tokens: 'Token',
 };
 
 const activeKey = computed(() => (route.name as string | undefined) ?? 'dashboard');

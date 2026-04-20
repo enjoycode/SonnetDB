@@ -30,6 +30,7 @@ npm run build        # 输出到 web/admin/dist/
 
 ## 设计要点
 
-- 所有管理动作（创建用户 / GRANT / REVOKE / 数据库 CRUD / SHOW USERS …）**全部走 SQL 端点** `POST /v1/db/{db}/sql`，前端不依赖任何额外 REST 端点。
+- 控制面管理动作通过 SQL 端点完成：admin 走 `POST /v1/sql` 执行 `CREATE USER` / `GRANT` / `ISSUE TOKEN` 等；数据面 SQL 走 `POST /v1/db/{db}/sql`。
+- 数据库列表与状态展示复用 `GET /v1/db` 和 `GET /metrics`，这样普通已登录用户也能查看数据库概览，而不必依赖 admin-only 控制面端点。
 - 认证：`POST /v1/auth/login` 拿 token → 存 localStorage → axios 拦截器自动加 `Bearer`。
 - 路由前缀：`/admin/`（与服务端嵌入挂载点一致），SPA fallback 到 `index.html`。

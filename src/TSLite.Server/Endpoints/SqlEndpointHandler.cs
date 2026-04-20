@@ -17,7 +17,7 @@ namespace TSLite.Server.Endpoints;
 /// </summary>
 internal static class SqlEndpointHandler
 {
-    private static readonly byte[] s_newline = "\n"u8.ToArray();
+    private static readonly byte[] _newline = "\n"u8.ToArray();
 
     /// <summary>
     /// 处理单条 SQL 请求。
@@ -221,7 +221,7 @@ internal static class SqlEndpointHandler
         {
             JsonSerializer.Serialize(metaWriter, meta, ServerJsonContext.Default.ResultMeta);
         }
-        await body.WriteAsync(s_newline, context.RequestAborted).ConfigureAwait(false);
+        await body.WriteAsync(_newline, context.RequestAborted).ConfigureAwait(false);
 
         // 2) 行数据：每行一条 ndjson
         long count = 0;
@@ -231,7 +231,7 @@ internal static class SqlEndpointHandler
             {
                 NdjsonRowWriter.WriteRow(rowWriter, result.Rows[r]);
             }
-            await body.WriteAsync(s_newline, context.RequestAborted).ConfigureAwait(false);
+            await body.WriteAsync(_newline, context.RequestAborted).ConfigureAwait(false);
             count++;
         }
 
@@ -246,7 +246,7 @@ internal static class SqlEndpointHandler
         {
             JsonSerializer.Serialize(w, end, ServerJsonContext.Default.ResultEnd);
         }
-        await body.WriteAsync(s_newline, context.RequestAborted).ConfigureAwait(false);
+        await body.WriteAsync(_newline, context.RequestAborted).ConfigureAwait(false);
         await body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
     }
 
@@ -274,7 +274,7 @@ internal static class SqlEndpointHandler
         {
             JsonSerializer.Serialize(w, new ErrorResponse(code, message), ServerJsonContext.Default.ErrorResponse);
         }
-        await body.WriteAsync(s_newline, context.RequestAborted).ConfigureAwait(false);
+        await body.WriteAsync(_newline, context.RequestAborted).ConfigureAwait(false);
         await body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
     }
 

@@ -49,11 +49,12 @@ import { useAuthStore } from '@/stores/auth';
 import {
   execControlPlaneSql, execDataSql, rowsToObjects, type SqlResultSet,
 } from '@/api/sql';
+import { listDatabases } from '@/api/server';
 
 const auth = useAuthStore();
 
 const CONTROL_PLANE_KEY = '__control_plane__';
-const targetDb = ref<string>(CONTROL_PLANE_KEY);
+const targetDb = ref<string>('');
 const databases = ref<string[]>([]);
 const sql = ref<string>('SHOW DATABASES');
 const running = ref(false);
@@ -63,14 +64,38 @@ const lastMeta = ref('');
 const resultColumns = ref<DataTableColumns<Record<string, unknown>>>([]);
 const resultRows = ref<Record<string, unknown>[]>([]);
 
-const dbOptions = computed<SelectOption[]>(() => [
-  { label: '控制面 (CREATE USER / GRANT / SHOW USERS …)', value: CONTROL_PLANE_KEY },
-  ...databases.value.map((d) => ({ label: d, value: d })),
-]);
+const dbOptions = computed<SelectOption[]>(() => {
+  const options: SelectOption[] = auth.isSuperuser
+    ? [{ label: '控制面 (CREATE USER / GRANT / SHOW USERS …)', value: CONTROL_PLANE_KEY }]
+    : [];
+  return [
+    ...options,
+    ...databases.value.map((d) => ({ label: d, value: d })),
+  ];
+});
 
 async function reloadDbs(): Promise<void> {
-  const rs = await execControlPlaneSql(auth.api, 'SHOW DATABASES');
-  if (!rs.error) databases.value = rs.rows.map((r) => String(r[0]));
+  const result = await listDatabases(auth.api);
+  if (result.error) {
+    errorMsg.value = result.error.message;
+    return;
+  }
+
+  databases.value = result.databases;
+  normalizeTarget();
+}
+
+function normalizeTarget(): void {
+  if (auth.isSuperuser) {
+    if (!targetDb.value) {
+      targetDb.value = CONTROL_PLANE_KEY;
+    }
+    return;
+  }
+
+  if (targetDb.value === CONTROL_PLANE_KEY || !databases.value.includes(targetDb.value)) {
+    targetDb.value = databases.value[0] ?? '';
+  }
 }
 
 async function run(): Promise<void> {
@@ -79,6 +104,10 @@ async function run(): Promise<void> {
   resultRows.value = [];
   lastMeta.value = '';
   if (!sql.value.trim()) return;
+  if (!targetDb.value) {
+    errorMsg.value = '当前没有可执行的数据面数据库。';
+    return;
+  }
   running.value = true;
   try {
     const rs: SqlResultSet = targetDb.value === CONTROL_PLANE_KEY
@@ -116,7 +145,10 @@ function clear(): void {
   ranOnce.value = false;
 }
 
-onMounted(reloadDbs);
+onMounted(async () => {
+  normalizeTarget();
+  await reloadDbs();
+});
 </script>
 
 <style scoped>

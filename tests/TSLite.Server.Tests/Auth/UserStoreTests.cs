@@ -18,7 +18,23 @@ public sealed class UserStoreTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_dir, recursive: true); } catch { /* best-effort */ }
+        TryDeleteDirectory(_dir);
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException ex)
+        {
+            Console.Error.WriteLine($"清理临时目录失败（IO）：{path} / {ex.Message}");
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Console.Error.WriteLine($"清理临时目录失败（权限）：{path} / {ex.Message}");
+        }
     }
 
     [Fact]
@@ -127,6 +143,30 @@ public sealed class UserStoreTests : IDisposable
         Assert.False(store.Exists("alice"));
         Assert.False(store.TryAuthenticate(token, out _));
         Assert.False(store.DeleteUser("alice"));
+    }
+
+    [Fact]
+    public void UserStore_ListTokensDetailed_AndRevokeById_Work()
+    {
+        var store = new UserStore(_dir);
+        store.CreateUser("bob", "pwd", false);
+        store.CreateUser("alice", "pwd", false);
+
+        var (aliceToken, aliceTokenId) = store.IssueToken("alice");
+        store.IssueToken("bob");
+
+        var all = store.ListTokensDetailed(null);
+        Assert.Equal(2, all.Count);
+        Assert.Equal("alice", all[0].UserName);
+        Assert.Equal(aliceTokenId, all[0].TokenId);
+
+        var aliceOnly = store.ListTokensDetailed("alice");
+        Assert.Single(aliceOnly);
+        Assert.Equal(aliceTokenId, aliceOnly[0].TokenId);
+
+        Assert.True(store.RevokeTokenById(aliceTokenId));
+        Assert.False(store.TryAuthenticate(aliceToken, out _));
+        Assert.False(store.RevokeTokenById("tok_missing"));
     }
 
     [Fact]

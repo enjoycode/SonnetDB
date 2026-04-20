@@ -22,6 +22,7 @@ import {
 } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
 import { execControlPlaneSql, rowsToObjects } from '@/api/sql';
+import { listDatabases } from '@/api/server';
 
 interface GrantRow { user_name: string; database: string; permission: string; [k: string]: unknown }
 
@@ -62,15 +63,15 @@ const cols: DataTableColumns<GrantRow> = [
 
 async function reload(): Promise<void> {
   errorMsg.value = '';
-  const [grRs, usrRs, dbRs] = await Promise.all([
+  const [grRs, usrRs, dbResult] = await Promise.all([
     execControlPlaneSql(auth.api, 'SHOW GRANTS'),
     execControlPlaneSql(auth.api, 'SHOW USERS'),
-    execControlPlaneSql(auth.api, 'SHOW DATABASES'),
+    listDatabases(auth.api),
   ]);
   if (grRs.error) { errorMsg.value = grRs.error.message; return; }
   grants.value = rowsToObjects<GrantRow>(grRs);
   if (!usrRs.error) users.value = usrRs.rows.map((r) => String(r[0]));
-  if (!dbRs.error) databases.value = dbRs.rows.map((r) => String(r[0]));
+  if (!dbResult.error) databases.value = dbResult.databases;
 }
 
 async function onGrant(): Promise<void> {

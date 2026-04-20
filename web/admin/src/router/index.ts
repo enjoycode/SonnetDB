@@ -6,6 +6,7 @@ import SqlConsoleView from '@/views/SqlConsoleView.vue';
 import DatabasesView from '@/views/DatabasesView.vue';
 import UsersView from '@/views/UsersView.vue';
 import GrantsView from '@/views/GrantsView.vue';
+import TokensView from '@/views/TokensView.vue';
 import { useAuthStore } from '@/stores/auth';
 
 const router = createRouter({
@@ -23,6 +24,7 @@ const router = createRouter({
         { path: 'databases', name: 'databases', component: DatabasesView },
         { path: 'users', name: 'users', component: UsersView, meta: { admin: true } },
         { path: 'grants', name: 'grants', component: GrantsView, meta: { admin: true } },
+        { path: 'tokens', name: 'tokens', component: TokensView, meta: { admin: true } },
       ],
     },
   ],

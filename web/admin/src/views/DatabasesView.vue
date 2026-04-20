@@ -15,24 +15,37 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue';
 import {
-  NCard, NSpace, NInput, NButton, NAlert, NDataTable, NPopconfirm, useMessage,
+  NCard, NSpace, NInput, NButton, NAlert, NDataTable, NPopconfirm, NTag, useMessage,
   type DataTableColumns,
 } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
 import { execControlPlaneSql, isValidIdentifier } from '@/api/sql';
+import { listDatabases, loadSegmentCounts } from '@/api/server';
 
 const auth = useAuthStore();
 const message = useMessage();
 
-interface DbRow { name: string }
+interface DbRow { name: string; segment_count: number; status: string }
 const databases = ref<string[]>([]);
+const segmentCounts = ref<Record<string, number>>({});
 const newName = ref('');
 const errorMsg = ref('');
 
-const rows = computed<DbRow[]>(() => databases.value.map((n) => ({ name: n })));
+const rows = computed<DbRow[]>(() => databases.value.map((name) => ({
+  name,
+  segment_count: segmentCounts.value[name] ?? 0,
+  status: 'online',
+})));
 
 const cols = computed<DataTableColumns<DbRow>>(() => [
   { title: '名称', key: 'name' },
+  {
+    title: '状态',
+    key: 'status',
+    width: 100,
+    render: () => h(NTag, { type: 'success', size: 'small' }, { default: () => '在线' }),
+  },
+  { title: 'Segment', key: 'segment_count', width: 100 },
   {
     title: '操作',
     key: 'actions',
@@ -51,9 +64,15 @@ const cols = computed<DataTableColumns<DbRow>>(() => [
 
 async function reload(): Promise<void> {
   errorMsg.value = '';
-  const rs = await execControlPlaneSql(auth.api, 'SHOW DATABASES');
-  if (rs.error) { errorMsg.value = rs.error.message; return; }
-  databases.value = rs.rows.map((r) => String(r[0]));
+  const [dbResult, segmentsResult] = await Promise.all([
+    listDatabases(auth.api),
+    loadSegmentCounts(auth.api),
+  ]);
+  if (dbResult.error) { errorMsg.value = dbResult.error.message; return; }
+  databases.value = dbResult.databases;
+  if (!segmentsResult.error) {
+    segmentCounts.value = segmentsResult.counts;
+  }
 }
 
 async function onCreate(): Promise<void> {

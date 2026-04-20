@@ -59,7 +59,23 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
         }
         if (_dataRoot is not null && Directory.Exists(_dataRoot))
         {
-            try { Directory.Delete(_dataRoot, recursive: true); } catch { /* best-effort */ }
+            TryDeleteDirectory(_dataRoot);
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException ex)
+        {
+            Console.Error.WriteLine($"清理临时目录失败（IO）：{path} / {ex.Message}");
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Console.Error.WriteLine($"清理临时目录失败（权限）：{path} / {ex.Message}");
         }
     }
 
@@ -266,6 +282,39 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
         Assert.Contains("/v1/sql", body);
     }
 
+    [Fact]
+    public async Task ControlPlaneEndpoint_IssueAndRevokeToken_WorksEndToEnd()
+    {
+        using var admin = CreateClient(AdminStaticToken);
+        var createResp = await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("CREATE USER tokenuser WITH PASSWORD 'p'"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, createResp.StatusCode);
+
+        var issueResp = await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("ISSUE TOKEN FOR tokenuser"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, issueResp.StatusCode);
+        var issueBody = await issueResp.Content.ReadAsStringAsync();
+        var (tokenId, token) = ParseIssuedToken(issueBody);
+
+        var showResp = await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("SHOW TOKENS FOR tokenuser"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, showResp.StatusCode);
+        var showBody = await showResp.Content.ReadAsStringAsync();
+        Assert.Contains(tokenId, showBody);
+
+        using var tokenClient = CreateClient(token);
+        var health = await tokenClient.GetAsync("/healthz");
+        Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+
+        var revokeResp = await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest($"REVOKE TOKEN '{tokenId}'"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, revokeResp.StatusCode);
+
+        using var revokedClient = CreateClient(token);
+        var dbList = await revokedClient.GetAsync("/v1/db");
+        Assert.Equal(HttpStatusCode.Unauthorized, dbList.StatusCode);
+    }
+
     private async Task CreateDatabaseAsync(string name)
     {
         using var admin = CreateClient(AdminStaticToken);
@@ -281,5 +330,24 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
         var resp = await client.PostAsync($"/v1/db/{db}/sql",
             JsonContent.Create(new SqlRequest(sql), ServerJsonContext.Default.SqlRequest));
         Assert.True(resp.IsSuccessStatusCode, $"SQL '{sql}' 失败：{resp.StatusCode} / {await resp.Content.ReadAsStringAsync()}");
+    }
+
+    private static (string TokenId, string Token) ParseIssuedToken(string ndjson)
+    {
+        foreach (var line in ndjson.Split("\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith("[", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var values = JsonSerializer.Deserialize<string[]>(line);
+            if (values is [var tokenId, var token])
+            {
+                return (tokenId, token);
+            }
+        }
+
+        throw new InvalidOperationException("未在 ndjson 响应中找到已签发 token。");
     }
 }
