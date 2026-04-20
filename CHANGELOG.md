@@ -6,6 +6,24 @@
 ## [Unreleased]
 
 ### Added
+- **PR #38：发布 `TSLite 0.1.0` 的 NuGet、二进制包、完整服务端包与安装包**
+  - 新增 `src/TSLite/PackageReadme.md`、`src/TSLite.Data/PackageReadme.md`、`src/TSLite.Cli/PackageReadme.md`，并在三个项目文件中补齐 `PackageId`、`PackageReadmeFile`、版本元数据，支持直接生成 `TSLite`、`TSLite.Data`、`TSLite.Cli` 三个 `0.1.0` 包。
+  - `TSLite.Cli` 从占位程序升级为可用命令行工具：支持 `tslite version`、`tslite sql --connection ... --command|--file ...` 和 `tslite repl --connection ...`，可直接连接本地嵌入式数据库或远程 `TSLite.Server`。
+  - 新增 `tests/TSLite.Tests/Cli/CliApplicationTests.cs`，覆盖 CLI 帮助输出与本地 SQL 执行回归场景。
+  - 新增 `src/TSLite.Data/Internal/ExecutionFieldTypeResolver.cs`，并为 `TsdbDataReader` / `IExecutionResult` / `MaterializedExecutionResult` / `RemoteExecutionResult` 补齐 trim/AOT 注解与显式类型映射，保持 `TSLite.Cli` 接入 `TSLite.Data` 后仍可 `PublishAot=true` 通过发布。
+  - 新增 `docs/releases/README.md`、`docs/releases/sdk-bundle.md`、`docs/releases/server-bundle.md`、`docs/releases/installers.md`，说明 NuGet 包、SDK Bundle、Server Full Bundle、MSI/DEB/RPM 安装包的用途、目录结构、默认启动方式与凭据。
+  - 新增跨平台发布脚本 `eng/release.ps1`：
+    - 生成 `TSLite` / `TSLite.Data` / `TSLite.Cli` NuGet 包；
+    - 发布 Windows / Linux 原生 AOT CLI 与 Server；
+    - 生成 `tslite-sdk-<version>-<rid>` 与 `tslite-server-full-<version>-<rid>` 压缩包；
+    - 自动写入默认本地启动配置、预置管理员 `admin / Admin123!` 与 Bearer Token `tslite-admin-token`；
+    - 生成 SHA256 校验文件；
+    - 生成 Windows `msi` 与 Linux `deb` / `rpm` 安装包。
+  - 新增 `.github/workflows/publish.yml`，在 `v*` tag 或手动触发时自动执行：
+    - NuGet 打包与发布；
+    - Windows / Linux Server + CLI + 前端完整打包；
+    - MSI / DEB / RPM 安装包构建；
+    - GitHub Release 附件上传。
 - **PR #35：BenchmarkDotNet 五库性能基准全量收敛**
   - 所有基准代码与 docker compose 编排在前序 PR（#32 / #33 / #36 工作流）中已陆续落地，PR #35 收敛验收并将 ROADMAP 状态置 ✅。
   - 五个数据库的覆盖矩阵（详见 README「五库基准覆盖一览」）：

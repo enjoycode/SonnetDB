@@ -4,6 +4,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>TSLite.Server</RootNamespace>
     <AssemblyName>TSLite.Server</AssemblyName>
+    <Description>TSLite 服务器版，内置 HTTP API、管理前端与远程 ADO.NET 接入能力。</Description>
 
     <!--
       AOT 优先。Native AOT publish 需要在命令行/CI 里加 -p:PublishAot=true。

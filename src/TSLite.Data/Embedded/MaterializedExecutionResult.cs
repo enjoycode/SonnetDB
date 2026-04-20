@@ -1,5 +1,6 @@
 using TSLite.Data.Internal;
 using TSLite.Sql.Execution;
+using System.Diagnostics.CodeAnalysis;
 
 namespace TSLite.Data.Embedded;
 
@@ -10,7 +11,7 @@ namespace TSLite.Data.Embedded;
 internal sealed class MaterializedExecutionResult : IExecutionResult
 {
     private readonly IReadOnlyList<IReadOnlyList<object?>> _rows;
-    private readonly Type[] _columnTypes;
+    private readonly ExecutionFieldTypeKind[] _columnTypes;
     private int _rowIndex = -1;
 
     private MaterializedExecutionResult(
@@ -21,18 +22,18 @@ internal sealed class MaterializedExecutionResult : IExecutionResult
         Columns = columns;
         _rows = rows;
         RecordsAffected = recordsAffected;
-        _columnTypes = new Type[columns.Count];
+        _columnTypes = new ExecutionFieldTypeKind[columns.Count];
         for (int c = 0; c < columns.Count; c++)
         {
-            Type t = typeof(object);
+            var kind = ExecutionFieldTypeKind.Object;
             for (int r = 0; r < rows.Count; r++)
             {
                 var v = rows[r][c];
                 if (v is null) continue;
-                t = v.GetType();
+                kind = ExecutionFieldTypeResolver.Resolve(v);
                 break;
             }
-            _columnTypes[c] = t;
+            _columnTypes[c] = kind;
         }
     }
 
@@ -54,7 +55,8 @@ internal sealed class MaterializedExecutionResult : IExecutionResult
         return _rows[_rowIndex][ordinal];
     }
 
-    public Type GetFieldType(int ordinal) => _columnTypes[ordinal];
+    [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)]
+    public Type GetFieldType(int ordinal) => ExecutionFieldTypeResolver.GetRuntimeType(_columnTypes[ordinal]);
 
     public void Dispose() { /* 无非托管资源 */ }
 

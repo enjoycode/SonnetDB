@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using TSLite.Data.Internal;
 
@@ -89,6 +90,7 @@ public sealed class TsdbDataReader : DbDataReader
     public override IEnumerator GetEnumerator() => new DbEnumerator(this);
 
     /// <inheritdoc />
+    [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)]
     public override Type GetFieldType(int ordinal)
     {
         ValidateOrdinal(ordinal);

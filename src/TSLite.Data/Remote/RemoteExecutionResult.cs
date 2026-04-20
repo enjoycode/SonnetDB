@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics.CodeAnalysis;
 using TSLite.Data.Internal;
 
 namespace TSLite.Data.Remote;
@@ -104,10 +105,11 @@ internal sealed class RemoteExecutionResult : IExecutionResult
 
     public object? GetValue(int ordinal) => _currentRow[ordinal];
 
+    [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)]
     public Type GetFieldType(int ordinal)
     {
         var v = _currentRow[ordinal];
-        return v?.GetType() ?? typeof(object);
+        return ExecutionFieldTypeResolver.GetRuntimeType(ExecutionFieldTypeResolver.Resolve(v));
     }
 
     public void Dispose()

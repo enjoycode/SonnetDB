@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 
 namespace TSLite.Data.Internal;
 
@@ -42,5 +43,6 @@ internal interface IExecutionResult : IDisposable
     /// 返回指定列的运行时类型推断。嵌入式模式可预扫描全部行；
     /// 远程流式模式在未读到行之前可能返回 <see cref="object"/>。
     /// </summary>
+    [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)]
     Type GetFieldType(int ordinal);
 }
