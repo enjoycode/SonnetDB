@@ -203,6 +203,69 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
         Assert.Contains("beta", body);
     }
 
+    // PR #34b-3：/v1/sql 控制面端点（无 db 路径）
+
+    [Fact]
+    public async Task ControlPlaneEndpoint_AsAdmin_RunsCreateUserAndShowUsers()
+    {
+        using var admin = CreateClient(AdminStaticToken);
+        var createResp = await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("CREATE USER cpuser WITH PASSWORD 'p'"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, createResp.StatusCode);
+
+        var showResp = await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("SHOW USERS"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, showResp.StatusCode);
+        var body = await showResp.Content.ReadAsStringAsync();
+        Assert.Contains("cpuser", body);
+    }
+
+    [Fact]
+    public async Task ControlPlaneEndpoint_CreateSuperuser_FlagPersisted()
+    {
+        using var admin = CreateClient(AdminStaticToken);
+        var resp = await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("CREATE USER suid WITH PASSWORD 'p' SUPERUSER"),
+                ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+        var showResp = await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("SHOW USERS"), ServerJsonContext.Default.SqlRequest));
+        var body = await showResp.Content.ReadAsStringAsync();
+        // SHOW USERS 行格式 [name, is_superuser, created_utc, token_count]；UserStore 名字 lower-case。
+        Assert.Contains("[\"suid\",true,", body);
+    }
+
+    [Fact]
+    public async Task ControlPlaneEndpoint_AsRegularUser_Forbidden()
+    {
+        await CreateDatabaseAsync("rdb");
+        using var admin = CreateClient(AdminStaticToken);
+        await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("CREATE USER ruser WITH PASSWORD 'p'"), ServerJsonContext.Default.SqlRequest));
+
+        using var anon = CreateClient(token: null);
+        var loginResp = await anon.PostAsync("/v1/auth/login",
+            JsonContent.Create(new LoginRequest("ruser", "p"), ServerJsonContext.Default.LoginRequest));
+        var login = await loginResp.Content.ReadFromJsonAsync<LoginResponse>(ServerJsonContext.Default.LoginResponse);
+
+        using var ru = CreateClient(login!.Token);
+        var resp = await ru.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("SHOW USERS"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task ControlPlaneEndpoint_RejectsDataPlaneStatement()
+    {
+        using var admin = CreateClient(AdminStaticToken);
+        var resp = await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("SELECT a FROM m"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("/v1/sql", body);
+    }
+
     private async Task CreateDatabaseAsync(string name)
     {
         using var admin = CreateClient(AdminStaticToken);

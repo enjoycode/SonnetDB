@@ -82,4 +82,7 @@ public enum TokenKind
     KeywordGrants,
     KeywordDatabases,
     KeywordFor,
+
+    // PR #34b-3：CREATE USER ... SUPERUSER
+    KeywordSuperuser,
 }

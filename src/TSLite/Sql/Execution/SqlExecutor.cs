@@ -135,6 +135,40 @@ public static class SqlExecutor
     }
 
     /// <summary>
+    /// 仅执行控制面 SQL（不依赖任何具体 <see cref="Tsdb"/> 实例）。
+    /// 适用于服务端 <c>POST /v1/sql</c> 端点：admin 通过该端点跑 CREATE USER / GRANT /
+    /// CREATE DATABASE / SHOW USERS 等管理类语句。
+    /// </summary>
+    /// <param name="statement">已解析的 SQL 语句 AST，必须为控制面语句。</param>
+    /// <param name="controlPlane">控制面实现。</param>
+    /// <returns>对 SHOW 语句返回 <see cref="SelectExecutionResult"/>，对其他语句返回受影响行数 1。</returns>
+    /// <exception cref="ArgumentNullException">任何参数为 null。</exception>
+    /// <exception cref="NotSupportedException">语句不是控制面语句。</exception>
+    public static object ExecuteControlPlaneStatement(SqlStatement statement, IControlPlane controlPlane)
+    {
+        ArgumentNullException.ThrowIfNull(statement);
+        ArgumentNullException.ThrowIfNull(controlPlane);
+
+        return statement switch
+        {
+            CreateUserStatement createUser => Run(() => { controlPlane.CreateUser(createUser.UserName, createUser.Password, createUser.IsSuperuser); return (object)1; }),
+            AlterUserPasswordStatement alterUser => Run(() => { controlPlane.AlterUserPassword(alterUser.UserName, alterUser.NewPassword); return (object)1; }),
+            DropUserStatement dropUser => Run(() => { controlPlane.DropUser(dropUser.UserName); return (object)1; }),
+            GrantStatement grant => Run(() => { controlPlane.Grant(grant.UserName, grant.Database, grant.Permission); return (object)1; }),
+            RevokeStatement revoke => Run(() => { controlPlane.Revoke(revoke.UserName, revoke.Database); return (object)1; }),
+            CreateDatabaseStatement createDb => Run(() => { controlPlane.CreateDatabase(createDb.DatabaseName); return (object)1; }),
+            DropDatabaseStatement dropDb => Run(() => { controlPlane.DropDatabase(dropDb.DatabaseName); return (object)1; }),
+            ShowUsersStatement => ShowUsers(controlPlane),
+            ShowGrantsStatement showGrants => ShowGrants(controlPlane, showGrants.UserName),
+            ShowDatabasesStatement => ShowDatabases(controlPlane),
+            _ => throw new NotSupportedException(
+                $"语句 '{statement.GetType().Name}' 不是控制面语句，请改走 /v1/db/{{db}}/sql。"),
+        };
+
+        static object Run(Func<object> action) => action();
+    }
+
+    /// <summary>
     /// 执行 <c>CREATE MEASUREMENT</c> 语句：把 AST 列定义映射到 catalog schema 并注册。
     /// </summary>
     /// <param name="tsdb">目标数据库实例。</param>

@@ -32,6 +32,21 @@ public sealed class ControlPlaneParserTests
         Assert.Equal("O'Hara", stmt.Password);
     }
 
+    [Fact]
+    public void Parse_CreateUser_WithSuperuserKeyword_SetsFlag()
+    {
+        var stmt = (CreateUserStatement)SqlParser.Parse("CREATE USER admin2 WITH PASSWORD 'p' SUPERUSER");
+        Assert.Equal("admin2", stmt.UserName);
+        Assert.True(stmt.IsSuperuser);
+    }
+
+    [Fact]
+    public void Parse_CreateUser_SuperuserKeyword_CaseInsensitive()
+    {
+        var stmt = (CreateUserStatement)SqlParser.Parse("create user u with password 'p' superuser");
+        Assert.True(stmt.IsSuperuser);
+    }
+
     [Theory]
     [InlineData("CREATE USER")]
     [InlineData("CREATE USER alice")]

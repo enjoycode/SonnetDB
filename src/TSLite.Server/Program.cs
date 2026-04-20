@@ -224,6 +224,25 @@ public static class Program
                 BearerAuthMiddleware.CanWrite(role), BearerAuthMiddleware.IsAdmin(role), controlPlane).ConfigureAwait(false);
         });
 
+        // ---- 控制面 SQL（admin only，无 db 路径）----
+        app.MapMethods("/v1/sql", new[] { "POST" }, (RequestDelegate)(async ctx =>
+        {
+            var role = BearerAuthMiddleware.GetRole(ctx);
+            if (!BearerAuthMiddleware.IsAdmin(role))
+            {
+                await WriteSimpleErrorAsync(ctx, StatusCodes.Status403Forbidden, "forbidden",
+                    "/v1/sql 仅 admin 可调用。").ConfigureAwait(false);
+                return;
+            }
+            var req = await ReadJsonAsync(ctx, ServerJsonContext.Default.SqlRequest).ConfigureAwait(false);
+            if (req is null || string.IsNullOrEmpty(req.Sql))
+            {
+                await WriteSimpleErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体需包含 sql。").ConfigureAwait(false);
+                return;
+            }
+            await SqlEndpointHandler.HandleControlPlaneAsync(ctx, req, metrics, controlPlane).ConfigureAwait(false);
+        }));
+
         // ---- 认证 ----
         var users = app.Services.GetRequiredService<UserStore>();
         app.MapMethods("/v1/auth/login", new[] { "POST" }, (RequestDelegate)(async ctx =>

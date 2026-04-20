@@ -39,6 +39,19 @@
   - csproj 集成：`web/admin/dist/**` 通过 `<EmbeddedResource>` 自动嵌入，`LogicalName` 写为 `tslite.admin/%(RecursiveDir)%(Filename)%(Extension)`，C# 端把 `\` 规范化为 `/`；可选 target `BuildAdminUi=true` 自动跑 `npm install && npm run build`（默认 false，避免日常 `dotnet build` 被 npm 拖慢）。dist 目录通过 `web/admin/.gitignore` 排除，不入库。
   - 缓存策略：`/admin`、`/admin/index.html` → `no-cache`；其他 hash 化资产 → `public, max-age=31536000, immutable`（与 Vite 默认 contenthash 命名匹配）。
   - 测试：6 个端到端用例 `tests/TSLite.Server.Tests/AdminUiEndToEndTests.cs` 覆盖 `GET /admin` 返回 HTML、SPA fallback (`/admin/login` → index.html)、带扩展名缺失 → 404、匿名可访问、favicon → image/svg+xml、`/v1/db` 仍要求 Bearer。当 dist 未 build 时所有用例自动跳过断言（CI 友好）。当前测试总数：1174 + 61 = **1235 全绿**。
+- **TSLite.Server Admin SPA：SQL Console + 数据库 / 用户 / 权限管理（PR #34b-3）**
+  - 新增专用控制面 SQL 端点 `POST /v1/sql`（admin only，无 db 路径），仅接收控制面语句（CREATE USER / GRANT / CREATE DATABASE / SHOW USERS / SHOW DATABASES 等）；数据面语句 → 400。仍然以 `application/x-ndjson` 流式输出，行格式与 `/v1/db/{db}/sql` 完全一致，前端可共享解析器。复用 `app.MapMethods(path, ["POST"], (RequestDelegate)(...))` 模式绕过 AOT RequestDelegateGenerator 拦截。
+  - 核心库新增 `SqlExecutor.ExecuteControlPlaneStatement(SqlStatement, IControlPlane)` 入口，独立于 `Tsdb` 实例运行；用于 `/v1/sql` 端点，使前端无需先选数据库就能跑控制面 SQL。
+  - **SQL grammar 补全 `SUPERUSER` 关键字**：`CREATE USER <name> WITH PASSWORD '<pwd>' [SUPERUSER]` 末尾可选关键字现在被解析（此前 `IsSuperuser` 始终为 `false`）。新增 `TokenKind.KeywordSuperuser` + lexer 映射 + parser 可选消费 + 2 个 parser 单测。
+  - **前端 SPA 重构**：抽出 `web/admin/src/api/sql.ts` 共享 ndjson 解析（`parseNdjson` / `execControlPlaneSql` / `execDataSql` / `rowsToObjects` / `quote` / `isValidIdentifier`），所有视图共用 `axios.validateStatus:()=>true` + `responseType:'text'` 模式正确处理 4xx / 5xx 响应。
+  - 抽出 `views/AppShell.vue` 共享布局壳子（sider + header + `<router-view/>`），由 `App.vue` 顶层挂载 `NDialogProvider / NMessageProvider / NNotificationProvider`；普通用户菜单显示「概览 / SQL Console / 数据库」，超级用户额外显示「用户 / 权限」。
+  - 4 个新视图：
+    - `SqlConsoleView.vue`：目标选择器（控制面 / 任意数据库）+ 多行 SQL 编辑 + 运行按钮 + 结果表格 + meta（行数 / 受影响行数 / elapsedMs）+ error alert。
+    - `DatabasesView.vue`：`SHOW DATABASES` 列表 + admin 创建（`CREATE DATABASE`，标识符校验）+ 二次确认 DROP。
+    - `UsersView.vue`（admin only）：`SHOW USERS` 表格 + `CREATE USER ... [SUPERUSER]` 表单 + 改密弹窗（`ALTER USER ... WITH PASSWORD '...'`）+ 二次确认 DROP。
+    - `GrantsView.vue`（admin only）：`SHOW GRANTS` 表格 + `GRANT READ|WRITE|ADMIN ON DATABASE <db> TO <user>` 表单 + 行级 `REVOKE ON DATABASE <db> FROM <user>` 二次确认。
+  - 路由结构调整：`/admin/login` 匿名；其余路由全部嵌套在 `AppShell` 子路由下（`/dashboard` / `/sql` / `/databases` / `/users` / `/grants`），全局 guard 增加 `meta.admin` 判断（非 admin 访问 admin 路由 → 重定向 `/dashboard`）。
+  - 测试：parser 新增 2 例（`Parse_CreateUser_WithSuperuserKeyword_SetsFlag` / `Parse_CreateUser_SuperuserKeyword_CaseInsensitive`）+ 服务端 E2E 新增 4 例（`ControlPlaneEndpoint_AsAdmin_RunsCreateUserAndShowUsers` / `ControlPlaneEndpoint_CreateSuperuser_FlagPersisted` / `ControlPlaneEndpoint_AsRegularUser_Forbidden` / `ControlPlaneEndpoint_RejectsDataPlaneStatement`）。当前测试总数：1176 + 65 = **1241 全绿**。
 
 ### Fixed
 - **AOT RequestDelegateGenerator workaround**：`WebApplication.CreateSlimBuilder` + `EnableRequestDelegateGenerator=true` 下，对于

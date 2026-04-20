@@ -7,7 +7,7 @@ namespace TSLite.Sql.Ast;
 /// <summary><c>CREATE USER name WITH PASSWORD 'pwd' [SUPERUSER]</c>。</summary>
 /// <param name="UserName">用户名。</param>
 /// <param name="Password">明文密码。</param>
-/// <param name="IsSuperuser">是否超级用户（保留扩展位；当前 grammar 暂不解析此关键字）。</param>
+/// <param name="IsSuperuser">是否超级用户（PR #34b-3 起 grammar 解析尾部可选 <c>SUPERUSER</c>）。</param>
 public sealed record CreateUserStatement(
     string UserName,
     string Password,

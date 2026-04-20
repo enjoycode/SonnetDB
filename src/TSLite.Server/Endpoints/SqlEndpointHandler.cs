@@ -49,6 +49,69 @@ internal static class SqlEndpointHandler
         await ExecuteAsync(context, tsdb, request.Statements, metrics, canWrite, isAdmin, controlPlane).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// 处理 <c>POST /v1/sql</c> 单条控制面 SQL 请求（无 db 路径）。
+    /// 仅支持控制面语句（CREATE USER / GRANT / CREATE DATABASE / SHOW USERS 等）以及 <c>SHOW DATABASES</c>。
+    /// 调用方必须先确认请求者是 admin。
+    /// </summary>
+    public static async Task HandleControlPlaneAsync(
+        HttpContext context,
+        SqlRequest request,
+        ServerMetrics metrics,
+        IControlPlane controlPlane)
+    {
+        ArgumentNullException.ThrowIfNull(controlPlane);
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/x-ndjson; charset=utf-8";
+        var writerOptions = new JsonWriterOptions { Indented = false, SkipValidation = false };
+
+        metrics.RecordSqlRequest();
+        var sw = Stopwatch.StartNew();
+
+        SqlStatement parsed;
+        try
+        {
+            parsed = SqlParser.Parse(request.Sql);
+        }
+        catch (Exception ex)
+        {
+            metrics.RecordSqlError();
+            await WriteErrorAsync(context, "sql_error", ex.Message).ConfigureAwait(false);
+            return;
+        }
+
+        if (!IsControlPlaneStatement(parsed) && parsed is not ShowDatabasesStatement)
+        {
+            metrics.RecordSqlError();
+            await WriteErrorAsync(context, "bad_request",
+                "/v1/sql 仅支持控制面 SQL（CREATE USER / GRANT / CREATE DATABASE / SHOW USERS / SHOW DATABASES 等），数据面 SQL 请走 /v1/db/{db}/sql。").ConfigureAwait(false);
+            return;
+        }
+
+        object result;
+        try
+        {
+            result = SqlExecutor.ExecuteControlPlaneStatement(parsed, controlPlane);
+        }
+        catch (Exception ex)
+        {
+            metrics.RecordSqlError();
+            await WriteErrorAsync(context, "sql_error", ex.Message).ConfigureAwait(false);
+            return;
+        }
+
+        if (result is SelectExecutionResult sel)
+        {
+            long rowCount = await WriteSelectAsync(context, sel, writerOptions).ConfigureAwait(false);
+            metrics.AddReturnedRows(rowCount);
+            await WriteEndAsync(context, writerOptions, rowCount, recordsAffected: -1, sw.Elapsed.TotalMilliseconds).ConfigureAwait(false);
+        }
+        else
+        {
+            await WriteEndAsync(context, writerOptions, rowCount: 0, recordsAffected: 0, sw.Elapsed.TotalMilliseconds).ConfigureAwait(false);
+        }
+    }
+
     private static async Task ExecuteAsync(
         HttpContext context,
         Tsdb tsdb,

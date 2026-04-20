@@ -58,6 +58,8 @@ public sealed class SqlLexer
         ["grants"] = TokenKind.KeywordGrants,
         ["databases"] = TokenKind.KeywordDatabases,
         ["for"] = TokenKind.KeywordFor,
+        // PR #34b-3：CREATE USER ... SUPERUSER
+        ["superuser"] = TokenKind.KeywordSuperuser,
     };
 
     private readonly string _source;

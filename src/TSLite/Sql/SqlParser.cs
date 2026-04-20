@@ -563,7 +563,13 @@ public sealed class SqlParser
         Expect(TokenKind.KeywordWith);
         Expect(TokenKind.KeywordPassword);
         var password = ExpectStringLiteral();
-        return new CreateUserStatement(name, password, IsSuperuser: false);
+        bool isSuperuser = false;
+        if (Current.Kind == TokenKind.KeywordSuperuser)
+        {
+            Advance();
+            isSuperuser = true;
+        }
+        return new CreateUserStatement(name, password, IsSuperuser: isSuperuser);
     }
 
     /// <summary><c>CREATE DATABASE name</c>。</summary>
