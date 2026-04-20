@@ -153,11 +153,11 @@ public sealed class SqlParser
 
         Expect(TokenKind.LeftParen);
         var columns = new List<string>();
-        columns.Add(ExpectIdentifierName());
+        columns.Add(ExpectColumnName());
         while (Current.Kind == TokenKind.Comma)
         {
             Advance();
-            columns.Add(ExpectIdentifierName());
+            columns.Add(ExpectColumnName());
         }
         Expect(TokenKind.RightParen);
 
@@ -501,6 +501,26 @@ public sealed class SqlParser
         var name = Current.Text;
         Advance();
         return name;
+    }
+
+    /// <summary>
+    /// 期望一个列名 token：普通标识符；或者 <see cref="TokenKind.KeywordTime"/>（保留字 <c>time</c> 在列名上下文中
+    /// 视为名为 <c>"time"</c> 的列，与时间戳伪列对应）。
+    /// </summary>
+    private string ExpectColumnName()
+    {
+        switch (Current.Kind)
+        {
+            case TokenKind.IdentifierLiteral:
+                var name = Current.Text;
+                Advance();
+                return name;
+            case TokenKind.KeywordTime:
+                Advance();
+                return "time";
+            default:
+                throw Error("期望列名");
+        }
     }
 
     private void ConsumeOptionalSemicolon()

@@ -6,6 +6,22 @@
 ## [Unreleased]
 
 ### Added
+- 新增 SQL `SELECT ... [WHERE ...] [GROUP BY time(...)]` 执行支持（PR #25）
+  - `TSLite.Sql.Execution.SelectExecutionResult`（record，含 `Columns` / `Rows`；行内运行时类型：time→`long`、tag→`string?`、field→`double/long/bool/string?`、count→`long`、其他聚合→`double`）
+  - `TSLite.Sql.Execution.WhereClauseDecomposer`（internal）：将 WHERE AST 拆分为 `(TagFilter, TimeRange)`；仅支持顶层 `AND` 合取、`tag = 'literal'` 等值过滤、`time {= != >= > <= <}` 时间窗（`time !=` 暂不支持）；OR / NOT / field 过滤 / 非字面量右值 / 同 tag 列冲突值均抛 `InvalidOperationException`；自动检测空时间窗
+  - `TSLite.Sql.Execution.SelectExecutor`（internal）：投影分类（time/tag/field/aggregate）；原始模式按 series 做时间戳并集 outer-join，缺失字段输出 `null`；聚合模式以 `SortedDictionary<long, BucketState[]>` 按桶累积 count/sum/min/max/first/last，`GROUP BY time(d)` 由 `TimeBucket.Floor` 对齐，无 GROUP BY 则全局单桶；多 series 的 sum/avg/min/max/count 自动跨 series 合并；`count(*)` 跨 schema 全部数值 field 求总点数（跳过 String）；`count(field)` 计数任意类型；其他聚合拒绝 String field
+  - `SqlExecutor.ExecuteSelect(Tsdb, SelectStatement)` 公共入口；`Execute` 派发新增 `SelectStatement` 分支
+  - 校验规则：聚合不可与裸列混用；`GROUP BY time(...)` 仅在聚合中有效；`first`/`last` 多 series 暂不支持（v1）；未知函数 / 未知列 / 聚合函数作用于 Tag 列均抛错
+  - 单元测试：25 个端到端测试覆盖 `SELECT *` / 列投影 / outer-join NULL / WHERE 时间窗 / WHERE tag 过滤 / 别名 / `count(*)` / `count(field)` / `sum/avg/min/max` / `first/last` / 多 series 聚合 / `GROUP BY time(1000ms)` / 空时间窗 / 各类错误场景（缺 measurement / 未知列 / OR / field 过滤 / 混合投影 / 缺聚合的 GROUP BY / first 多 series / tag 不等 / tag 冲突 / String 字段 sum）
+
+- 新增 SQL `INSERT INTO ... VALUES (...)` 执行支持（PR #24）
+  - `TSLite.Sql.Execution.InsertExecutionResult`（record，含 `Measurement` / `RowsInserted`）
+  - `SqlExecutor.ExecuteInsert(Tsdb, InsertStatement)`：完整列绑定 + 类型校验 + 时间戳缺省 + 批量写入
+  - 校验规则：measurement 必须已 CREATE；列名必须存在于 schema；同一 INSERT 列列表禁止重复；Tag 必须为字符串字面量且非 NULL；Field 类型必须匹配（INT 字面量可隐式提升为 FLOAT）；每行至少 1 个 Field 列值；`time` 列必须为非负整数字面量；缺省时使用 `DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()`
+  - `SqlParser`：新增内部 `ExpectColumnName()`，允许 INSERT 列列表中将保留字 `time` 作为列名使用（与时间戳伪列对应；亦可继续用 `"time"` 引号转义）
+  - `SqlExecutor.ExecuteStatement` 现支持 `InsertStatement` 派发
+  - 单元测试：17 个端到端测试，覆盖单行 / 批量 / 时间缺省 / 时间大小写不敏感 / Int→Float 提升 / 全四种 FieldType round-trip / 仅 Field 无 Tag / measurement 缺失 / 未知列 / 重复列 / 类型不匹配 / Tag 非字符串 / NULL / 缺 Field / 负时间戳 / 批量部分失败前序已落地 / 参数 null
+
 - 新增 `TSLite.Catalog` 命名空间下 measurement schema 体系，并接入 `Tsdb` 与 SQL 执行器（PR #23）
   - `MeasurementColumnRole`（Tag/Field 角色枚举）、`MeasurementColumn`（列定义 record）、`MeasurementSchema`（不可变值对象，工厂 `Create` 校验：列非空、≥1 个 Field、列名唯一、Tag 列必须 STRING、禁止 Unknown 类型）、`MeasurementCatalog`（基于 `ConcurrentDictionary` 的线程安全注册表）
   - `MeasurementSchemaCodec`：新增持久化文件 `measurements.tslschema`；二进制格式 `Magic(8) + FormatVersion(4) + HeaderSize(4) + Count(4) + Reserved(12)` 头 + 变长 measurement 记录 + `Crc32(4) + Magic(8) + Reserved(4)` 尾；`ArrayPool<byte>` + `SpanReader` / `SpanWriter` 实现，`Save` 走临时文件 + 原子 rename + fsync
