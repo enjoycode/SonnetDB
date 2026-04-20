@@ -85,4 +85,9 @@ public enum TokenKind
 
     // PR #34b-3：CREATE USER ... SUPERUSER
     KeywordSuperuser,
+
+    // PR #34b-3-tokens：API token 管理（SHOW TOKENS / ISSUE TOKEN / REVOKE TOKEN）
+    KeywordTokens,
+    KeywordToken,
+    KeywordIssue,
 }

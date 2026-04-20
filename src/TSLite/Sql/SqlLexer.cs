@@ -60,6 +60,11 @@ public sealed class SqlLexer
         ["for"] = TokenKind.KeywordFor,
         // PR #34b-3：CREATE USER ... SUPERUSER
         ["superuser"] = TokenKind.KeywordSuperuser,
+
+        // PR #34b-3-tokens：API token 管理
+        ["tokens"] = TokenKind.KeywordTokens,
+        ["token"] = TokenKind.KeywordToken,
+        ["issue"] = TokenKind.KeywordIssue,
     };
 
     private readonly string _source;

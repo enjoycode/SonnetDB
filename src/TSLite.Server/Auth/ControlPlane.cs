@@ -105,6 +105,34 @@ public sealed class ControlPlane : IControlPlane
     /// <inheritdoc />
     public IReadOnlyList<string> ListDatabases() => _registry.ListDatabases();
 
+    /// <inheritdoc />
+    public IReadOnlyList<TokenSummary> ListTokens(string? userName)
+    {
+        var raw = _users.ListTokensDetailed(userName);
+        var result = new TokenSummary[raw.Count];
+        for (int i = 0; i < raw.Count; i++)
+        {
+            var t = raw[i];
+            result[i] = new TokenSummary(t.TokenId, t.UserName, t.CreatedUtc, t.LastUsedUtc);
+        }
+        return result;
+    }
+
+    /// <inheritdoc />
+    public (string TokenId, string TokenPlain) IssueToken(string userName)
+    {
+        EnsureUserExists(userName);
+        var (token, id) = _users.IssueToken(userName);
+        return (id, token);
+    }
+
+    /// <inheritdoc />
+    public void RevokeToken(string tokenId)
+    {
+        if (!_users.RevokeTokenById(tokenId))
+            throw new InvalidOperationException($"token '{tokenId}' 不存在。");
+    }
+
     private void EnsureUserExists(string userName)
     {
         if (!_users.Exists(userName))

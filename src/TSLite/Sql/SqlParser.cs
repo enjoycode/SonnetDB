@@ -72,7 +72,8 @@ public sealed class SqlParser
             TokenKind.KeywordGrant => ParseGrant(),
             TokenKind.KeywordRevoke => ParseRevoke(),
             TokenKind.KeywordShow => ParseShow(),
-            _ => throw Error("期望 CREATE / INSERT / SELECT / DELETE / DROP / ALTER / GRANT / REVOKE / SHOW 关键字"),
+            TokenKind.KeywordIssue => ParseIssue(),
+            _ => throw Error("期望 CREATE / INSERT / SELECT / DELETE / DROP / ALTER / GRANT / REVOKE / SHOW / ISSUE 关键字"),
         };
     }
 
@@ -629,16 +630,32 @@ public sealed class SqlParser
         return new GrantStatement(perm, db, user);
     }
 
-    /// <summary><c>REVOKE ON DATABASE db FROM user</c>。撤销 (user, db) 的全部权限。</summary>
-    private RevokeStatement ParseRevoke()
+    /// <summary><c>REVOKE ON DATABASE db FROM user</c> 或 <c>REVOKE TOKEN '&lt;id&gt;'</c>。</summary>
+    private SqlStatement ParseRevoke()
     {
         Expect(TokenKind.KeywordRevoke);
+        if (Current.Kind == TokenKind.KeywordToken)
+        {
+            Advance();
+            var tokenId = ExpectStringLiteral();
+            return new RevokeTokenStatement(tokenId);
+        }
         Expect(TokenKind.KeywordOn);
         Expect(TokenKind.KeywordDatabase);
         var db = ExpectDatabaseNameOrStar();
         Expect(TokenKind.KeywordFrom);
         var user = ExpectIdentifierName();
         return new RevokeStatement(db, user);
+    }
+
+    /// <summary><c>ISSUE TOKEN FOR &lt;user&gt;</c>：为指定用户颁发一个新 token。</summary>
+    private IssueTokenStatement ParseIssue()
+    {
+        Expect(TokenKind.KeywordIssue);
+        Expect(TokenKind.KeywordToken);
+        Expect(TokenKind.KeywordFor);
+        var user = ExpectIdentifierName();
+        return new IssueTokenStatement(user);
     }
 
     /// <summary>
@@ -664,8 +681,17 @@ public sealed class SqlParser
                     return new ShowGrantsStatement(user);
                 }
                 return new ShowGrantsStatement(null);
+            case TokenKind.KeywordTokens:
+                Advance();
+                if (Current.Kind == TokenKind.KeywordFor)
+                {
+                    Advance();
+                    var tu = ExpectIdentifierName();
+                    return new ShowTokensStatement(tu);
+                }
+                return new ShowTokensStatement(null);
             default:
-                throw Error("SHOW 后面期望 USERS / GRANTS / DATABASES");
+                throw Error("SHOW 后面期望 USERS / GRANTS / DATABASES / TOKENS");
         }
     }
 

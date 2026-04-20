@@ -63,7 +63,36 @@ public interface IControlPlane
     /// <summary>列出所有已注册数据库（按名称排序）。</summary>
     /// <returns>数据库名序列。</returns>
     IReadOnlyList<string> ListDatabases();
+
+    // PR #34b-3-tokens：API token 管理。
+
+    /// <summary>列出 token 元数据（按 user_name, created_utc 排序），永不返回明文。</summary>
+    /// <param name="userName">可选用户名筛选；<c>null</c> 表示列出全部。</param>
+    /// <returns>token 摘要序列。</returns>
+    IReadOnlyList<TokenSummary> ListTokens(string? userName);
+
+    /// <summary>为指定用户颁发一个新 token。</summary>
+    /// <param name="userName">目标用户名。</param>
+    /// <returns>token id 与明文 token；明文仅此处一次性返回。</returns>
+    /// <exception cref="InvalidOperationException">用户不存在。</exception>
+    (string TokenId, string TokenPlain) IssueToken(string userName);
+
+    /// <summary>按 token id 吊销一个已颁发的 token。</summary>
+    /// <param name="tokenId">token 短 id。</param>
+    /// <exception cref="InvalidOperationException">token id 不存在。</exception>
+    void RevokeToken(string tokenId);
 }
+
+/// <summary>SHOW TOKENS 行。仅元数据，不含明文。</summary>
+/// <param name="TokenId">token 短 id。</param>
+/// <param name="UserName">所属用户名。</param>
+/// <param name="CreatedUtc">颁发时间（UTC）。</param>
+/// <param name="LastUsedUtc">最近一次使用时间（UTC），从未使用为 <c>null</c>。</param>
+public sealed record TokenSummary(
+    string TokenId,
+    string UserName,
+    DateTime CreatedUtc,
+    DateTime? LastUsedUtc);
 
 /// <summary>SHOW USERS 行。</summary>
 /// <param name="Name">用户名。</param>

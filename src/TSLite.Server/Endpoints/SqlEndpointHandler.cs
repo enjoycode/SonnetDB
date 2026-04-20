@@ -288,5 +288,8 @@ internal static class SqlEndpointHandler
         CreateDatabaseStatement or
         DropDatabaseStatement or
         ShowUsersStatement or
-        ShowGrantsStatement;
+        ShowGrantsStatement or
+        ShowTokensStatement or
+        IssueTokenStatement or
+        RevokeTokenStatement;
 }

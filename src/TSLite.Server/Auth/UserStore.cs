@@ -244,6 +244,57 @@ public sealed class UserStore
     }
 
     /// <summary>
+    /// 仅按 token id 吊销（在所有用户中扫描）。用于 <c>REVOKE TOKEN '&lt;id&gt;'</c> SQL。
+    /// </summary>
+    /// <returns>true 表示存在并已吊销；false 表示 id 未命中。</returns>
+    public bool RevokeTokenById(string tokenId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tokenId);
+        lock (_lock)
+        {
+            foreach (var u in _state.Users)
+            {
+                var idx = u.Tokens.FindIndex(t => t.Id == tokenId);
+                if (idx < 0) continue;
+                var hash = u.Tokens[idx].SecretHash;
+                _tokenIndex.TryRemove(hash, out _);
+                u.Tokens.RemoveAt(idx);
+                Persist();
+                return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>列出 token 元数据（按 user_name, created_utc 排序），永不返回明文。</summary>
+    /// <param name="userName">可选用户名筛选；<c>null</c> 表示列出全部。</param>
+    public IReadOnlyList<TokenSummaryRecord> ListTokensDetailed(string? userName)
+    {
+        string? key = userName?.ToLowerInvariant();
+        lock (_lock)
+        {
+            var users = key is null
+                ? _state.Users
+                : _state.Users.Where(u => u.Name == key);
+            var list = new List<TokenSummaryRecord>();
+            foreach (var u in users.OrderBy(u => u.Name, StringComparer.Ordinal))
+            {
+                foreach (var t in u.Tokens.OrderBy(t => t.CreatedAt))
+                {
+                    list.Add(new TokenSummaryRecord(
+                        t.Id,
+                        u.Name,
+                        DateTimeOffset.FromUnixTimeMilliseconds(t.CreatedAt).UtcDateTime,
+                        t.LastUsedAt is null
+                            ? null
+                            : DateTimeOffset.FromUnixTimeMilliseconds(t.LastUsedAt.Value).UtcDateTime));
+                }
+            }
+            return list;
+        }
+    }
+
+    /// <summary>
     /// 用 Bearer token 鉴权。命中则更新 LastUsedAt。
     /// </summary>
     /// <returns>true 命中并填充 <paramref name="user"/>；false 表示未知 token。</returns>
@@ -316,3 +367,14 @@ public sealed record UserSummaryRecord(
     bool IsSuperuser,
     DateTime CreatedUtc,
     int TokenCount);
+
+/// <summary>token 元数据（用于 SHOW TOKENS），永不含明文。</summary>
+/// <param name="TokenId">token 短 id。</param>
+/// <param name="UserName">所属用户名（小写）。</param>
+/// <param name="CreatedUtc">颁发时间（UTC）。</param>
+/// <param name="LastUsedUtc">最近一次使用时间（UTC），从未使用为 <c>null</c>。</param>
+public sealed record TokenSummaryRecord(
+    string TokenId,
+    string UserName,
+    DateTime CreatedUtc,
+    DateTime? LastUsedUtc);

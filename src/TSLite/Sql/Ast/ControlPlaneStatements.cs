@@ -75,3 +75,26 @@ public sealed record ShowGrantsStatement(string? UserName) : SqlStatement;
 /// <summary><c>SHOW DATABASES</c>：列出所有已注册数据库。返回列：<c>name</c>(string)。</summary>
 public sealed record ShowDatabasesStatement : SqlStatement;
 
+// PR #34b-3-tokens：API token 管理 SQL。
+
+/// <summary>
+/// <c>SHOW TOKENS [FOR &lt;user&gt;]</c>：列出全部 token 摘要或某用户的 token。
+/// 返回列：<c>token_id</c>(string)、<c>user_name</c>(string)、<c>created_utc</c>(string ISO-8601)、<c>last_used_utc</c>(string|null)。
+/// 仅返回元数据，永不返回明文。
+/// </summary>
+/// <param name="UserName">可选用户名筛选；<c>null</c> 表示列出全部。</param>
+public sealed record ShowTokensStatement(string? UserName) : SqlStatement;
+
+/// <summary>
+/// <c>ISSUE TOKEN FOR &lt;user&gt;</c>：为指定用户颁发一个新 token。
+/// 返回列：<c>token_id</c>(string)、<c>token</c>(string，明文，**仅此处一次性返回**)。
+/// </summary>
+/// <param name="UserName">目标用户名。</param>
+public sealed record IssueTokenStatement(string UserName) : SqlStatement;
+
+/// <summary>
+/// <c>REVOKE TOKEN '&lt;token_id&gt;'</c>：按 token id 吊销一个已颁发的 token。
+/// </summary>
+/// <param name="TokenId">token 短 ID（与 SHOW TOKENS 第一列一致）。</param>
+public sealed record RevokeTokenStatement(string TokenId) : SqlStatement;
+

@@ -85,6 +85,10 @@ public static class SqlExecutor
             ShowUsersStatement => ExecuteControlPlane(controlPlane, ShowUsers),
             ShowGrantsStatement showGrants => ExecuteControlPlane(controlPlane, cp => ShowGrants(cp, showGrants.UserName)),
             ShowDatabasesStatement => ExecuteControlPlane(controlPlane, ShowDatabases),
+            ShowTokensStatement showTokens => ExecuteControlPlane(controlPlane, cp => ShowTokens(cp, showTokens.UserName)),
+            IssueTokenStatement issueToken => ExecuteControlPlane(controlPlane, cp => IssueToken(cp, issueToken.UserName)),
+            RevokeTokenStatement revokeToken => ExecuteControlPlane(controlPlane,
+                cp => { cp.RevokeToken(revokeToken.TokenId); return (object)1; }),
             _ => throw new NotSupportedException(
                 $"SQL 语句类型 '{statement.GetType().Name}' 尚未实现。"),
         };
@@ -127,6 +131,35 @@ public static class SqlExecutor
         return new SelectExecutionResult(new[] { "name" }, rows);
     }
 
+    private static object ShowTokens(IControlPlane cp, string? userName)
+    {
+        var tokens = cp.ListTokens(userName);
+        var rows = new List<IReadOnlyList<object?>>(tokens.Count);
+        foreach (var t in tokens)
+        {
+            rows.Add(new object?[]
+            {
+                t.TokenId,
+                t.UserName,
+                t.CreatedUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+                t.LastUsedUtc?.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+            });
+        }
+        return new SelectExecutionResult(
+            new[] { "token_id", "user_name", "created_utc", "last_used_utc" },
+            rows);
+    }
+
+    private static object IssueToken(IControlPlane cp, string userName)
+    {
+        var (tokenId, plain) = cp.IssueToken(userName);
+        var rows = new List<IReadOnlyList<object?>>(1)
+        {
+            new object?[] { tokenId, plain },
+        };
+        return new SelectExecutionResult(new[] { "token_id", "token" }, rows);
+    }
+
     private static object ExecuteControlPlane(IControlPlane? controlPlane, Func<IControlPlane, object> action)
     {
         if (controlPlane is null)
@@ -161,6 +194,9 @@ public static class SqlExecutor
             ShowUsersStatement => ShowUsers(controlPlane),
             ShowGrantsStatement showGrants => ShowGrants(controlPlane, showGrants.UserName),
             ShowDatabasesStatement => ShowDatabases(controlPlane),
+            ShowTokensStatement showTokens => ShowTokens(controlPlane, showTokens.UserName),
+            IssueTokenStatement issueToken => IssueToken(controlPlane, issueToken.UserName),
+            RevokeTokenStatement revokeToken => Run(() => { controlPlane.RevokeToken(revokeToken.TokenId); return (object)1; }),
             _ => throw new NotSupportedException(
                 $"语句 '{statement.GetType().Name}' 不是控制面语句，请改走 /v1/db/{{db}}/sql。"),
         };

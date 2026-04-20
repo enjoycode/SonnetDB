@@ -190,4 +190,62 @@ public sealed class ControlPlaneParserTests
     {
         Assert.Throws<SqlParseException>(() => SqlParser.Parse(sql));
     }
+
+    // PR #34b-3-tokens：API token 管理 SQL。
+
+    [Fact]
+    public void Parse_ShowTokens_All()
+    {
+        var stmt = (ShowTokensStatement)SqlParser.Parse("SHOW TOKENS");
+        Assert.Null(stmt.UserName);
+    }
+
+    [Fact]
+    public void Parse_ShowTokens_ForUser()
+    {
+        var stmt = (ShowTokensStatement)SqlParser.Parse("SHOW TOKENS FOR alice");
+        Assert.Equal("alice", stmt.UserName);
+    }
+
+    [Fact]
+    public void Parse_IssueToken_ForUser()
+    {
+        var stmt = (IssueTokenStatement)SqlParser.Parse("ISSUE TOKEN FOR alice");
+        Assert.Equal("alice", stmt.UserName);
+    }
+
+    [Fact]
+    public void Parse_IssueToken_CaseInsensitive()
+    {
+        var stmt = (IssueTokenStatement)SqlParser.Parse("issue token for Bob");
+        Assert.Equal("Bob", stmt.UserName);
+    }
+
+    [Fact]
+    public void Parse_RevokeToken_ById()
+    {
+        var stmt = (RevokeTokenStatement)SqlParser.Parse("REVOKE TOKEN 'tok_abcdef'");
+        Assert.Equal("tok_abcdef", stmt.TokenId);
+    }
+
+    [Fact]
+    public void Parse_RevokeOnDatabase_StillWorks()
+    {
+        // 防回归：REVOKE ON DATABASE ... FROM ... 仍然解析为 RevokeStatement。
+        var stmt = (RevokeStatement)SqlParser.Parse("REVOKE ON DATABASE db1 FROM alice");
+        Assert.Equal("db1", stmt.Database);
+        Assert.Equal("alice", stmt.UserName);
+    }
+
+    [Theory]
+    [InlineData("SHOW TOKENS FOR")]
+    [InlineData("ISSUE")]
+    [InlineData("ISSUE TOKEN")]
+    [InlineData("ISSUE TOKEN FOR")]
+    [InlineData("REVOKE TOKEN")]
+    [InlineData("REVOKE TOKEN tok_abc")]
+    public void Parse_TokenStatements_BadGrammar_Throws(string sql)
+    {
+        Assert.Throws<SqlParseException>(() => SqlParser.Parse(sql));
+    }
 }
