@@ -6,6 +6,14 @@
 ## [Unreleased]
 
 ### Added
+- **PR #49（部分）：README 基准章节刷新**
+  - 「写入：100 万点（单序列）」表新增 PR #47 三条服务端 LP/JSON/Bulk 端点的实测数据（1.10–1.20 s / 34–71 MB），把服务端 vs 嵌入式的写入差距从 ~33.8×（SQL Batch 路径）收敛展示到 **~1.77–1.93×**（绕开 SQL parser 路径）。
+  - 「嵌入式 vs. TSLite.Server 同机对比」表把写入行拆分为 SQL Batch + LP + JSON + Bulk 四行，标注各自的额外开销与主要来源。
+  - 「批量入库快路径」段补充 PR #48 `?flush=` 三档位语义表（None / Async / Sync 与适用场景）。
+  - 「小结」最后一行更新为反映 PR #47/#48 后的写入收敛事实。
+  - 注：全量 `BulkIngestBenchmark` / `ServerInsertBenchmark` 的重跑（含 InfluxDB / TDengine schemaless LP 对照）作为后续事项保留，本 PR 仅做文档刷新，未引入代码与依赖变更。
+
+### Added
 - **PR #48：批量入库端点 Flush 三档位 `?flush=false|true|async`（写入快路径专题，第 3/4 步）**
   - `Tsdb` 新增 `public void SignalFlush()`：仅向 `BackgroundFlushWorker` 发信号后立即返回，不阻塞调用方；若未启用后台 Flush（`BackgroundFlush.Enabled = false`），降级为同步 `FlushNow()`，保证 `flush=async` 始终具备「最终一致」语义。
   - `BulkIngestor` 新增 `enum BulkFlushMode { None, Async, Sync }` 与新主重载 `Ingest(tsdb, reader, errorPolicy, BulkFlushMode flushMode)`；旧 `Ingest(..., bool flushOnComplete)` 重载保留，转发到新重载（`true → Sync` / `false → None`），向后兼容现有调用方。
@@ -24,6 +32,9 @@
   - `web/admin` 首页与管理后台头部新增“帮助”入口，直接打开 `/help/`。
 
 ### Changed
+- 文档：重写仓库 `README.md`，新增 `README.en.md`，并把根 README 调整为当前项目真实形态说明，移除“单文件持久化”与过时目标 API 描述。
+- 文档：扩展 `docs/` 帮助中心，新增嵌入式 API、ADO.NET、CLI、批量写入、架构总览页面，并重写首页、快速开始、数据模型、SQL 参考与文件布局说明。
+- 文档：修正文档中的实际磁盘布局描述，补充 `measurements.tslschema`、`.system/` 首次安装文件和 `/help` 内置文档站点说明。
 - **PR #47：服务端 + Reader 零拷贝（写入快路径专题，第 2/4 步）**
   - `BulkIngestEndpointHandler.ReadAllAsync` 改为返回 `(byte[] Buffer, int Length)`，统一走 `ArrayPool<byte>.Shared.Rent`：已知 `Content-Length` 时按精确长度租借，未知长度则 4KB 起步翻倍扩容；`finally` 必归还，避免大 payload 直入 LOH。
   - `JsonPointsReader` 字段重构为 `ReadOnlyMemory<byte> _utf8Memory + byte[]? _pooledBuffer`：`(ReadOnlyMemory<byte>)` ctor 直接零拷贝持有 caller buffer（原先需 `utf8Json.ToArray()` 全量复制）；`(string)` ctor 走 `ArrayPool<byte>.Shared.Rent` 转码后 Dispose 归还。

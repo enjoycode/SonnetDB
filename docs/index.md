@@ -1,55 +1,68 @@
 ---
 layout: default
-title: TSLite 文档中心
-description: 面向部署者、开发者和管理员的 TSLite 帮助文档，覆盖首次安装、SQL、文件布局和发布内容。
+title: "TSLite 文档中心"
+description: "TSLite 当前版本的产品、开发与部署文档总览，覆盖嵌入式、ADO.NET、CLI、服务端与批量写入。"
 permalink: /
 ---
 
-TSLite 是一个使用 C# / .NET 10 编写的嵌入式单文件时序数据库，同时提供了 `TSLite.Server` 作为 HTTP 服务形态。当前帮助中心围绕三条主线组织：
+TSLite 是一个基于 C# / .NET 10 的时序数据库项目，同时提供嵌入式引擎、ADO.NET 提供程序、CLI、HTTP 服务端、管理后台和内置帮助中心。
 
-- 首次安装与运维入口
-- 数据模型、SQL 和批量写入
-- 服务端发布、打包和文件布局
+当前版本的持久化方式是数据库目录中的多文件布局，不再以“单文件数据库”作为产品描述。文档中的示例、目录结构和启动方式都以当前仓库代码为准。
 
 <div class="hero-link-row">
   <a class="hero-link hero-link-primary" href="/admin/">打开管理界面</a>
-  <a class="hero-link hero-link-secondary" href="/help/getting-started/">阅读开始使用</a>
+  <a class="hero-link hero-link-secondary" href="/help/getting-started/">开始使用</a>
 </div>
 
 <div class="callout-grid">
   <section class="callout-card">
-    <strong>首次安装</strong>
-    <p>当数据目录下的 <code>.system</code> 为空时，访问 <code>/admin</code> 会进入首次安装向导，设置组织、服务器 ID、管理员账号和首个 Bearer Token。</p>
+    <strong>嵌入式优先</strong>
+    <p>可以直接在进程内打开数据库目录，使用 <code>Tsdb</code>、SQL 执行器或 ADO.NET 访问。</p>
   </section>
   <section class="callout-card">
-    <strong>统一管理</strong>
-    <p>安装完成后，继续在同一套后台里管理数据库、用户、授权、Token、SQL Console 和实时事件流。</p>
+    <strong>统一访问面</strong>
+    <p>本地嵌入式、远程 HTTP、CLI 和 ADO.NET 共享一套相近的 SQL 与连接方式。</p>
   </section>
   <section class="callout-card">
-    <strong>嵌入式内核</strong>
-    <p>核心库保持零第三方运行时依赖，存储布局由 catalog、WAL、segments 和 tombstone manifest 组成。</p>
+    <strong>服务端可运维</strong>
+    <p><code>TSLite.Server</code> 提供首次安装、用户授权、Token、SSE、帮助文档和管理后台。</p>
   </section>
 </div>
 
-## 快速入口
+## 从哪里开始
 
-| 主题 | 说明 |
+| 如果你要做什么 | 建议先看 |
 | --- | --- |
-| [开始使用](/help/getting-started/) | 首次安装、Docker 运行、登录和管理入口 |
-| [数据模型](/help/data-model/) | measurement、tags、fields、timestamp 与数据库层级 |
-| [SQL 参考](/help/sql-reference/) | `CREATE MEASUREMENT`、`INSERT`、`SELECT`、`DELETE`、批量写入 |
-| [文件格式](/help/file-format/) | `catalog.tslcat`、`wal/*.tslwal`、`segments/*.tslseg`、`.system/` |
-| [发布与打包](/help/releases/) | SDK Bundle、Server Bundle、安装包和默认启动信息 |
+| 启动 Docker 镜像、完成首次安装、打开后台 | [开始使用](/help/getting-started/) |
+| 了解 measurement、tag、field、time 和 series 的关系 | [数据模型](/help/data-model/) |
+| 编写 `CREATE/INSERT/SELECT/DELETE` 或控制面 SQL | [SQL 参考](/help/sql-reference/) |
+| 在进程内直接使用引擎 | [嵌入式与 in-proc API](/help/embedded-api/) |
+| 通过 ADO.NET 访问本地或远程实例 | [ADO.NET 参考](/help/ado-net/) |
+| 使用 `tslite` 命令行工具 | [CLI 参考](/help/cli-reference/) |
+| 走 Line Protocol、JSON 或批量 VALUES 快路径 | [批量写入](/help/bulk-ingest/) |
+| 了解当前组件关系与存储路径 | [架构总览](/help/architecture/) 和 [文件格式与目录布局](/help/file-format/) |
+| 查看发布产物与打包说明 | [发布与打包](/help/releases/) |
 
-## 当前服务形态
+## 当前产品形态
 
-TSLite 现在同时支持两种主要使用方式：
+TSLite 现在由四条主线组成：
 
-1. 作为进程内嵌入式数据库，通过 `TSLite` 与 `TSLite.Data` 接入。
-2. 作为 `TSLite.Server` 运行，通过 HTTP API、管理后台和 SSE 事件流对外提供能力。
+1. 嵌入式引擎 `TSLite`
+2. ADO.NET 提供程序 `TSLite.Data`
+3. CLI 工具 `TSLite.Cli`
+4. 服务端 `TSLite.Server`
 
-## 导航建议
+这几部分共享同一套底层存储格式和大部分 SQL 行为。服务端额外增加了：
 
-- 如果你正在第一次部署服务器，先看 [开始使用](/help/getting-started/)。
-- 如果你准备接入业务数据，接着看 [数据模型](/help/data-model/) 和 [SQL 参考](/help/sql-reference/)。
-- 如果你在排查存储结构、打包产物或迁移问题，再看 [文件格式](/help/file-format/) 与 [发布与打包](/help/releases/)。
+- 首次安装流程
+- 用户、授权、Token 管理
+- `/admin/` 管理界面
+- `/help/` 静态帮助中心
+- `/v1/events` SSE 事件流
+- `/healthz` 与 `/metrics`
+
+## 文档约定
+
+- 示例优先使用当前测试和包说明中已经验证过的写法。
+- 详细示例统一放在具体主题页，首页只保留导航和产品定位。
+- 如果代码行为与常见 TSDB 习惯不同，会在对应页面明确标注当前真实行为。

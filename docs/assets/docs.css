@@ -159,6 +159,10 @@ blockquote {
   gap: 14px;
 }
 
+.top-nav {
+  flex-wrap: wrap;
+}
+
 .top-nav a,
 .ghost-link,
 .side-nav a {
