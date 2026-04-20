@@ -13,16 +13,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue';
+import { computed, h, onMounted, ref, watch } from 'vue';
 import {
   NCard, NSpace, NInput, NButton, NAlert, NDataTable, NPopconfirm, NTag, useMessage,
   type DataTableColumns,
 } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
+import { useEventsStore } from '@/stores/events';
 import { execControlPlaneSql, isValidIdentifier } from '@/api/sql';
 import { listDatabases, loadSegmentCounts } from '@/api/server';
 
 const auth = useAuthStore();
+const events = useEventsStore();
 const message = useMessage();
 
 interface DbRow { name: string; segment_count: number; status: string }
@@ -96,4 +98,10 @@ async function onDrop(name: string): Promise<void> {
 }
 
 onMounted(reload);
+
+// SSE: db 事件触发刷新；metrics 帧覆盖 segment 数
+watch(() => events.dbEventBumper, () => { void reload(); });
+watch(() => events.metrics, (m) => {
+  if (m?.perDatabaseSegments) segmentCounts.value = { ...m.perDatabaseSegments };
+});
 </script>

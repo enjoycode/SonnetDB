@@ -4,6 +4,7 @@ import AppShell from '@/views/AppShell.vue';
 import DashboardView from '@/views/DashboardView.vue';
 import SqlConsoleView from '@/views/SqlConsoleView.vue';
 import DatabasesView from '@/views/DatabasesView.vue';
+import EventsView from '@/views/EventsView.vue';
 import UsersView from '@/views/UsersView.vue';
 import GrantsView from '@/views/GrantsView.vue';
 import TokensView from '@/views/TokensView.vue';
@@ -22,6 +23,7 @@ const router = createRouter({
         { path: 'dashboard', name: 'dashboard', component: DashboardView },
         { path: 'sql', name: 'sql', component: SqlConsoleView },
         { path: 'databases', name: 'databases', component: DatabasesView },
+        { path: 'events', name: 'events', component: EventsView },
         { path: 'users', name: 'users', component: UsersView, meta: { admin: true } },
         { path: 'grants', name: 'grants', component: GrantsView, meta: { admin: true } },
         { path: 'tokens', name: 'tokens', component: TokensView, meta: { admin: true } },

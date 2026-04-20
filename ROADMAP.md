@@ -140,7 +140,8 @@
 | #33 | 远端 ADO.NET 客户端 `TSLite.Data`：与 PR #28 共享 `TsdbConnectionStringBuilder`，通过 scheme（`tslite://` 本地、`tslite+http://` 远程）切换实现，结果集流式反序列化 | ✅ |
 | #34a | 服务端控制面：用户/权限存储 + SQL DDL（CREATE/ALTER/DROP USER、GRANT/REVOKE、CREATE/DROP DATABASE）+ `POST /v1/auth/login` 颁发动态 token + Bearer 中间件接入 `UserStore` | ✅ |
 | #34b | Vue3 管理后台（Naive UI）：登录页、数据库列表/状态、SQL 控制台、用户/权限/Token 管理 | ✅ |
-| #34c | 实时推送：基于 SSE 的指标 / 慢查询 / 数据库事件流，前端订阅自动刷新 | 📋 |
+| #34c | 实时推送：基于 SSE 的指标 / 慢查询 / 数据库事件流，前端订阅自动刷新 | ✅ |
+
 
 ---
 
@@ -148,12 +149,16 @@
 
 | PR | 主题 | 状态 |
 |----|------|------|
-| #35 | BenchmarkDotNet：写入 / 查询 / 聚合 / Compaction 基准 | � |
-| #36 | BenchmarkDotNet：通过docker支持 influxdb 等常见时序数据库进行测试， 支持 TSLite 嵌入式时序数据库模式的测试， 也要支持 服务器模式的性能测试 | 📋 |
-| #37 | 文档完善：`docs/getting-started.md` / `docs/data-model.md` / `docs/sql-reference.md` / `docs/file-format.md` | 📋 |
-| #38 | 发布 NuGet 包 `TSLite 0.1.0` + `.github/workflows/publish.yml` | 📋 |
+| #35 | BenchmarkDotNet：写入 / 查询 / 聚合 / Compaction 基准，编写评测 InfluxDB TDengine SQLite TSLite  TSLite.Server 等五个时序数据库的各项指标对比， 并连同机器性能都写在readme.md 里面。  | 📋|
+| #37 | 文档完善： `docs/getting-started.md` / `docs/data-model.md` / `docs/sql-reference.md` / `docs/file-format.md` 使用 jekllynet 构建github pages 文档， 编写readme.md ， 纠正过时的文件说明，把现在的功能和架构重新书写。 重新整理一遍。  | 📋 |
+| #38 | 发布 NuGet 包 `TSLite 0.1.0` + `.github/workflows/publish.yml` ， 打包生唱成一套包含 tslite 和 tslite.data tslite.cil 的版本，并包含他们的使用说明， 发布linux和 windows版本， 再打包 TSLite.Server  一套编写版， 包含全部内容，包含前端，TSLite.cil tslite.data 等  能够一键启动，不需要额外设置，即可启动。 windows和linux分别打包， 再打包 windows 和linux的可安装的 msi和 dep rpm的版本。 | 📋 |
 | #39 |  docker 服务端模式的镜像到 maikebing iotsharp组织， 编写ci 等能自动发布| 📋 |
 ---
+## Milestone 10 — 扩展和第三方
+| #40 |  实现cil的能力， 能够操作和打开本地文件， 可以连接tslite.server ， 评估是否考虑使用 TSLite.Data 来实现，或者是直接调用接口实现。 | 📋 |
+| #41 |  TSLite.Server 支持 订阅MQTT消息，通过后台管理来添加订阅。   | 📋 |
+
+
 
 ## 里程碑总览
 
@@ -167,10 +172,10 @@
 | 5 | 稳定性与性能（写入侧） | #17 ~ #21 | ✅ |
 | 6 | SQL 前端 + Tag 倒排索引 | #22 ~ #28 | ✅ |
 | 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | ✅ |
-| 8 | 服务器模式（HTTP + 远端 ADO + 控制面 + Vue3 后台 + SSE） | #32 ~ #34c | 🚧（#32/#33/#34a/#34b 已完成，#34c 进行中） |
+| 8 | 服务器模式（HTTP + 远端 ADO + 控制面 + Vue3 后台 + SSE） | #32 ~ #34c | ✅ |
 | 9 | 性能基准与发布 | #35 ~ #39 | �（#35 进行中） |
 
-**当前推进顺序**：PR #35（嵌入式基准） → PR #32 → PR #33 → PR #34a → PR #34b → PR #34c → PR #36 → PR #37 ~ #39。
+**当前推进顺序**：PR #35（嵌入式基准） → PR #36 → PR #37 ~ #39。
 
 ---
 

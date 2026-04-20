@@ -38,6 +38,8 @@
 | 时间聚合 | `min / max / sum / avg / count` + `GROUP BY time(10s)` 时间桶聚合 |
 | 压缩 | 时间戳 delta 编码、值列 delta/XOR 编码 |
 | 并发模型 | 单写多读（第一版） |
+| 服务器模式 | `TSLite.Server` AOT Minimal API + 内嵌 Vue3 管理后台 + 远端 ADO.NET |
+| 实时事件流 | `GET /v1/events` SSE 推送指标 / 慢查询 / 数据库事件，前端订阅自动刷新 |
 
 ---
 

@@ -52,11 +52,26 @@ public static class BearerAuthMiddleware
         }
 
         var header = context.Request.Headers.Authorization.ToString();
+        string token;
         if (string.IsNullOrEmpty(header) || !header.StartsWith("Bearer ", StringComparison.Ordinal))
         {
-            return StatusCodes.Status401Unauthorized;
+            // SSE 客户端 EventSource 无法自定义请求头；允许通过 ?access_token= 查询参数携带 token，
+            // 仅对 GET /v1/events 这一个端点开放，避免泄漏到日志的范围扩大。
+            if (path.Equals("/v1/events", StringComparison.Ordinal)
+                && context.Request.Query.TryGetValue("access_token", out var qsToken)
+                && !string.IsNullOrWhiteSpace(qsToken))
+            {
+                token = qsToken.ToString().Trim();
+            }
+            else
+            {
+                return StatusCodes.Status401Unauthorized;
+            }
         }
-        var token = header["Bearer ".Length..].Trim();
+        else
+        {
+            token = header["Bearer ".Length..].Trim();
+        }
         if (string.IsNullOrEmpty(token))
         {
             return StatusCodes.Status401Unauthorized;

@@ -92,13 +92,17 @@ public static class Program
 
         builder.Services.AddSingleton(serverOptions);
         builder.Services.AddSingleton<ServerMetrics>();
+        builder.Services.AddSingleton<EventBroadcaster>();
         builder.Services.AddSingleton(sp =>
         {
-            var registry = new TsdbRegistry(serverOptions.DataRoot);
+            var registry = new TsdbRegistry(serverOptions.DataRoot, sp.GetRequiredService<EventBroadcaster>());
             if (serverOptions.AutoLoadExistingDatabases)
                 registry.LoadExisting();
             return registry;
         });
+
+        // PR #34c：周期性指标快照后台服务
+        builder.Services.AddHostedService<MetricsTickService>();
 
         // PR #34a：用户 / 权限 / 控制面存储全局只实例。文件位于 <DataRoot>/.system/。
         var systemDirectory = Path.Combine(serverOptions.DataRoot, ".system");
@@ -205,7 +209,7 @@ public static class Program
                 return;
             }
             var role = BearerAuthMiddleware.GetRole(ctx);
-            await SqlEndpointHandler.HandleSingleAsync(ctx, tsdb, req, metrics,
+            await SqlEndpointHandler.HandleSingleAsync(ctx, tsdb, db, req, metrics,
                 BearerAuthMiddleware.CanWrite(role), BearerAuthMiddleware.IsAdmin(role), controlPlane).ConfigureAwait(false);
         });
 
@@ -220,7 +224,7 @@ public static class Program
                 return;
             }
             var role = BearerAuthMiddleware.GetRole(ctx);
-            await SqlEndpointHandler.HandleBatchAsync(ctx, tsdb, req, metrics,
+            await SqlEndpointHandler.HandleBatchAsync(ctx, tsdb, db, req, metrics,
                 BearerAuthMiddleware.CanWrite(role), BearerAuthMiddleware.IsAdmin(role), controlPlane).ConfigureAwait(false);
         });
 
@@ -264,6 +268,13 @@ public static class Program
             ctx.Response.ContentType = "application/json; charset=utf-8";
             await JsonSerializer.SerializeAsync(ctx.Response.Body, resp, ServerJsonContext.Default.LoginResponse).ConfigureAwait(false);
         }));
+
+        // ---- SSE：实时事件流（指标 / 慢查询 / 数据库事件）----
+        var broadcaster = app.Services.GetRequiredService<EventBroadcaster>();
+        app.MapGet("/v1/events", async (HttpContext ctx) =>
+        {
+            await SseEndpointHandler.HandleAsync(ctx, broadcaster).ConfigureAwait(false);
+        });
     }
 
     private static bool TryResolveDatabase(HttpContext ctx, TsdbRegistry registry, string db, out Engine.Tsdb tsdb)

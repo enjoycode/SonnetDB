@@ -24,6 +24,17 @@ public sealed class ServerOptions
     /// 是否对 <c>/healthz</c> 与 <c>/metrics</c> 端点豁免认证。默认 <c>true</c>。
     /// </summary>
     public bool AllowAnonymousProbes { get; set; } = true;
+
+    /// <summary>
+    /// 慢查询阈值（毫秒）。单条 SQL 实际耗时超过该值会通过 SSE
+    /// <c>/v1/events</c> 广播 <c>slow_query</c> 事件。默认 <c>500</c>。
+    /// </summary>
+    public int SlowQueryThresholdMs { get; set; } = 500;
+
+    /// <summary>
+    /// SSE <c>metrics</c> 通道的快照推送周期（秒）。默认 <c>5</c>。
+    /// </summary>
+    public int MetricsTickSeconds { get; set; } = 5;
 }
 
 /// <summary>

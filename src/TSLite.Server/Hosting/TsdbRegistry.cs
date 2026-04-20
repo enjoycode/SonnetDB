@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using TSLite.Engine;
+using TSLite.Server.Contracts;
+using TSLite.Server.Endpoints;
 
 namespace TSLite.Server.Hosting;
 
@@ -20,15 +22,19 @@ public sealed partial class TsdbRegistry : IDisposable
     private readonly ConcurrentDictionary<string, Tsdb> _databases = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _sync = new();
     private readonly string _dataRoot;
+    private readonly EventBroadcaster? _broadcaster;
     private bool _disposed;
 
     /// <summary>
     /// 构造注册表。<paramref name="dataRoot"/> 为所有数据库的父目录。
     /// </summary>
-    public TsdbRegistry(string dataRoot)
+    /// <param name="dataRoot">数据库根目录。</param>
+    /// <param name="broadcaster">可选事件广播器；非 null 时 Create/Drop 会广播 <c>db</c> 事件。</param>
+    public TsdbRegistry(string dataRoot, EventBroadcaster? broadcaster = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dataRoot);
         _dataRoot = Path.GetFullPath(dataRoot);
+        _broadcaster = broadcaster;
         Directory.CreateDirectory(_dataRoot);
     }
 
@@ -94,6 +100,8 @@ public sealed partial class TsdbRegistry : IDisposable
             var instance = Tsdb.Open(new TsdbOptions { RootDirectory = path });
             _databases[name] = instance;
             tsdb = instance;
+            _broadcaster?.Publish(ServerEventFactory.Database(
+                new DatabaseEvent(name, DatabaseEvent.ActionCreated)));
             return true;
         }
     }
@@ -138,6 +146,8 @@ public sealed partial class TsdbRegistry : IDisposable
             {
                 // best-effort：句柄可能仍被异步 worker 持有，等下次重启清理
             }
+            _broadcaster?.Publish(ServerEventFactory.Database(
+                new DatabaseEvent(name, DatabaseEvent.ActionDropped)));
             return true;
         }
     }

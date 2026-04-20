@@ -6,6 +6,22 @@
 ## [Unreleased]
 
 ### Added
+- **TSLite.Server 实时事件流：SSE + 前端订阅自动刷新（PR #34c）**
+  - 服务端新增 `src/TSLite.Server/Hosting/EventBroadcaster.cs`：基于 `System.Threading.Channels` 的多路广播器（`BoundedChannel` + `FullMode.DropOldest`，容量 64），按通道 `metrics` / `slow_query` / `db` 过滤订阅，慢消费者自动丢最旧帧不阻塞 publish。
+  - 新增 `src/TSLite.Server/Endpoints/SseEndpointHandler.cs`：实现 `GET /v1/events`，响应 `text/event-stream`，禁用 buffering（`X-Accel-Buffering: no`），按 SSE 帧格式输出 `event:` + `id:` + `data:` 三行；30 秒空闲发 `: heartbeat` 注释行心跳；支持 `?stream=metrics,slow_query,db` 通道筛选；连接建立先发 `hello` 帧。
+  - 新增 `src/TSLite.Server/Hosting/MetricsTickService.cs`：`BackgroundService` + `PeriodicTimer`，按 `MetricsTickSeconds`（默认 5s）周期生成 `MetricsSnapshotEvent`（含数据库数 / 用户数 / 订阅者数 / 各库 segment 计数），仅在有订阅者时构造 + 推送，避免无人订阅时空转。
+  - 新增 `src/TSLite.Server/Contracts/Events.cs`：`ServerEvent` / `MetricsSnapshotEvent` / `SlowQueryEvent` / `DatabaseEvent` DTO（DTO 入 `ServerJsonContext` source-gen 满足 AOT），通道常量 `ChannelMetrics` / `ChannelSlowQuery` / `ChannelDatabase`。
+  - `Configuration/ServerOptions.cs` 新增 `SlowQueryThresholdMs`（默认 500ms）/ `MetricsTickSeconds`（默认 5s）。
+  - `Endpoints/SqlEndpointHandler.cs`：`HandleSingleAsync` / `HandleBatchAsync` 增加 `string databaseName` 参数；新增 `MaybePublishSlow` helper 在所有路径（成功 / 失败 / 控制面 / 单条 / 批量）统计耗时，超阈值即广播 `SlowQueryEvent`（控制面用 `__control` 标签，SQL 截断到 1024 字节）。
+  - `Hosting/TsdbRegistry.cs`：构造器接受 `EventBroadcaster?`，`TryCreate` / `Drop` 成功后广播 `DatabaseEvent`（`created` / `dropped`）。
+  - `Auth/BearerAuthMiddleware.cs`：当请求路径是 `/v1/events` 且无 `Authorization` 头时，从 `?access_token=<tok>` query 取 token，因为浏览器 `EventSource` API 无法发自定义 header。
+  - 前端新增 `web/admin/src/api/events.ts`：`subscribeServerEvents(token, opts)` 封装 `EventSource`，挂载 `hello` / `metrics` / `slow_query` / `db` 监听并把 401 / `EventSource.CLOSED` 标记为 `unauthorized` 状态，返回关闭函数。
+  - 前端新增 `web/admin/src/stores/events.ts`：Pinia store，缓冲最近 100 条慢查询 + 100 条 db 事件，维护 `dbEventBumper` 计数信号 + 当前 `metrics` 快照，监听 `auth.isAuthenticated` 自动 connect / disconnect。
+  - 前端新增 `web/admin/src/views/EventsView.vue`：实时指标 grid（8 个 statistic）+ 慢查询表（带成功/失败 tag）+ 数据库事件表（带 created/dropped tag）。
+  - `views/AppShell.vue` 顶栏增加 SSE 状态指示（n-tag + 状态点 CSS）+ 新增「事件流」菜单项；`router/index.ts` 注册 `/admin/events` 路由。
+  - `views/DashboardView.vue` / `views/DatabasesView.vue` 各 `watch(() => events.dbEventBumper, reload)` + `watch(() => events.metrics, ...)`，CREATE/DROP DATABASE 在所有打开的客户端无需手动刷新即可即时同步；Dashboard 的 segment 计数也由 metrics 帧覆盖。
+  - 测试：新增 `tests/TSLite.Server.Tests/SseEndToEndTests.cs` 端到端覆盖：401 拒绝匿名访问、`?access_token=` query 鉴权通过、收到 `hello` → CREATE → `db.created` → 触发 SQL → `slow_query`（阈值压到 0）→ 周期性 `metrics`（tick 设 1s）→ DROP → `db.dropped` 完整链路。
+  - `web/admin/tsconfig.json` 把 `ignoreDeprecations` 从 `"6.0"` 调整为 `"5.0"`，使本地 TypeScript 5.6.x 可继续构建；语义不变（仍是抑制 `baseUrl` 废弃告警）。
 - **TSLite Admin Vue3 管理后台完成（PR #34b）**
   - `web/admin/`：Vite + Vue 3 + TypeScript + Naive UI + Pinia + Vue Router 单页应用，完整涵盖登录页、数据库列表/状态、SQL 控制台、用户/权限/Token 管理七个视图：
     - `LoginView.vue`：Bearer token 登录，结果存 localStorage，axios 拦截器自动注入 `Authorization: Bearer`。

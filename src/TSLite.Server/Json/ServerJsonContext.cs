@@ -25,4 +25,7 @@ namespace TSLite.Server.Json;
 [JsonSerializable(typeof(HealthResponse))]
 [JsonSerializable(typeof(LoginRequest))]
 [JsonSerializable(typeof(LoginResponse))]
+[JsonSerializable(typeof(MetricsSnapshotEvent))]
+[JsonSerializable(typeof(SlowQueryEvent))]
+[JsonSerializable(typeof(DatabaseEvent))]
 internal sealed partial class ServerJsonContext : JsonSerializerContext;

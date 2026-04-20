@@ -31,11 +31,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue';
+import { computed, h, onMounted, ref, watch } from 'vue';
 import {
   NCard, NGrid, NGi, NStatistic, NDataTable, NAlert, NTag, type DataTableColumns,
 } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
+import { useEventsStore } from '@/stores/events';
 import { execControlPlaneSql, rowsToObjects } from '@/api/sql';
 import { listDatabases, loadSegmentCounts } from '@/api/server';
 
@@ -44,6 +45,7 @@ interface GrantRow { user_name: string; database: string; permission: string; [k
 interface DbRow { name: string; segment_count: number; status: string }
 
 const auth = useAuthStore();
+const events = useEventsStore();
 
 const databases = ref<string[]>([]);
 const users = ref<UserRow[]>([]);
@@ -100,4 +102,11 @@ async function loadAll(): Promise<void> {
 }
 
 onMounted(loadAll);
+
+// SSE: 数据库 CREATE/DROP 事件触发后台静默重载
+watch(() => events.dbEventBumper, () => { void loadAll(); });
+// SSE: 周期性 metrics 帧到达时直接覆盖各 db 的 segment 数（避免每 5 秒扫一次 /metrics 文本）
+watch(() => events.metrics, (m) => {
+  if (m?.perDatabaseSegments) segmentCounts.value = { ...m.perDatabaseSegments };
+});
 </script>
