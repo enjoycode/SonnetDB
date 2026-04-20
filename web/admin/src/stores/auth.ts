@@ -10,16 +10,19 @@ export const useAuthStore = defineStore('auth', () => {
   const username = computed(() => state.value?.username ?? '');
   const isSuperuser = computed(() => state.value?.isSuperuser ?? false);
 
+  function apply(nextState: AuthState | null): void {
+    state.value = nextState;
+    persistAuth(nextState);
+  }
+
   async function login(username: string, password: string): Promise<void> {
     const resp = await api.post<AuthState>('/v1/auth/login', { username, password });
-    state.value = resp.data;
-    persistAuth(state.value);
+    apply(resp.data);
   }
 
   function logout(): void {
-    state.value = null;
-    persistAuth(null);
+    apply(null);
   }
 
-  return { state, api, isAuthenticated, username, isSuperuser, login, logout };
+  return { state, api, isAuthenticated, username, isSuperuser, apply, login, logout };
 });

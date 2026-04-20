@@ -65,3 +65,25 @@ public sealed class GrantRecord
     [JsonConverter(typeof(JsonStringEnumConverter<DatabasePermission>))]
     public DatabasePermission Permission { get; set; }
 }
+
+/// <summary>installation.json 顶层结构。</summary>
+public sealed class InstallationFile
+{
+    /// <summary>结构版本号。</summary>
+    public int Version { get; set; } = 1;
+
+    /// <summary>当前服务器标识。</summary>
+    public string ServerId { get; set; } = string.Empty;
+
+    /// <summary>所属组织名称。</summary>
+    public string Organization { get; set; } = string.Empty;
+
+    /// <summary>初始管理员用户名（小写）。</summary>
+    public string AdminUserName { get; set; } = string.Empty;
+
+    /// <summary>初始 Bearer Token 的 token id。</summary>
+    public string InitialTokenId { get; set; } = string.Empty;
+
+    /// <summary>初始化完成时间（Unix 毫秒）。</summary>
+    public long InitializedAt { get; set; }
+}

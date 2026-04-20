@@ -12,4 +12,5 @@ namespace TSLite.Server.Auth;
     WriteIndented = true)]
 [JsonSerializable(typeof(UserFile))]
 [JsonSerializable(typeof(GrantsFile))]
+[JsonSerializable(typeof(InstallationFile))]
 internal sealed partial class AuthJsonContext : JsonSerializerContext;

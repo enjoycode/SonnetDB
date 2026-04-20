@@ -309,6 +309,23 @@ TSLite/
 | 范围查询（10 万行） | 9.02 ms | 92.83 ms | ~10.3× | ndjson 序列化 + 流式网络传输 |
 | 1 分钟桶聚合（~16,667 行） | 40.38 ms | 79.89 ms | ~1.98× | 服务端聚合后小结果集，开销最低 |
 
+### 批量入库快路径（PR #45）
+
+针对上表 33.8× 写入开销的瓶颈（HTTP 往返 + INSERT SQL 解析），新增的「绕开 SQL parser」批量入库路径直接消费已序列化好的 payload。在嵌入式模式下对同一份 100,000 点工作负载（`measurement=sensor_data`，`host` Tag、`value` Float Field、ms 精度）做了 4 路对比：
+
+| 路径 | 协议/接口 | Mean | 内存分配 | 相对 SQL VALUES |
+|------|-----------|-----:|---------:|---------------:|
+| **SQL `INSERT VALUES`**（baseline，100 行/条 × 1 000 条） | `SqlParser` + `SqlExecutor.ExecuteInsert` | 170.2 ms | 224.07 MB | **1.00×** |
+| **TableDirect Line Protocol** | `LineProtocolReader` → `BulkIngestor.Ingest` | 166.5 ms | 130.65 MB | 0.98× / 0.58× alloc |
+| **TableDirect JSON** | `JsonPointsReader` → `BulkIngestor.Ingest` | 199.5 ms | 167.23 MB | 1.17× / 0.75× alloc |
+| **TableDirect Bulk VALUES** | `SchemaBoundBulkValuesReader` → `BulkIngestor.Ingest` | 187.8 ms | 129.89 MB | 1.10× / 0.58× alloc |
+
+> 测试条件：`InvocationCount=1, IterationCount=5, RunStrategy=Monitoring`；baseline 已经把 100 行合并为 1 条 INSERT，因此 SQL parser 开销已被摊薄。
+> 真实业务里若使用「单行 INSERT × N 次」，差距会进一步拉开（详见 [tests/TSLite.Benchmarks/Benchmarks/BulkIngestBenchmark.cs](tests/TSLite.Benchmarks/Benchmarks/BulkIngestBenchmark.cs)）。
+> 内存维度上，三条 TableDirect 快路径相比 baseline 节省 **42% ~ 25%** 分配，主要省下 SQL AST 节点 + 字符串化值表达式。
+>
+> 服务端三个对应端点 `POST /v1/db/{db}/measurements/{m}/{lp|json|bulk}`（PR #44）已在 [tests/TSLite.Benchmarks/Benchmarks/ServerBenchmark.cs](tests/TSLite.Benchmarks/Benchmarks/ServerBenchmark.cs) 中加入对应基准方法（`TSLiteServer_BulkLp_1M / BulkJson_1M / BulkValues_1M`），需启动 `tslite-server` 容器后运行 `dotnet run -c Release --project tests/TSLite.Benchmarks -- --filter '*ServerInsertBenchmark*'` 复现。
+
 ### 小结
 
 在本机配置下：

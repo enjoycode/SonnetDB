@@ -42,6 +42,9 @@ public class ServerInsertBenchmark
     private const int BatchSize = 2_000;
 
     private BenchmarkDataPoint[] _dataPoints = [];
+    private string _lpPayload = string.Empty;
+    private string _jsonPayload = string.Empty;
+    private string _bulkValuesPayload = string.Empty;
     private HttpClient? _http;
     private bool _serverAvailable;
 
@@ -50,6 +53,37 @@ public class ServerInsertBenchmark
     public async Task GlobalSetup()
     {
         _dataPoints = DataGenerator.Generate(DataPointCount);
+
+        // ── 预先生成 LP / JSON / Bulk VALUES payload，避免迭代内计入字符串拼接耗时 ──
+        var lp = new StringBuilder(capacity: DataPointCount * 50);
+        for (int i = 0; i < _dataPoints.Length; i++)
+        {
+            var dp = _dataPoints[i];
+            lp.Append(CultureInfo.InvariantCulture, $"sensor_data,host={dp.Host} value={dp.Value:F4} {dp.Timestamp}\n");
+        }
+        _lpPayload = lp.ToString();
+
+        var json = new StringBuilder(capacity: DataPointCount * 80);
+        json.Append("{\"m\":\"sensor_data\",\"points\":[");
+        for (int i = 0; i < _dataPoints.Length; i++)
+        {
+            if (i > 0) json.Append(',');
+            var dp = _dataPoints[i];
+            json.Append(CultureInfo.InvariantCulture,
+                $"{{\"t\":{dp.Timestamp},\"tags\":{{\"host\":\"{dp.Host}\"}},\"fields\":{{\"value\":{dp.Value:F4}}}}}");
+        }
+        json.Append("]}");
+        _jsonPayload = json.ToString();
+
+        var bulk = new StringBuilder(capacity: 64 + DataPointCount * 48);
+        bulk.Append("INSERT INTO sensor_data(host, value, time) VALUES ");
+        for (int i = 0; i < _dataPoints.Length; i++)
+        {
+            if (i > 0) bulk.Append(',');
+            var dp = _dataPoints[i];
+            bulk.Append(CultureInfo.InvariantCulture, $"('{dp.Host}',{dp.Value:F4},{dp.Timestamp})");
+        }
+        _bulkValuesPayload = bulk.ToString();
 
         _http = new HttpClient { BaseAddress = new Uri(ServerUrl) };
         _http.DefaultRequestHeaders.Authorization =
@@ -132,6 +166,54 @@ public class ServerInsertBenchmark
                 $"/v1/db/{DbName}/sql/batch", content).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
         }
+    }
+
+    /// <summary>TSLite.Server 写入 100 万条（POST /measurements/{m}/lp，绕开 SQL parser）。</summary>
+    [Benchmark(Description = "TSLite Server LP 写入 100万条")]
+    public async Task TSLiteServer_BulkLp_1M()
+    {
+        if (!_serverAvailable)
+        {
+            Console.Error.WriteLine("[SKIP] TSLite.Server 不可用");
+            return;
+        }
+
+        using var content = new StringContent(_lpPayload, Encoding.UTF8, "text/plain");
+        using var resp = await _http!.PostAsync(
+            $"/v1/db/{DbName}/measurements/sensor_data/lp?flush=true", content).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>TSLite.Server 写入 100 万条（POST /measurements/{m}/json，绕开 SQL parser）。</summary>
+    [Benchmark(Description = "TSLite Server JSON 写入 100万条")]
+    public async Task TSLiteServer_BulkJson_1M()
+    {
+        if (!_serverAvailable)
+        {
+            Console.Error.WriteLine("[SKIP] TSLite.Server 不可用");
+            return;
+        }
+
+        using var content = new StringContent(_jsonPayload, Encoding.UTF8, "application/json");
+        using var resp = await _http!.PostAsync(
+            $"/v1/db/{DbName}/measurements/sensor_data/json?flush=true", content).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>TSLite.Server 写入 100 万条（POST /measurements/{m}/bulk，仍走 VALUES 语法但绕开 SQL parser）。</summary>
+    [Benchmark(Description = "TSLite Server Bulk VALUES 写入 100万条")]
+    public async Task TSLiteServer_BulkValues_1M()
+    {
+        if (!_serverAvailable)
+        {
+            Console.Error.WriteLine("[SKIP] TSLite.Server 不可用");
+            return;
+        }
+
+        using var content = new StringContent(_bulkValuesPayload, Encoding.UTF8, "text/plain");
+        using var resp = await _http!.PostAsync(
+            $"/v1/db/{DbName}/measurements/sensor_data/bulk?flush=true", content).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
     }
 
     /// <summary>全局清理。</summary>

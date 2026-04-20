@@ -1,4 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
+import WelcomeView from '@/views/WelcomeView.vue';
+import SetupView from '@/views/SetupView.vue';
 import LoginView from '@/views/LoginView.vue';
 import AppShell from '@/views/AppShell.vue';
 import DashboardView from '@/views/DashboardView.vue';
@@ -9,16 +11,19 @@ import UsersView from '@/views/UsersView.vue';
 import GrantsView from '@/views/GrantsView.vue';
 import TokensView from '@/views/TokensView.vue';
 import { useAuthStore } from '@/stores/auth';
+import { useSetupStore } from '@/stores/setup';
 
 const router = createRouter({
-  // 服务端把 SPA 挂载在 /admin/ 前缀下，统一用 createWebHistory('/admin/')。
   history: createWebHistory('/admin/'),
   routes: [
+    { path: '/', name: 'home', component: WelcomeView, meta: { anon: true } },
+    { path: '/setup', name: 'setup', component: SetupView, meta: { anon: true } },
     { path: '/login', name: 'login', component: LoginView, meta: { anon: true } },
     {
-      path: '/',
+      path: '/app',
       component: AppShell,
-      redirect: '/dashboard',
+      meta: { app: true },
+      redirect: '/app/dashboard',
       children: [
         { path: 'dashboard', name: 'dashboard', component: DashboardView },
         { path: 'sql', name: 'sql', component: SqlConsoleView },
@@ -32,15 +37,43 @@ const router = createRouter({
   ],
 });
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore();
-  if (to.meta.anon) return true;
-  if (!auth.isAuthenticated) {
+  const setup = useSetupStore();
+
+  try {
+    await setup.ensureLoaded();
+  } catch {
+    if (to.meta.app) {
+      return { name: 'home' };
+    }
+    return true;
+  }
+
+  if (setup.needsSetup) {
+    auth.apply(null);
+    if (to.name === 'home' || to.name === 'setup') {
+      return true;
+    }
+    return { name: 'setup' };
+  }
+
+  if (to.name === 'setup') {
+    return auth.isAuthenticated ? { name: 'dashboard' } : { name: 'login' };
+  }
+
+  if (to.name === 'login' && auth.isAuthenticated) {
+    return { name: 'dashboard' };
+  }
+
+  if (to.meta.app && !auth.isAuthenticated) {
     return { name: 'login', query: { redirect: to.fullPath } };
   }
+
   if (to.meta.admin && !auth.isSuperuser) {
     return { name: 'dashboard' };
   }
+
   return true;
 });
 

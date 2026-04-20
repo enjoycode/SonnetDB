@@ -121,3 +121,52 @@ public sealed record LoginRequest(string Username, string Password);
 /// <param name="TokenId">token 标识符（如 <c>tok_abcdef</c>）。</param>
 /// <param name="IsSuperuser">是否为超级用户。</param>
 public sealed record LoginResponse(string Username, string Token, string TokenId, bool IsSuperuser);
+
+/// <summary>
+/// <c>GET /v1/setup/status</c> 返回的安装状态。
+/// </summary>
+/// <param name="NeedsSetup">是否需要首次安装。</param>
+/// <param name="SuggestedServerId">首次安装时推荐的服务器 ID。</param>
+/// <param name="ServerId">当前已配置的服务器 ID。</param>
+/// <param name="Organization">当前已配置的组织名称。</param>
+/// <param name="UserCount">当前用户数。</param>
+/// <param name="DatabaseCount">当前数据库数。</param>
+public sealed record SetupStatusResponse(
+    bool NeedsSetup,
+    string SuggestedServerId,
+    string? ServerId,
+    string? Organization,
+    int UserCount,
+    int DatabaseCount);
+
+/// <summary>
+/// <c>POST /v1/setup/initialize</c> 的请求体。
+/// </summary>
+/// <param name="ServerId">当前服务器 ID。</param>
+/// <param name="Organization">所属组织名称。</param>
+/// <param name="Username">初始管理员用户名。</param>
+/// <param name="Password">初始管理员密码。</param>
+/// <param name="BearerToken">初始管理员 Bearer Token 明文。</param>
+public sealed record SetupInitializeRequest(
+    string ServerId,
+    string Organization,
+    string Username,
+    string Password,
+    string BearerToken);
+
+/// <summary>
+/// 首次安装成功响应。返回服务器身份信息以及可直接登录的管理员凭据。
+/// </summary>
+/// <param name="ServerId">当前服务器 ID。</param>
+/// <param name="Organization">所属组织名称。</param>
+/// <param name="Username">管理员用户名。</param>
+/// <param name="Token">管理员 Bearer Token 明文。</param>
+/// <param name="TokenId">管理员 Bearer Token 的 token id。</param>
+/// <param name="IsSuperuser">是否超级用户。</param>
+public sealed record SetupInitializeResponse(
+    string ServerId,
+    string Organization,
+    string Username,
+    string Token,
+    string TokenId,
+    bool IsSuperuser);

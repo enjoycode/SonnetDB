@@ -6,6 +6,22 @@
 ## [Unreleased]
 
 ### Added
+- **TSLite.Server 首次安装向导 + 产品首页（未编号）**
+  - 新增 `GET /v1/setup/status` 与 `POST /v1/setup/initialize`，当 `<DataRoot>/.system` 未完成初始化时返回首次安装状态，并支持一次性写入服务器 ID、组织、管理员用户名密码与初始 Bearer Token。
+  - 新增 `installation.json` 持久化安装元数据；初始 Bearer Token 作为受管用户 token 持久化，后续与现有登录/鉴权体系保持一致。
+  - `web/admin` 重构为“产品首页 / 首次安装向导 / 管理后台”三段式路由，新增品牌 logo、帮助导航和首次安装引导页，避免空 `.system` 时直接落到不可登录后台。
+- **PR #45：批量入库基准（绕开 SQL 解析的快路径，第 4/4 步）**
+  - 新增 `tests/TSLite.Benchmarks/Benchmarks/BulkIngestBenchmark.cs`：嵌入式 100 000 点 4 路对比。
+    - **baseline**：`SQL INSERT VALUES`（100 行/条 × 1 000 条）走 `SqlParser` + `SqlExecutor.ExecuteInsert` 流水线。
+    - **TableDirect Line Protocol**：`LineProtocolReader` + `BulkIngestor.Ingest`。
+    - **TableDirect JSON**：`JsonPointsReader` + `BulkIngestor.Ingest`。
+    - **TableDirect Bulk VALUES**：`SchemaBoundBulkValuesReader` + `BulkIngestor.Ingest`。
+    - 初次运行结果：同量级吞吐，但 LP / Bulk VALUES 内存分配仅为 baseline 的 ~58%，JSON ~75%。
+  - `tests/TSLite.Benchmarks/Benchmarks/ServerBenchmark.cs::ServerInsertBenchmark` 增加 3 个服务端基准方法：
+    - `TSLiteServer_BulkLp_1M` / `TSLiteServer_BulkJson_1M` / `TSLiteServer_BulkValues_1M`，均走 PR #44 新端点 `POST /v1/db/{db}/measurements/{m}/{lp\|json\|bulk}?flush=true`，与原有的 `TSLiteServer_Insert_1M`（`/sql/batch` SQL 路径）同列对比。
+    - LP / JSON / Bulk payload 均在 `[GlobalSetup]` 预生成，不计入迭代耗时；value 统一 `:F4` 格式化避免被 parser 当作 Int64、与 measurement schema (`Float64`) 类型冲突。
+  - README 「性能基准」节新增「批量入库快路径（PR #45）」子节：收录 4 路嵌入式对比表与服务端复现命令。
+
 - **PR #44：服务端三端点 + 远程 ADO 客户端打通批量入库（绕开 SQL 解析的快路径，第 3/4 步）**
   - 服务端新增三个端点：
     - `POST /v1/db/{db}/measurements/{m}/lp` —— Line Protocol（`text/plain`）。

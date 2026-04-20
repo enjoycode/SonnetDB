@@ -109,6 +109,7 @@ public static class Program
         Directory.CreateDirectory(systemDirectory);
         builder.Services.AddSingleton(_ => new UserStore(systemDirectory));
         builder.Services.AddSingleton(_ => new GrantsStore(systemDirectory));
+        builder.Services.AddSingleton(_ => new InstallationStore(systemDirectory));
         builder.Services.AddSingleton<TSLite.Sql.Execution.IControlPlane>(sp =>
             new ControlPlane(
                 sp.GetRequiredService<UserStore>(),
@@ -143,6 +144,7 @@ public static class Program
     {
         var registry = app.Services.GetRequiredService<TsdbRegistry>();
         var metrics = app.Services.GetRequiredService<ServerMetrics>();
+        var installation = app.Services.GetRequiredService<InstallationStore>();
 
         // ---- Admin SPA（嵌入式静态资源；匿名可读，所有管理动作都走 SQL 端点）----
         app.MapAdminUi();
@@ -159,6 +161,72 @@ public static class Program
             ctx.Response.ContentType = "text/plain; version=0.0.4; charset=utf-8";
             return ctx.Response.WriteAsync(PrometheusFormatter.Render(metrics, registry));
         });
+
+        // ---- 首次安装 ----
+        app.MapGet("/v1/setup/status", () =>
+        {
+            var users = app.Services.GetRequiredService<UserStore>();
+            var status = installation.GetStatus(users.Count, registry.Count);
+            var resp = new SetupStatusResponse(
+                status.NeedsSetup,
+                status.SuggestedServerId,
+                status.ServerId,
+                status.Organization,
+                status.UserCount,
+                status.DatabaseCount);
+            return Results.Json(resp, ServerJsonContext.Default.SetupStatusResponse);
+        });
+
+        app.MapMethods("/v1/setup/initialize", new[] { "POST" }, (RequestDelegate)(async ctx =>
+        {
+            var users = app.Services.GetRequiredService<UserStore>();
+            var status = installation.GetStatus(users.Count, registry.Count);
+            if (!status.NeedsSetup)
+            {
+                await WriteSimpleErrorAsync(ctx, StatusCodes.Status409Conflict, "already_initialized", "TSLite Server 已完成首次安装。").ConfigureAwait(false);
+                return;
+            }
+
+            var req = await ReadJsonAsync(ctx, ServerJsonContext.Default.SetupInitializeRequest).ConfigureAwait(false);
+            if (req is null)
+            {
+                await WriteSimpleErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体不能为空。").ConfigureAwait(false);
+                return;
+            }
+
+            try
+            {
+                users.CreateUser(req.Username, req.Password, isSuperuser: true);
+                var tokenId = users.ImportToken(req.Username, req.BearerToken);
+                var bootstrap = installation.CompleteInitialization(
+                    req.ServerId,
+                    req.Organization,
+                    req.Username,
+                    tokenId,
+                    users.Count,
+                    registry.Count);
+
+                var resp = new SetupInitializeResponse(
+                    bootstrap.ServerId,
+                    bootstrap.Organization,
+                    bootstrap.AdminUserName,
+                    req.BearerToken.Trim(),
+                    bootstrap.InitialTokenId,
+                    IsSuperuser: true);
+
+                ctx.Response.StatusCode = StatusCodes.Status201Created;
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                await JsonSerializer.SerializeAsync(ctx.Response.Body, resp, ServerJsonContext.Default.SetupInitializeResponse).ConfigureAwait(false);
+            }
+            catch (ArgumentException ex)
+            {
+                await WriteSimpleErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", ex.Message).ConfigureAwait(false);
+            }
+            catch (InvalidOperationException ex)
+            {
+                await WriteSimpleErrorAsync(ctx, StatusCodes.Status409Conflict, "setup_conflict", ex.Message).ConfigureAwait(false);
+            }
+        }));
 
         // ---- 数据库管理 ----
         app.MapGet("/v1/db", (HttpContext ctx) =>

@@ -1,19 +1,32 @@
 <template>
-  <n-layout has-sider style="height: 100vh">
+  <n-layout has-sider class="app-shell">
     <n-layout-sider
       bordered
       collapse-mode="width"
-      :collapsed-width="64"
-      :width="220"
+      :collapsed-width="74"
+      :width="250"
       :native-scrollbar="false"
+      class="app-sider"
     >
-      <div class="brand">TSLite</div>
+      <div class="brand-pane">
+        <BrandLogo :compact="false" />
+        <div class="brand-meta">
+          <strong>{{ setup.organization ?? 'TSLite Organization' }}</strong>
+          <span>{{ setup.serverId ?? '未命名服务器' }}</span>
+        </div>
+      </div>
+
       <n-menu :options="menuOptions" :value="activeKey" @update:value="onMenu" />
     </n-layout-sider>
+
     <n-layout>
-      <n-layout-header bordered class="header">
-        <span class="title">{{ activeTitle }}</span>
-        <n-space>
+      <n-layout-header bordered class="app-header">
+        <div class="header-left">
+          <button type="button" class="header-home" @click="goHome">产品首页</button>
+          <span class="header-title">{{ activeTitle }}</span>
+        </div>
+
+        <n-space align="center">
           <n-tag :type="liveTagType" size="small">
             <template #icon>
               <span class="dot" :class="liveDotClass" />
@@ -21,11 +34,12 @@
             {{ liveLabel }}
           </n-tag>
           <n-tag :type="auth.isSuperuser ? 'success' : 'info'" size="small">
-            {{ auth.username }}{{ auth.isSuperuser ? ' · admin' : '' }}
+            {{ auth.username }}{{ auth.isSuperuser ? ' / admin' : '' }}
           </n-tag>
           <n-button text type="error" @click="onLogout">退出</n-button>
         </n-space>
       </n-layout-header>
+
       <n-layout-content content-style="padding:24px;">
         <router-view />
       </n-layout-content>
@@ -34,17 +48,27 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount } from 'vue';
+import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
-  NLayout, NLayoutSider, NLayoutHeader, NLayoutContent, NMenu,
-  NSpace, NTag, NButton, type MenuOption,
+  NButton,
+  NLayout,
+  NLayoutContent,
+  NLayoutHeader,
+  NLayoutSider,
+  NMenu,
+  NSpace,
+  NTag,
+  type MenuOption,
 } from 'naive-ui';
+import BrandLogo from '@/components/BrandLogo.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useEventsStore } from '@/stores/events';
+import { useSetupStore } from '@/stores/setup';
 
 const auth = useAuthStore();
 const events = useEventsStore();
+const setup = useSetupStore();
 const router = useRouter();
 const route = useRoute();
 
@@ -54,13 +78,16 @@ const baseMenu: MenuOption[] = [
   { label: '数据库', key: 'databases' },
   { label: '事件流', key: 'events' },
 ];
+
 const adminMenu: MenuOption[] = [
   { label: '用户', key: 'users' },
   { label: '权限', key: 'grants' },
   { label: 'Token', key: 'tokens' },
 ];
 
-const menuOptions = computed<MenuOption[]>(() => auth.isSuperuser ? [...baseMenu, ...adminMenu] : baseMenu);
+const menuOptions = computed<MenuOption[]>(() => (
+  auth.isSuperuser ? [...baseMenu, ...adminMenu] : baseMenu
+));
 
 const titleByKey: Record<string, string> = {
   dashboard: '概览',
@@ -77,13 +104,14 @@ const activeTitle = computed(() => titleByKey[activeKey.value] ?? '');
 
 const liveLabel = computed(() => {
   switch (events.status) {
-    case 'open': return '实时';
-    case 'connecting': return '连接中…';
-    case 'error': return '断线重连…';
+    case 'open': return '实时在线';
+    case 'connecting': return '连接中';
+    case 'error': return '重连中';
     case 'unauthorized': return 'SSE 未授权';
     default: return '未连接';
   }
 });
+
 const liveTagType = computed(() => {
   switch (events.status) {
     case 'open': return 'success' as const;
@@ -93,10 +121,15 @@ const liveTagType = computed(() => {
     default: return 'default' as const;
   }
 });
+
 const liveDotClass = computed(() => `dot-${events.status}`);
 
 function onMenu(key: string): void {
   router.push({ name: key });
+}
+
+function goHome(): void {
+  router.push({ name: 'home' });
 }
 
 function onLogout(): void {
@@ -105,34 +138,81 @@ function onLogout(): void {
   router.replace({ name: 'login' });
 }
 
-// 已登录进入 AppShell：建立 SSE 连接；退出 AppShell：保持连接（store 内部受 auth 控制）
-onMounted(() => {
-  if (auth.isAuthenticated) events.connect();
+onMounted(async () => {
+  await setup.ensureLoaded();
+  if (auth.isAuthenticated) {
+    events.connect();
+  }
 });
+
 onBeforeUnmount(() => {
-  // 不在此 disconnect，logout 时显式断开即可，避免 SPA 路由切换误关
+  // 由 logout 显式断开 SSE，避免 SPA 内部切换路由造成短暂闪断。
 });
 </script>
 
 <style scoped>
-.brand {
-  font-weight: bold;
-  font-size: 18px;
-  text-align: center;
-  padding: 16px 0;
-  color: #18a058;
+.app-shell {
+  height: 100vh;
 }
-.header {
+
+.app-sider {
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(238, 245, 249, 0.98));
+}
+
+.brand-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 18px 16px;
+}
+
+.brand-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(13, 59, 102, 0.04);
+  color: var(--tslite-ink-soft);
+  font-size: 0.88rem;
+}
+
+.brand-meta strong {
+  color: var(--tslite-ink-strong);
+}
+
+.app-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
-  height: 56px;
-  background: #fff;
+  height: 62px;
+  background: rgba(248, 251, 255, 0.82);
+  backdrop-filter: blur(12px);
 }
-.title {
-  font-weight: 500;
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
+
+.header-home {
+  border: 0;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(13, 59, 102, 0.06);
+  color: var(--tslite-ink-soft);
+  font: inherit;
+  cursor: pointer;
+}
+
+.header-title {
+  font-size: 1.02rem;
+  font-weight: 600;
+}
+
 .dot {
   display: inline-block;
   width: 8px;
@@ -142,7 +222,18 @@ onBeforeUnmount(() => {
   vertical-align: middle;
   background: #c0c0c0;
 }
-.dot-open { background: #18a058; box-shadow: 0 0 0 2px rgba(24,160,88,.18); }
-.dot-connecting { background: #2080f0; }
-.dot-error, .dot-unauthorized { background: #f0a020; }
+
+.dot-open {
+  background: #18a058;
+  box-shadow: 0 0 0 2px rgba(24, 160, 88, 0.18);
+}
+
+.dot-connecting {
+  background: #2080f0;
+}
+
+.dot-error,
+.dot-unauthorized {
+  background: #f0a020;
+}
 </style>

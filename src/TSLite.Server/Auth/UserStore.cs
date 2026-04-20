@@ -220,6 +220,51 @@ public sealed class UserStore
     }
 
     /// <summary>
+    /// 为用户导入一个指定明文 token。用于首次安装时写入用户自定义的管理员 Bearer Token。
+    /// </summary>
+    /// <param name="name">用户名。</param>
+    /// <param name="token">明文 token。</param>
+    /// <returns>新写入 token 的 token id。</returns>
+    /// <exception cref="InvalidOperationException">用户不存在或 token 已存在。</exception>
+    public string ImportToken(string name, string token)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentException.ThrowIfNullOrEmpty(token);
+
+        var key = name.ToLowerInvariant();
+        var normalizedToken = token.Trim();
+        if (normalizedToken.Length < 12 || normalizedToken.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Bearer Token 至少 12 个字符，且不能包含空白字符。", nameof(token));
+        }
+
+        var hash = ApiToken.HashHex(normalizedToken);
+        var id = NewTokenId();
+
+        lock (_lock)
+        {
+            if (_tokenIndex.ContainsKey(hash))
+            {
+                throw new InvalidOperationException("指定的 Bearer Token 已存在。");
+            }
+
+            var u = _state.Users.FirstOrDefault(x => x.Name == key)
+                ?? throw new InvalidOperationException($"用户 '{key}' 不存在。");
+
+            u.Tokens.Add(new TokenRecord
+            {
+                Id = id,
+                SecretHash = hash,
+                CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            });
+            _tokenIndex[hash] = (key, id);
+            Persist();
+        }
+
+        return id;
+    }
+
+    /// <summary>
     /// 吊销指定 tokenId。
     /// </summary>
     /// <returns>true 表示存在并已吊销；false 表示不存在。</returns>
