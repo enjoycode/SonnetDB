@@ -6,11 +6,16 @@ using InfluxDB.Client;
 using InfluxDB.Client.Writes;
 using Microsoft.Data.Sqlite;
 using TSLite.Benchmarks.Helpers;
+using TSLite.Engine;
+using TSLite.Engine.Compaction;
+using TSLite.Engine.Retention;
+using TSLite.Memory;
+using TSLite.Model;
 
 namespace TSLite.Benchmarks.Benchmarks;
 
 /// <summary>
-/// 1,000,000 条数据批量写入性能对比：TSLite（内存占位）、SQLite、InfluxDB、TDengine。
+/// 1,000,000 条数据批量写入性能对比：TSLite、SQLite、InfluxDB、TDengine。
 /// 每次迭代均先清空数据，再执行完整的 100 万条写入操作。
 /// </summary>
 [Config(typeof(InsertConfig))]
@@ -43,8 +48,12 @@ public class InsertBenchmark
     private TDengineRestClient? _tdengineClient;
     private bool _tdengineAvailable;
 
-    // ── TSLite（内存占位） ─────────────────────────────────────────────────
-    private List<BenchmarkDataPoint> _tsLiteStore = [];
+    // ── TSLite ─────────────────────────────────────────────────────────────
+    private string _tsLiteRootDir = string.Empty;
+    private Tsdb? _tsLiteDb;
+    private Point[] _tsLitePoints = [];
+    private static readonly IReadOnlyDictionary<string, string> TsLiteTags =
+        new Dictionary<string, string> { ["host"] = "server001" };
 
     // ─────────────────────────────────────────────────────────────────────
     // GlobalSetup：生成数据 + 建立数据库 Schema
@@ -66,8 +75,7 @@ public class InsertBenchmark
         try
         {
             _influxClient = new InfluxDBClient(InfluxUrl, InfluxToken);
-            await _influxClient.PingAsync().ConfigureAwait(false);
-            _influxAvailable = true;
+            _influxAvailable = await _influxClient.PingAsync().ConfigureAwait(false);
         }
         catch
         {
@@ -95,6 +103,18 @@ public class InsertBenchmark
             _tdengineAvailable = false;
             Console.Error.WriteLine(
                 "[SKIP] TDengine 不可用。请先执行: docker compose -f tests/TSLite.Benchmarks/docker/docker-compose.yml up -d tdengine");
+        }
+
+        // ── TSLite：预构建 Point 数组（共享 tags，避免每次迭代重新分配） ────
+        _tsLitePoints = new Point[DataPointCount];
+        for (int i = 0; i < DataPointCount; i++)
+        {
+            var dp = _dataPoints[i];
+            _tsLitePoints[i] = Point.Create(
+                "sensor_data",
+                dp.Timestamp,
+                TsLiteTags,
+                new Dictionary<string, FieldValue> { ["value"] = FieldValue.FromDouble(dp.Value) });
         }
     }
 
@@ -126,8 +146,26 @@ public class InsertBenchmark
             _tdengineClient!.ExecuteAsync($"DELETE FROM {TDengineSubTable}").GetAwaiter().GetResult();
         }
 
-        // TSLite
-        _tsLiteStore = new List<BenchmarkDataPoint>(DataPointCount);
+        // TSLite：关闭旧实例、清空目录、重新打开
+        _tsLiteDb?.Dispose();
+        _tsLiteDb = null;
+        if (!string.IsNullOrEmpty(_tsLiteRootDir) && Directory.Exists(_tsLiteRootDir))
+            Directory.Delete(_tsLiteRootDir, recursive: true);
+        _tsLiteRootDir = Path.Combine(Path.GetTempPath(), $"tslite_bench_insert_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_tsLiteRootDir);
+        _tsLiteDb = Tsdb.Open(new TsdbOptions
+        {
+            RootDirectory = _tsLiteRootDir,
+            FlushPolicy = new MemTableFlushPolicy
+            {
+                MaxBytes = long.MaxValue,
+                MaxPoints = int.MaxValue,
+                MaxAge = TimeSpan.MaxValue
+            },
+            BackgroundFlush = new BackgroundFlushOptions { Enabled = false },
+            Compaction = new CompactionPolicy { Enabled = false },
+            Retention = new RetentionPolicy { Enabled = false }
+        });
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -135,15 +173,14 @@ public class InsertBenchmark
     // ─────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// TSLite 写入 100 万条（内存占位实现）。
-    /// 注意：当前 TSLite 处于 Milestone 0 阶段，尚未实现持久化；
-    /// 此方法仅展示未来 API 形态，测量结果代表纯内存追加操作的基线。
+    /// TSLite 写入 100 万条（真实引擎：MemTable + WAL + Flush）。
+    /// 每次迭代均从空的 Tsdb 实例写入，最后调用 FlushNow 将数据落盘。
     /// </summary>
-    [Benchmark(Baseline = true, Description = "TSLite 写入 100万条（内存占位）")]
+    [Benchmark(Baseline = true, Description = "TSLite 写入 100万条")]
     public void TSLite_Insert_1M()
     {
-        foreach (var dp in _dataPoints)
-            _tsLiteStore.Add(dp);
+        _tsLiteDb!.WriteMany(_tsLitePoints);
+        _tsLiteDb!.FlushNow();
     }
 
     /// <summary>SQLite 写入 100 万条（文件模式，WAL 日志，事务批量提交）。</summary>
@@ -223,6 +260,7 @@ public class InsertBenchmark
     public async Task GlobalCleanup()
     {
         // SQLite
+        SqliteConnection.ClearAllPools();
         if (File.Exists(_sqliteDbPath))
             File.Delete(_sqliteDbPath);
         // InfluxDB
@@ -253,6 +291,12 @@ public class InsertBenchmark
 
             _tdengineClient!.Dispose();
         }
+
+        // TSLite
+        _tsLiteDb?.Dispose();
+        _tsLiteDb = null;
+        if (!string.IsNullOrEmpty(_tsLiteRootDir) && Directory.Exists(_tsLiteRootDir))
+            Directory.Delete(_tsLiteRootDir, recursive: true);
     }
 
     // ─────────────────────────────────────────────────────────────────────

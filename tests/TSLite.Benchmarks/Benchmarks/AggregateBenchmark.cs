@@ -4,11 +4,17 @@ using InfluxDB.Client.Writes;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using TSLite.Benchmarks.Helpers;
+using TSLite.Engine;
+using TSLite.Engine.Compaction;
+using TSLite.Engine.Retention;
+using TSLite.Memory;
+using TSLite.Model;
+using TSLite.Query;
 
 namespace TSLite.Benchmarks.Benchmarks;
 
 /// <summary>
-/// 聚合查询性能对比：TSLite（内存 LINQ 占位）、SQLite、InfluxDB、TDengine。
+/// 聚合查询性能对比：TSLite、SQLite、InfluxDB、TDengine。
 /// 预先写入 1,000,000 条数据，然后反复执行按 1 分钟桶的 AVG/MIN/MAX/COUNT 聚合。
 /// </summary>
 [MemoryDiagnoser]
@@ -40,8 +46,13 @@ public class AggregateBenchmark
     private TDengineRestClient? _tdengineClient;
     private bool _tdengineAvailable;
 
-    // ── TSLite（内存占位） ─────────────────────────────────────────────────
-    private BenchmarkDataPoint[] _tsLiteStore = [];
+    // ── TSLite ─────────────────────────────────────────────────────────────
+    private string _tsLiteRootDir = string.Empty;
+    private Tsdb? _tsLiteDb;
+    private ulong _tsLiteSeriesId;
+    private TimeRange _tsLiteFullRange;
+    private static readonly IReadOnlyDictionary<string, string> TsLiteTags =
+        new Dictionary<string, string> { ["host"] = "server001" };
 
     // ─────────────────────────────────────────────────────────────────────
     // GlobalSetup：写入 100 万条测试数据
@@ -52,7 +63,35 @@ public class AggregateBenchmark
     public async Task GlobalSetup()
     {
         _dataPoints = DataGenerator.Generate(DataPointCount);
-        _tsLiteStore = _dataPoints;
+
+        // ── TSLite：写入 100 万条并 Flush 到磁盘 ────────────────
+        _tsLiteSeriesId = SeriesId.Compute(
+            new SeriesKey("sensor_data", new Dictionary<string, string> { ["host"] = "server001" }));
+        _tsLiteFullRange = new TimeRange(
+            DataGenerator.StartTimestampMs,
+            DataGenerator.QueryToMs(DataPointCount));
+        _tsLiteRootDir = Path.Combine(Path.GetTempPath(), $"tslite_bench_aggregate_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_tsLiteRootDir);
+        _tsLiteDb = Tsdb.Open(new TsdbOptions
+        {
+            RootDirectory = _tsLiteRootDir,
+            FlushPolicy = new MemTableFlushPolicy
+            {
+                MaxBytes = long.MaxValue,
+                MaxPoints = int.MaxValue,
+                MaxAge = TimeSpan.MaxValue
+            },
+            BackgroundFlush = new BackgroundFlushOptions { Enabled = false },
+            Compaction = new CompactionPolicy { Enabled = false },
+            Retention = new RetentionPolicy { Enabled = false }
+        });
+        foreach (var dp in _dataPoints)
+            _tsLiteDb.Write(Point.Create(
+                "sensor_data",
+                dp.Timestamp,
+                TsLiteTags,
+                new Dictionary<string, FieldValue> { ["value"] = FieldValue.FromDouble(dp.Value) }));
+        _tsLiteDb.FlushNow();
 
         // ── SQLite ─────────────────────────────────────────────────────
         _sqliteDbPath = Path.Combine(Path.GetTempPath(),
@@ -68,9 +107,9 @@ public class AggregateBenchmark
         try
         {
             _influxClient = new InfluxDBClient(InfluxUrl, InfluxToken);
-            await _influxClient.PingAsync().ConfigureAwait(false);
-            await WriteInfluxDataAsync(_dataPoints).ConfigureAwait(false);
-            _influxAvailable = true;
+            _influxAvailable = await _influxClient.PingAsync().ConfigureAwait(false);
+            if (_influxAvailable)
+                await WriteInfluxDataAsync(_dataPoints).ConfigureAwait(false);
         }
         catch
         {
@@ -107,47 +146,19 @@ public class AggregateBenchmark
     // ─────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// TSLite 1 分钟桶聚合（内存 LINQ 占位）。
-    /// 对 100 万个数据点按每分钟分组，计算 AVG/MIN/MAX/COUNT。
-    /// 结果约含 16,667 个桶（1M 秒 / 60 ≈ 16667 分钟）。
+    /// TSLite 1 分钟桶聚合（真实引擎）。
+    /// 对全量 100 万数据点按每分钟分组，计算 AVG，结果约含 16,667 个桶。
     /// </summary>
-    [Benchmark(Baseline = true, Description = "TSLite 1分钟聚合（内存占位）")]
-    public List<(long BucketTs, double Avg, double Min, double Max, int Count)> TSLite_Aggregate_1Min()
+    [Benchmark(Baseline = true, Description = "TSLite 1分钟聚合")]
+    public List<AggregateBucket> TSLite_Aggregate_1Min()
     {
-        const long bucketMs = 60_000L;
-        var result = new List<(long, double, double, double, int)>();
-
-        long? curBucket = null;
-        double sum = 0, min = double.MaxValue, max = double.MinValue;
-        int count = 0;
-
-        foreach (var dp in _tsLiteStore)
-        {
-            long bucket = dp.Timestamp / bucketMs * bucketMs;
-            if (bucket != curBucket)
-            {
-                if (curBucket.HasValue)
-                    result.Add((curBucket.Value, sum / count, min, max, count));
-
-                curBucket = bucket;
-                sum = dp.Value;
-                min = dp.Value;
-                max = dp.Value;
-                count = 1;
-            }
-            else
-            {
-                sum += dp.Value;
-                if (dp.Value < min) min = dp.Value;
-                if (dp.Value > max) max = dp.Value;
-                count++;
-            }
-        }
-
-        if (curBucket.HasValue)
-            result.Add((curBucket.Value, sum / count, min, max, count));
-
-        return result;
+        var query = new AggregateQuery(
+            _tsLiteSeriesId,
+            "value",
+            _tsLiteFullRange,
+            Aggregator.Avg,
+            60_000L);
+        return [.. _tsLiteDb!.Query.Execute(query)];
     }
 
     /// <summary>SQLite 1 分钟桶聚合（GROUP BY，全量 100 万条，约 16,667 个桶）。</summary>
@@ -226,6 +237,7 @@ public class AggregateBenchmark
     [GlobalCleanup]
     public async Task GlobalCleanup()
     {
+        SqliteConnection.ClearAllPools();
         if (File.Exists(_sqliteDbPath))
             File.Delete(_sqliteDbPath);
 
@@ -254,6 +266,12 @@ public class AggregateBenchmark
 
             _tdengineClient!.Dispose();
         }
+
+        // TSLite
+        _tsLiteDb?.Dispose();
+        _tsLiteDb = null;
+        if (!string.IsNullOrEmpty(_tsLiteRootDir) && Directory.Exists(_tsLiteRootDir))
+            Directory.Delete(_tsLiteRootDir, recursive: true);
     }
 
     // ─────────────────────────────────────────────────────────────────────

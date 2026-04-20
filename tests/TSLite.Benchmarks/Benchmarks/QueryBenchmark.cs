@@ -5,11 +5,17 @@ using InfluxDB.Client.Writes;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using TSLite.Benchmarks.Helpers;
+using TSLite.Engine;
+using TSLite.Engine.Compaction;
+using TSLite.Engine.Retention;
+using TSLite.Memory;
+using TSLite.Model;
+using TSLite.Query;
 
 namespace TSLite.Benchmarks.Benchmarks;
 
 /// <summary>
-/// 时间范围查询性能对比：TSLite（内存 LINQ 占位）、SQLite、InfluxDB、TDengine。
+/// 时间范围查询性能对比：TSLite、SQLite、InfluxDB、TDengine。
 /// 预先写入 1,000,000 条数据，然后反复查询最后 10%（约 100,000 条）的时间范围。
 /// </summary>
 [MemoryDiagnoser]
@@ -43,8 +49,12 @@ public class QueryBenchmark
     private TDengineRestClient? _tdengineClient;
     private bool _tdengineAvailable;
 
-    // ── TSLite（内存占位） ─────────────────────────────────────────────────
-    private BenchmarkDataPoint[] _tsLiteStore = [];
+    // ── TSLite ─────────────────────────────────────────────────────────────
+    private string _tsLiteRootDir = string.Empty;
+    private Tsdb? _tsLiteDb;
+    private ulong _tsLiteSeriesId;
+    private static readonly IReadOnlyDictionary<string, string> TsLiteTags =
+        new Dictionary<string, string> { ["host"] = "server001" };
 
     // ─────────────────────────────────────────────────────────────────────
     // GlobalSetup：写入 100 万条测试数据
@@ -57,7 +67,32 @@ public class QueryBenchmark
         _dataPoints = DataGenerator.Generate(DataPointCount);
         _queryFromMs = DataGenerator.QueryFromMs(DataPointCount);
         _queryToMs = DataGenerator.QueryToMs(DataPointCount);
-        _tsLiteStore = _dataPoints;
+
+        // ── TSLite：写入 100 万条并 Flush 到磁盘 ────────────────
+        _tsLiteSeriesId = SeriesId.Compute(
+            new SeriesKey("sensor_data", new Dictionary<string, string> { ["host"] = "server001" }));
+        _tsLiteRootDir = Path.Combine(Path.GetTempPath(), $"tslite_bench_query_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_tsLiteRootDir);
+        _tsLiteDb = Tsdb.Open(new TsdbOptions
+        {
+            RootDirectory = _tsLiteRootDir,
+            FlushPolicy = new MemTableFlushPolicy
+            {
+                MaxBytes = long.MaxValue,
+                MaxPoints = int.MaxValue,
+                MaxAge = TimeSpan.MaxValue
+            },
+            BackgroundFlush = new BackgroundFlushOptions { Enabled = false },
+            Compaction = new CompactionPolicy { Enabled = false },
+            Retention = new RetentionPolicy { Enabled = false }
+        });
+        foreach (var dp in _dataPoints)
+            _tsLiteDb.Write(Point.Create(
+                "sensor_data",
+                dp.Timestamp,
+                TsLiteTags,
+                new Dictionary<string, FieldValue> { ["value"] = FieldValue.FromDouble(dp.Value) }));
+        _tsLiteDb.FlushNow();
 
         // ── SQLite ─────────────────────────────────────────────────────
         _sqliteDbPath = Path.Combine(Path.GetTempPath(), $"tslite_bench_query_{Guid.NewGuid():N}.db");
@@ -71,9 +106,9 @@ public class QueryBenchmark
         try
         {
             _influxClient = new InfluxDBClient(InfluxUrl, InfluxToken);
-            await _influxClient.PingAsync().ConfigureAwait(false);
-            await WriteInfluxDataAsync(_dataPoints).ConfigureAwait(false);
-            _influxAvailable = true;
+            _influxAvailable = await _influxClient.PingAsync().ConfigureAwait(false);
+            if (_influxAvailable)
+                await WriteInfluxDataAsync(_dataPoints).ConfigureAwait(false);
         }
         catch
         {
@@ -110,22 +145,17 @@ public class QueryBenchmark
     // ─────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// TSLite 时间范围查询（内存 LINQ 占位）。
+    /// TSLite 时间范围查询（真实引擎）。
     /// 查询最后 10% 时间段内约 100,000 条数据点。
     /// </summary>
-    [Benchmark(Baseline = true, Description = "TSLite 范围查询（内存占位）")]
-    public List<BenchmarkDataPoint> TSLite_Query_Range()
+    [Benchmark(Baseline = true, Description = "TSLite 范围查询")]
+    public List<DataPoint> TSLite_Query_Range()
     {
-        var from = _queryFromMs;
-        var to = _queryToMs;
-        var result = new List<BenchmarkDataPoint>();
-        foreach (var dp in _tsLiteStore)
-        {
-            if (dp.Timestamp >= from && dp.Timestamp < to)
-                result.Add(dp);
-        }
-
-        return result;
+        var query = new PointQuery(
+            _tsLiteSeriesId,
+            "value",
+            new TimeRange(_queryFromMs, _queryToMs - 1));
+        return [.. _tsLiteDb!.Query.Execute(query)];
     }
 
     /// <summary>SQLite 时间范围查询（索引扫描，约 100,000 条）。</summary>
@@ -199,6 +229,7 @@ public class QueryBenchmark
     [GlobalCleanup]
     public async Task GlobalCleanup()
     {
+        SqliteConnection.ClearAllPools();
         if (File.Exists(_sqliteDbPath))
             File.Delete(_sqliteDbPath);
 
@@ -227,6 +258,12 @@ public class QueryBenchmark
 
             _tdengineClient!.Dispose();
         }
+
+        // TSLite
+        _tsLiteDb?.Dispose();
+        _tsLiteDb = null;
+        if (!string.IsNullOrEmpty(_tsLiteRootDir) && Directory.Exists(_tsLiteRootDir))
+            Directory.Delete(_tsLiteRootDir, recursive: true);
     }
 
     // ─────────────────────────────────────────────────────────────────────
