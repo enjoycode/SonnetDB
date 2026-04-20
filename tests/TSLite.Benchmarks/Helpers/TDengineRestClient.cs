@@ -81,6 +81,34 @@ public sealed class TDengineRestClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// 通过 TDengine REST「InfluxDB 兼容」端点（<c>POST /influxdb/v1/write</c>）以 schemaless
+    /// Line Protocol 方式写入；TDengine 会按 LP 中的 measurement / tag / field 自动建表与解析数据类型。
+    /// </summary>
+    /// <param name="db">目标数据库名。</param>
+    /// <param name="lineProtocol">完整 LP payload，行间用 <c>\n</c> 分隔。</param>
+    /// <param name="precision">时间戳精度，默认 <c>ms</c>。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <exception cref="InvalidOperationException">TDengine 返回非 2xx 时抛出，错误描述附带响应正文。</exception>
+    public async Task WriteLineProtocolAsync(
+        string db,
+        string lineProtocol,
+        string precision = "ms",
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(db);
+        ArgumentNullException.ThrowIfNull(lineProtocol);
+        using var content = new StringContent(lineProtocol, Encoding.UTF8, "text/plain");
+        var path = $"/influxdb/v1/write?db={Uri.EscapeDataString(db)}&precision={Uri.EscapeDataString(precision)}";
+        using var response = await _http.PostAsync(path, content, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            throw new InvalidOperationException(
+                $"TDengine schemaless write failed: HTTP {(int)response.StatusCode} {response.ReasonPhrase}; body={body}");
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose() => _http.Dispose();
 }

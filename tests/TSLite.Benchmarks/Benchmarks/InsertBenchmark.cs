@@ -5,6 +5,7 @@ using BenchmarkDotNet.Jobs;
 using InfluxDB.Client;
 using InfluxDB.Client.Writes;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 using TSLite.Benchmarks.Helpers;
 using TSLite.Engine;
 using TSLite.Engine.Compaction;
@@ -33,6 +34,10 @@ public class InsertBenchmark
     private const string TDengineDb = "bench_insert";
     private const string TDengineTable = "sd_server001";
     private const string TDengineSubTable = TDengineDb + "." + TDengineTable;
+    // PR #49：TDengine schemaless LP 写入专用 DB，避免与显式 STable `sensor_data` 冲突。
+    private const string TDengineSchemalessDb = "bench_insert_schemaless";
+    // 每个 HTTP POST 的行数，避免 taosadapter 默认 16MB body 上限。
+    private const int TDengineSchemalessLpBatch = 100_000;
 
     // ── 共享数据 ──────────────────────────────────────────────────────────
     private BenchmarkDataPoint[] _dataPoints = [];
@@ -47,6 +52,8 @@ public class InsertBenchmark
     // ── TDengine ──────────────────────────────────────────────────────────
     private TDengineRestClient? _tdengineClient;
     private bool _tdengineAvailable;
+    // PR #49：TDengine schemaless（InfluxDB 兼容端点）预生成的 LP payload 分批。
+    private string[] _tdengineLpChunks = [];
 
     // ── TSLite ─────────────────────────────────────────────────────────────
     private string _tsLiteRootDir = string.Empty;
@@ -98,6 +105,12 @@ public class InsertBenchmark
             await _tdengineClient.ExecuteAsync(
                 $"CREATE TABLE IF NOT EXISTS {TDengineSubTable} " +
                 $"USING {TDengineDb}.sensor_data TAGS ('server001')").ConfigureAwait(false);
+            // PR #49：schemaless 专用 DB（被 InfluxDB-compat /influxdb/v1/write 自动建 STable）
+            await _tdengineClient.ExecuteAsync(
+                $"CREATE DATABASE IF NOT EXISTS {TDengineSchemalessDb} PRECISION 'ms'")
+                .ConfigureAwait(false);
+            // PR #49：预生成 LP 分片，避免迭代内字符串拼接
+            _tdengineLpChunks = BuildLineProtocolChunks(_dataPoints, TDengineSchemalessLpBatch);
             _tdengineAvailable = true;
         }
         catch
@@ -146,6 +159,10 @@ public class InsertBenchmark
         if (_tdengineAvailable)
         {
             _tdengineClient!.ExecuteAsync($"DELETE FROM {TDengineSubTable}").GetAwaiter().GetResult();
+            // PR #49：清空 schemaless DB（drop + recreate；schemaless 的 STable 由首次写入自动建立）
+            _tdengineClient!.ExecuteAsync($"DROP DATABASE IF EXISTS {TDengineSchemalessDb}").GetAwaiter().GetResult();
+            _tdengineClient!.ExecuteAsync(
+                $"CREATE DATABASE IF NOT EXISTS {TDengineSchemalessDb} PRECISION 'ms'").GetAwaiter().GetResult();
         }
 
         // TSLite：关闭旧实例、清空目录、重新打开
@@ -253,6 +270,26 @@ public class InsertBenchmark
         await _tdengineClient!.BulkInsertAsync(TDengineSubTable, _dataPoints).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// PR #49：TDengine 写入 100 万条（schemaless / InfluxDB-compat Line Protocol，每批 100k 行）。
+    /// 走 <c>POST /influxdb/v1/write?db=...&amp;precision=ms</c>，由 TDengine taosadapter 自动建 STable。
+    /// </summary>
+    [Benchmark(Description = "TDengine 写入 100万条 (schemaless LP)")]
+    public async Task TDengine_InsertSchemaless_1M()
+    {
+        if (!_tdengineAvailable)
+        {
+            Console.Error.WriteLine("[SKIP] TDengine 不可用");
+            return;
+        }
+
+        for (int i = 0; i < _tdengineLpChunks.Length; i++)
+        {
+            await _tdengineClient!.WriteLineProtocolAsync(
+                TDengineSchemalessDb, _tdengineLpChunks[i], precision: "ms").ConfigureAwait(false);
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // GlobalCleanup
     // ─────────────────────────────────────────────────────────────────────
@@ -286,6 +323,9 @@ public class InsertBenchmark
             try
             {
                 await _tdengineClient!.ExecuteAsync($"DROP DATABASE IF EXISTS {TDengineDb}")
+                    .ConfigureAwait(false);
+                // PR #49：清理 schemaless DB
+                await _tdengineClient!.ExecuteAsync($"DROP DATABASE IF EXISTS {TDengineSchemalessDb}")
                     .ConfigureAwait(false);
             }
             catch { /* 清理失败不影响结果 */ }
@@ -330,6 +370,36 @@ public class InsertBenchmark
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// PR #49：把 <paramref name="points"/> 按 <paramref name="batchSize"/> 行切成多段
+    /// InfluxDB Line Protocol payload，使用 <c>sensor_data,host=&lt;host&gt; value=&lt;value&gt; &lt;ts&gt;</c> 格式，
+    /// 时间戳单位与 schemaless 端点的 <c>precision=ms</c> 对齐。
+    /// </summary>
+    private static string[] BuildLineProtocolChunks(BenchmarkDataPoint[] points, int batchSize)
+    {
+        ArgumentNullException.ThrowIfNull(points);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+
+        int chunks = (points.Length + batchSize - 1) / batchSize;
+        var result = new string[chunks];
+        var sb = new System.Text.StringBuilder(batchSize * 50);
+        for (int c = 0; c < chunks; c++)
+        {
+            int start = c * batchSize;
+            int end = Math.Min(start + batchSize, points.Length);
+            sb.Clear();
+            for (int i = start; i < end; i++)
+            {
+                var dp = points[i];
+                sb.Append("sensor_data,host=").Append(dp.Host)
+                  .Append(" value=").Append(dp.Value.ToString("G17", CultureInfo.InvariantCulture))
+                  .Append(' ').Append(dp.Timestamp).Append('\n');
+            }
+            result[c] = sb.ToString();
+        }
+        return result;
     }
 
     // ─────────────────────────────────────────────────────────────────────
