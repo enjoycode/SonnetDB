@@ -35,6 +35,9 @@ public static class TsdbPaths
     /// <summary>墓碑清单文件名（相对于根目录）。</summary>
     public const string TombstoneManifestFileName = "tombstones.tslmanifest";
 
+    /// <summary>Measurement schema 文件名（相对于根目录）。</summary>
+    public const string MeasurementSchemaFileName = "measurements.tslschema";
+
     /// <summary>
     /// 返回目录文件的完整路径：<c>{root}/catalog.tslcat</c>。
     /// </summary>
@@ -50,6 +53,14 @@ public static class TsdbPaths
     /// <returns>墓碑清单文件路径。</returns>
     public static string TombstoneManifestPath(string root) =>
         Path.Combine(root, TombstoneManifestFileName);
+
+    /// <summary>
+    /// 返回 measurement schema 文件的完整路径：<c>{root}/measurements.tslschema</c>。
+    /// </summary>
+    /// <param name="root">数据库根目录路径。</param>
+    /// <returns>schema 文件路径。</returns>
+    public static string MeasurementSchemaPath(string root) =>
+        Path.Combine(root, MeasurementSchemaFileName);
 
     /// <summary>
     /// 返回 WAL 子目录的完整路径：<c>{root}/wal</c>。

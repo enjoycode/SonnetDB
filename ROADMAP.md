@@ -95,12 +95,12 @@
 | PR | 主题 | 状态 |
 |----|------|------|
 | #22 | SQL 词法 / 语法分析器（递归下降，无第三方依赖；AST 节点） | ✅ |
-| #23 | `CREATE MEASUREMENT` + schema 持久化 | 📋 |
+| #23 | `CREATE MEASUREMENT` + schema 持久化 | ✅ |
 | #24 | `INSERT INTO ... VALUES (...)`（含批量、TAG/FIELD 类型校验、时间戳缺省） | 📋 |
 | #25 | `SELECT ... WHERE ... GROUP BY time(...)`（含 tag 过滤、聚合下推） | 📋 |
 | #26 | `DELETE FROM ... WHERE time >= a AND time <= b`（落到 PR #20 的 Tombstone） | 📋 |
 | #27 | Tag 倒排索引：`(tagKey, tagValue) → [SeriesId]`（加速 WHERE tag=...） | 📋 |
-| #28 | ADO.NET 风格 API：`TsdbConnection / TsdbCommand / TsdbDataReader` | 📋 |
+| #28 | 按照标准的ADO.NET  API, 实现`TsdbConnection / TsdbCommand / TsdbDataReader`等等。 | 📋 |
 
 ---
 
@@ -116,11 +116,11 @@
 
 ---
 
-## Milestone 8 — 单文件容器（演进，可选）
+## Milestone 8— 服务模式
 
 | PR | 主题 | 状态 |
 |----|------|------|
-| #32 | `PageManager` + `FreeList`（页分配 / 释放 / 重用 / 崩溃恢复） | 📋 |
+| #32 | 新建TSNetServer AOT min api项目，引用，对外提供sql,创建数据库， 支持 增删改和使用数据库的sql语句， 一个数据库对应一个 TSLite 实例提供服务 | 📋 |
 | #33 | 单文件容器：把 catalog / wal / segments / tombstones 合并进单一 `.tsl` 文件（`FileHeader.Version` 升级；可选模式，原多文件布局保留） | 📋 |
 
 ---

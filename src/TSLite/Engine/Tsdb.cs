@@ -39,6 +39,9 @@ public sealed class Tsdb : IDisposable
     /// <summary>当前序列目录。</summary>
     public SeriesCatalog Catalog { get; }
 
+    /// <summary>当前 Measurement schema 集合（线程安全）。</summary>
+    public MeasurementCatalog Measurements { get; }
+
     /// <summary>当前内存层（MemTable）。</summary>
     public MemTable MemTable { get; }
 
@@ -95,6 +98,7 @@ public sealed class Tsdb : IDisposable
     private Tsdb(
         TsdbOptions options,
         SeriesCatalog catalog,
+        MeasurementCatalog measurements,
         MemTable memTable,
         WalSegmentSet walSet,
         long nextSegmentId,
@@ -104,6 +108,7 @@ public sealed class Tsdb : IDisposable
     {
         _options = options;
         Catalog = catalog;
+        Measurements = measurements;
         MemTable = memTable;
         _walSet = walSet;
         _nextSegmentId = nextSegmentId;
@@ -128,6 +133,11 @@ public sealed class Tsdb : IDisposable
         Directory.CreateDirectory(TsdbPaths.WalDir(root));
         Directory.CreateDirectory(TsdbPaths.SegmentsDir(root));
 
+
+        // 加载 measurement schema 集合（文件不存在时返回空集合）
+        var measurements = new MeasurementCatalog();
+        foreach (var schema in MeasurementSchemaCodec.Load(TsdbPaths.MeasurementSchemaPath(root)))
+            measurements.LoadOrReplace(schema);
         // 加载 catalog（文件不存在时返回空目录）
         var catalog = CatalogFileCodec.Load(TsdbPaths.CatalogPath(root));
 
@@ -153,7 +163,7 @@ public sealed class Tsdb : IDisposable
 
         var segmentManager = SegmentManager.Open(root, options.SegmentReaderOptions);
 
-        var tsdb = new Tsdb(options, catalog, memTable, walSet, nextSegmentId, seriesWithWalRecord, segmentManager, checkpointLsn);
+        var tsdb = new Tsdb(options, catalog, measurements, memTable, walSet, nextSegmentId, seriesWithWalRecord, segmentManager, checkpointLsn);
 
         // 加载墓碑清单（文件不存在时返回空集合）
         tsdb.Tombstones.LoadFrom(TombstoneManifestCodec.Load(TsdbPaths.TombstoneManifestPath(root)));
@@ -310,6 +320,32 @@ public sealed class Tsdb : IDisposable
     }
 
     /// <summary>
+    /// 注册一个 measurement schema 并立即将整个 schema 文件原子持久化。
+    /// </summary>
+    /// <param name="schema">已通过 <see cref="MeasurementSchema.Create"/> 校验的 schema。</param>
+    /// <returns>注册到 catalog 的同一 schema 实例。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="schema"/> 为 null。</exception>
+    /// <exception cref="InvalidOperationException">同名 measurement 已存在。</exception>
+    /// <exception cref="ObjectDisposedException">实例已关闭。</exception>
+    public MeasurementSchema CreateMeasurement(MeasurementSchema schema)
+    {
+        ArgumentNullException.ThrowIfNull(schema);
+
+        lock (_writeSync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            Measurements.Add(schema);
+
+            // 立即把全量 schema 集合原子写入磁盘，确保 CREATE 语义具备崩溃安全性
+            MeasurementSchemaCodec.Save(
+                TsdbPaths.MeasurementSchemaPath(RootDirectory),
+                Measurements.Snapshot());
+        }
+
+        return schema;
+    }
+
+    /// <summary>
     /// 主动触发一次 Flush：把 MemTable 写出为 Segment，追加 WAL Checkpoint，Roll WAL，回收旧段，重置 MemTable。
     /// </summary>
     /// <returns>Segment 构建结果；MemTable 为空时返回 null。</returns>
@@ -388,6 +424,18 @@ public sealed class Tsdb : IDisposable
                         catch
                         {
                             // manifest 保存失败不阻止关闭（WAL 仍可作为恢复手段）
+
+                    // 保存 measurement schema
+                    try
+                    {
+                        MeasurementSchemaCodec.Save(
+                            TsdbPaths.MeasurementSchemaPath(RootDirectory),
+                            Measurements.Snapshot());
+                    }
+                    catch
+                    {
+                        // schema 保存失败不阻止关闭（已写入磁盘的版本仍可恢复）
+                    }
                         }
                     }
 
