@@ -1,8 +1,12 @@
 # docker-compose.yml — TSLite 基准测试外部数据库环境
 #
 # 用法：
-#   docker compose up -d            # 启动所有服务
+#   docker compose up -d            # 启动所有服务（包括 tslite-server）
 #   docker compose down -v          # 停止并删除容器与卷
+#
+# TSLite.Server 连接信息：
+#   URL:    http://localhost:5080
+#   Token:  bench-admin-token（角色：admin）
 #
 # InfluxDB 连接信息：
 #   URL:    http://localhost:8086
@@ -16,6 +20,28 @@
 #   Password: taosdata
 
 services:
+  tslite-server:
+    build:
+      context: ../../../
+      dockerfile: src/TSLite.Server/Dockerfile
+    image: tslite-server:bench
+    container_name: tslite-bench-server
+    ports:
+      - "5080:5080"
+    environment:
+      - TSLITE_TSLiteServer__DataRoot=/data
+      - TSLITE_TSLiteServer__AutoLoadExistingDatabases=true
+      - TSLITE_TSLiteServer__AllowAnonymousProbes=true
+      - TSLITE_TSLiteServer__Tokens__bench-admin-token=admin
+    volumes:
+      - tslite-server-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
   influxdb:
     image: influxdb:2.7
     container_name: tslite-bench-influxdb
@@ -53,5 +79,6 @@ services:
       retries: 10
 
 volumes:
+  tslite-server-data:
   influxdb-data:
   tdengine-data:
