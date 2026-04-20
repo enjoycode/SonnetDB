@@ -26,6 +26,10 @@ public sealed class ServerOptions
     public bool AllowAnonymousProbes { get; set; } = true;
 
     /// <summary>
+    /// 甯姪鏂囨。闈欐€佺珯鐐规牴鐩綍銆傝嫢涓虹┖锛屽垯榛樿浣跨敤 <c>AppContext.BaseDirectory/wwwroot/help</c>銆?    /// </summary>
+    public string? HelpDocsRoot { get; set; }
+
+    /// <summary>
     /// 慢查询阈值（毫秒）。单条 SQL 实际耗时超过该值会通过 SSE
     /// <c>/v1/events</c> 广播 <c>slow_query</c> 事件。默认 <c>500</c>。
     /// </summary>

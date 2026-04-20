@@ -5,6 +5,24 @@
 
 ## [Unreleased]
 
+### Changed
+- **PR #46：`Tsdb.WriteMany` 真批量快路径（写入快路径专题，第 1/4 步）**
+  - 新增 `Tsdb.WriteMany(ReadOnlySpan<Point>)` 重载：整批写入只获取 **一次** `_writeSync` 锁、批末仅调用 **一次** `BackgroundFlushWorker.Signal`，消除原 `foreach Write(point)` 退化批量在 N 次入锁/信号上的开销。
+  - 旧 `Tsdb.WriteMany(IEnumerable<Point>)` 自动嗅探 `Point[]` / `List<Point>` / `ArraySegment<Point>` 并下沉到 span 重载（`CollectionsMarshal.AsSpan` 零拷贝），其它枚举回退到逐点写入；行为对调用方完全透明。
+  - WAL 记录格式与 `_walSet` 锁结构 **保持不变**，新旧库双向兼容（`FileHeader.Version` / `TsdbMagic.FormatVersion` 不升）。
+  - `BulkIngestor.FlushBatch` 改走 `buffer.AsSpan(0, count)`（替代 `new ArraySegment<Point>(buffer, 0, count)`），消除新重载导致的歧义并直达 span 快路径；`/v1/db/{db}/measurements/{m}/{lp|json|bulk}` 端点与 `RemoteConnectionImpl` 自动受益。
+  - **基准复测**（`BulkIngestBenchmark`，100k 点 / i9-13900HX / .NET 10）：
+
+    | 路径 | Mean | Allocated | vs SQL baseline |
+    |------|-----:|----------:|-----------------|
+    | SQL INSERT VALUES（baseline） | 170 ms | 224 MB | — |
+    | TableDirect Line Protocol | 178 ms | 131 MB | **alloc −42%** |
+    | TableDirect JSON | 176 ms | 167 MB | alloc −25% |
+    | TableDirect Bulk VALUES | 159 ms | 130 MB | **alloc −42%** |
+
+    Mean 与 PR #45 持平（瓶颈仍在 reader 解析 + Catalog/WAL field-level 层），但 **托管堆分配降低 42–58%**（少 N 次 lock entry + iterator boxing），降低 GC 压力。
+  - 测试：`TSLite.Tests` 1238/1238 通过，`TSLite.Server.Tests` 89/90 通过（1 处 pre-existing `UserStore` 并发 IO race 与本 PR 无关）。
+
 ### Added
 - **TSLite.Server 首次安装向导 + 产品首页（未编号）**
   - 新增 `GET /v1/setup/status` 与 `POST /v1/setup/initialize`，当 `<DataRoot>/.system` 未完成初始化时返回首次安装状态，并支持一次性写入服务器 ID、组织、管理员用户名密码与初始 Bearer Token。

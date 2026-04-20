@@ -94,7 +94,7 @@ public static class BulkIngestor
     private static int FlushBatch(Tsdb tsdb, Point[] buffer, int count, BulkErrorPolicy policy, ref int skipped)
     {
         if (policy == BulkErrorPolicy.FailFast)
-            return tsdb.WriteMany(new ArraySegment<Point>(buffer, 0, count));
+            return tsdb.WriteMany(buffer.AsSpan(0, count));
 
         // Skip：逐点写，捕获写入侧异常
         int written = 0;

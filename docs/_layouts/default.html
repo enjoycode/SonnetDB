@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% if page.title %}{{ page.title }} | {% endif %}TSLite Docs</title>
+  <meta name="description" content="{% if page.description %}{{ page.description }}{% else %}TSLite help center{% endif %}">
+  <link rel="stylesheet" href="/help/assets/docs.css">
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="/help/">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 88 88" role="img">
+            <defs>
+              <linearGradient id="docsMarkGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#0d3b66" />
+                <stop offset="55%" stop-color="#146c94" />
+                <stop offset="100%" stop-color="#18a058" />
+              </linearGradient>
+            </defs>
+            <rect x="6" y="6" width="76" height="76" rx="24" fill="url(#docsMarkGradient)" />
+            <path d="M22 58 L34 46 L44 52 L56 34 L66 40" fill="none" stroke="#f8fbff" stroke-linecap="round" stroke-linejoin="round" stroke-width="6" />
+            <path d="M22 26 H66" fill="none" stroke="rgba(255,255,255,0.36)" stroke-linecap="round" stroke-width="4" />
+            <circle cx="66" cy="40" r="4.5" fill="#f8fbff" />
+          </svg>
+        </span>
+        <span class="brand-copy">
+          <strong>TSLite</strong>
+          <span>Help Center</span>
+        </span>
+      </a>
+
+      <nav class="top-nav" aria-label="Primary">
+        <a href="/help/">概览</a>
+        <a href="/help/getting-started/">开始使用</a>
+        <a href="/help/sql-reference/">SQL</a>
+        <a href="/help/file-format/">文件格式</a>
+        <a href="/help/releases/">发布</a>
+      </nav>
+
+      <div class="header-actions">
+        <a class="ghost-link" href="/admin/">管理</a>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <aside class="side-nav">
+        <p class="side-nav-label">Documentation</p>
+        <a href="/help/">概览</a>
+        <a href="/help/getting-started/">开始使用</a>
+        <a href="/help/data-model/">数据模型</a>
+        <a href="/help/sql-reference/">SQL 参考</a>
+        <a href="/help/file-format/">文件格式</a>
+        <a href="/help/releases/">发布与打包</a>
+      </aside>
+
+      <article class="content-card">
+        <header class="page-head">
+          <p class="eyebrow">TSLite Docs</p>
+          <h1>{{ page.title }}</h1>
+          {% if page.description %}
+          <p class="page-description">{{ page.description }}</p>
+          {% endif %}
+        </header>
+        <div class="page-content">
+          {{ content }}
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

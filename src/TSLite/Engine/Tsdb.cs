@@ -238,6 +238,11 @@ public sealed class Tsdb : IDisposable
     /// <summary>
     /// 批量写入多个 Point。
     /// </summary>
+    /// <remarks>
+    /// 若 <paramref name="points"/> 实为 <see cref="Point"/>[] / <see cref="List{Point}"/> /
+    /// <see cref="ArraySegment{Point}"/>，将自动走 <see cref="WriteMany(ReadOnlySpan{Point})"/>
+    /// 的批量快路径（单次 <c>_writeSync</c> 锁、批末仅 Signal 一次）；其它枚举走逐点回退。
+    /// </remarks>
     /// <param name="points">要写入的数据点序列。</param>
     /// <returns>成功写入的点数量。</returns>
     /// <exception cref="ArgumentNullException"><paramref name="points"/> 为 null 时抛出。</exception>
@@ -246,6 +251,17 @@ public sealed class Tsdb : IDisposable
     {
         ArgumentNullException.ThrowIfNull(points);
 
+        // 快路径：尽量把可索引集合下沉到 ReadOnlySpan 重载，避免逐点 lock。
+        switch (points)
+        {
+            case Point[] arr:
+                return WriteMany((ReadOnlySpan<Point>)arr);
+            case List<Point> list:
+                return WriteMany((ReadOnlySpan<Point>)System.Runtime.InteropServices.CollectionsMarshal.AsSpan(list));
+            case ArraySegment<Point> seg when seg.Array is not null:
+                return WriteMany(seg.AsSpan());
+        }
+
         int count = 0;
         foreach (var point in points)
         {
@@ -253,6 +269,57 @@ public sealed class Tsdb : IDisposable
             count++;
         }
         return count;
+    }
+
+    /// <summary>
+    /// 批量写入多个 Point（高吞吐快路径）。
+    /// </summary>
+    /// <remarks>
+    /// 与 <see cref="WriteMany(IEnumerable{Point})"/> 不同，本重载在整批操作期间仅获取一次
+    /// <c>_writeSync</c> 锁，并在批末统一调用一次 <see cref="BackgroundFlushWorker.Signal"/>，
+    /// 显著降低 N 次入锁 / 信号开销。WAL 记录格式与逐点写入完全一致，向后兼容旧库。
+    /// </remarks>
+    /// <param name="points">要写入的数据点连续切片。</param>
+    /// <returns>成功写入的点数量（不含 null 跳过）。</returns>
+    /// <exception cref="ObjectDisposedException">实例已关闭时抛出。</exception>
+    public int WriteMany(ReadOnlySpan<Point> points)
+    {
+        if (points.IsEmpty)
+            return 0;
+
+        int written = 0;
+        lock (_writeSync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            for (int i = 0; i < points.Length; i++)
+            {
+                var point = points[i];
+                if (point is null)
+                    continue;
+
+                var entry = Catalog.GetOrAdd(point);
+
+                if (_seriesWithWalRecord.Add(entry.Id))
+                    _walSet!.AppendCreateSeries(entry.Id, entry.Measurement, entry.Tags);
+
+                foreach (var (fieldName, value) in point.Fields)
+                {
+                    long lsn = _walSet!.AppendWritePoint(entry.Id, point.Timestamp, fieldName, value);
+                    MemTable.Append(entry.Id, point.Timestamp, fieldName, value, lsn);
+                }
+
+                written++;
+            }
+
+            if (_options.SyncWalOnEveryWrite && written > 0)
+                _walSet!.Sync();
+        }
+
+        if (written > 0)
+            _flushWorker?.Signal();
+
+        return written;
     }
 
     /// <summary>

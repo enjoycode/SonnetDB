@@ -162,6 +162,27 @@
 | #44 | `TSLite.Server` 远程批量端点：`POST /v1/db/{db}/measurements/{m}/lp\|json\|bulk` 三个端点 + `RemoteConnectionImpl.ExecuteBulk`；保留 SQL 路径不变。 | ✅ |
 | #45 | 批量入库基准：在 `TSLite.Benchmarks` 新增 `BulkIngestBenchmark`，对比 SQL INSERT 单点 / TableDirect LP / TableDirect JSON / TableDirect Bulk VALUES，刷新 README 写入吞吐对比表。 | ✅ |
 
+---
+## Milestone 11 — 写入快路径（PR #45 瓶颈收收尾）
+
+> **背景**：PR #45 实测发现 100k 点下嵌入式 LP/JSON/Bulk 三路与 SQL VALUES baseline 吞吐几乎打平（~170–200ms），内存仅节省 25～42%；
+> 服务端 `/sql/batch` 1M 点 ~21s vs 嵌入式 0.62s，差 33.8×。调用链详细剖析定位出三个主要瓶颈：
+> 1. `Tsdb.WriteMany(IEnumerable<Point>)` 是假批量，逐点 lock + 逐字段 WAL record；
+> 2. 服务端 LP/Bulk payload `Encoding.UTF8.GetString` + `JsonPointsReader.ToArray()` 二次拷贝；
+> 3. 端点默认 `flush=true` 同步落盘占用 RTT。
+>
+> **目标**：嵌入式 100k 点 ≤ 80ms（1M 点 ≤ 300ms），服务端 LP/Bulk 达到 ≥ 700k pts/s。
+
+| PR | 主题 | 状态 |
+|----|------|------|
+| #46 | **引擎真批量**（已落地，最小切片）：`Tsdb.WriteMany(ReadOnlySpan<Point>)` 整批仅取一次 `_writeSync` 锁、批末仅 `Signal` 一次；`WriteMany(IEnumerable<Point>)` 自动嗅探 `Point[]` / `List<Point>` / `ArraySegment<Point>` 下沉到 span 重载。**WAL 记录格式与 `FileHeader.Version` 保持不变**（向后兼容；`WalRecordType.WriteBatch` 实测 ROI 偏低，留给后续按需追加）。`BulkIngestor`、三端点、`RemoteConnectionImpl` 自动受益。基准（100k 点）：Mean 持平、**Allocated −42~58%**。 | ✅ |
+| #47 | **服务端 + Reader 零拷贝**：`BulkIngestEndpointHandler` 取消 `Encoding.UTF8.GetString`，让 `LineProtocolReader` / `BulkValuesReader` / `SchemaBoundBulkValuesReader` 可接受 `ReadOnlyMemory<byte>` 路径；`JsonPointsReader` 不再 `ToArray()`，直接保留 `ReadOnlyMemory<byte>` 供 `Utf8JsonReader`；`ReadAllAsync` 改用 `ArrayPool<byte>` 租借避免 LOH；保留字符串重载为便捷路。预期 ≥ 30% 内存 与 ~10% CPU 节省。 | 📋 |
+| #48 | **端点 flush 三档位**：`?flush=false\|true\|async`，默认 `false`（最快，仅入 MemTable+WAL）；`async` 仅 `_flushWorker.Signal()` 后返回；`true` 保持现行同步 `FlushNow`。同步调整 `Tsdb.Write` 在批量路径中批后只 Signal 一次。服务端 + RemoteConnectionImpl + ADO TableDirect 参数同步。补齐三路端到端测试。 | 📋 |
+| #49 | **基准刷新 + 对外对比**：重跑 `BulkIngestBenchmark` 与 `ServerInsertBenchmark` （含 PR #44 三端点 + #46~#48 后果）；增加 `InfluxDB LP write` / `TDengine schemaless LP` 同机供参考；刷新 README 「写入 100 万点」与「批量入库快路径」两表，补记引擎变更后的嵌入式 vs 服务端 vs InfluxDB LP 对比。 | 📋 |
+
+**推进顺序**：PR #46 ✅ → PR #47 → PR #48 → PR #49。PR #46 已落地（最小切片，保留 WAL 格式与版本号向后兼容）；#47 / #48 直接消费 `WriteMany(ReadOnlySpan<Point>)` 入口。
+
+
 
 
 ## 里程碑总览
@@ -178,8 +199,10 @@
 | 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | ✅ |
 | 8 | 服务器模式（HTTP + 远端 ADO + 控制面 + Vue3 后台 + SSE） | #32 ~ #34c | ✅ |
 | 9 | 性能基准与发布 | #35 ~ #39 | 🚧（#35 已完成） |
+| 10 | 扩展和第三方 | #40, #41 + #42~#45 批量入库专题 | 🚧（#42~#45 ✅） |
+| 11 | 写入快路径（PR #45 瓶颈收尾） | #46 ~ #49 | � #46 ✅ |
 
-**当前推进顺序**：PR #37 → PR #38 → PR #39。
+**当前推进顺序**：PR #46 → PR #47 → PR #48 → PR #49（写入快路径专题）→ PR #37 → PR #38 → PR #39。
 
 ---
 
