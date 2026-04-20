@@ -77,7 +77,7 @@
 | #18 | Size-Tiered Segment Compaction：`CompactionPlanner` / `SegmentCompactor` / `CompactionWorker` + `SegmentManager.SwapSegments` | ✅ |
 | #19 | 多 WAL 滚动（segmented WAL）：`WalSegmentSet` / `WalRollingPolicy` + Legacy `active.tslwal` 自动升级 | ✅ |
 | #20 | 删除支持（DELETE / Tombstone + WAL Delete 记录 + `tombstones.tslmanifest` + Compaction 阶段消化） | ✅ |
-| #21 | Retention TTL：按策略自动注入墓碑 + 过期段直接 drop | 📋 |
+| #21 | Retention TTL：按策略自动注入墓碑 + 过期段直接 drop | ✅ |
 
 磁盘布局（M5 落地后）：
 ```
@@ -148,7 +148,7 @@
 
 | PR | 主题 | 状态 |
 |----|------|------|
-| #35 | BenchmarkDotNet：写入 / 查询 / 聚合 / Compaction 基准 | 📋 |
+| #35 | BenchmarkDotNet：写入 / 查询 / 聚合 / Compaction 基准 | � |
 | #36 | BenchmarkDotNet：通过docker支持 influxdb 等常见时序数据库进行测试， 支持 TSLite 嵌入式时序数据库模式的测试， 也要支持 服务器模式的性能测试 | 📋 |
 | #37 | 文档完善：`docs/getting-started.md` / `docs/data-model.md` / `docs/sql-reference.md` / `docs/file-format.md` | 📋 |
 | #38 | 发布 NuGet 包 `TSLite 0.1.0` + `.github/workflows/publish.yml` | 📋 |
@@ -164,13 +164,13 @@
 | 2 | 逻辑模型与目录 | #7 ~ #9 | ✅ |
 | 3 | 写入路径 | #10 ~ #13 | ✅ |
 | 4 | 查询路径 | #14 ~ #16 | ✅ |
-| 5 | 稳定性与性能（写入侧） | #17 ~ #21 | 🚧（#17 ~ #20 完成，#21 待派单） |
+| 5 | 稳定性与性能（写入侧） | #17 ~ #21 | ✅ |
 | 6 | SQL 前端 + Tag 倒排索引 | #22 ~ #28 | ✅ |
 | 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | ✅ |
 | 8 | 服务器模式（HTTP + 远端 ADO + Vue3 后台） | #32 ~ #34 | 📋（前置：#21 + #35） |
-| 9 | 性能基准与发布 | #35 ~ #39 | 📋 |
+| 9 | 性能基准与发布 | #35 ~ #39 | �（#35 进行中） |
 
-**当前推进顺序**：PR #21（Retention TTL） → PR #35（嵌入式基准） → PR #32 → PR #33 → PR #34 → PR #36 → PR #37 ~ #39。
+**当前推进顺序**：PR #35（嵌入式基准） → PR #32 → PR #33 → PR #34 → PR #36 → PR #37 ~ #39。
 
 ---
 

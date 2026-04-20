@@ -1,7 +1,7 @@
 # TSLite.Benchmarks — 时序数据库性能对比基准
 
 本项目使用 [BenchmarkDotNet](https://benchmarkdotnet.org/) 在相同环境下对比以下四种数据库的
-**100 万条数据写入、时间范围查询和 1 分钟桶聚合** 的性能：
+**100 万条数据写入、时间范围查询、1 分钟桶聚合与 Compaction** 的性能：
 
 | 数据库 | 类型 | 说明 |
 |--------|------|------|
@@ -42,6 +42,9 @@ dotnet run -c Release --project tests/TSLite.Benchmarks -- --filter *Query*
 
 # 仅运行聚合基准
 dotnet run -c Release --project tests/TSLite.Benchmarks -- --filter *Aggregate*
+
+# 仅运行压缩（Compaction）基准
+dotnet run -c Release --project tests/TSLite.Benchmarks -- --filter *Compaction*
 ```
 
 ### 3. 停止外部数据库
@@ -80,6 +83,11 @@ docker compose -f tests/TSLite.Benchmarks/docker/docker-compose.yml down -v
 
 对全量 100 万条按 **1 分钟桶** 计算 AVG / MIN / MAX / COUNT，
 结果约含 **16,667 个桶**。
+
+### CompactionBenchmark（压缩）
+
+预先写入多个 `.tslseg` 段，然后执行一次 `4 -> 1` 的段合并，
+用于度量 TSLite 引擎在真实段文件上的 Compaction 耗时与内存分配。
 
 ---
 
