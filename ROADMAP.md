@@ -116,13 +116,31 @@
 
 ---
 
-## Milestone 8— 服务器模式
+## Milestone 8 — 服务器模式
+
+> **进入条件**：PR #21（Retention TTL）与 PR #35（嵌入式模式 BenchmarkDotNet 基准）必须先完成，建立性能基线后再服务化，避免后续无法归因 HTTP / 序列化 / 引擎本身的性能差异。
+
+### 设计要点（PR #32）
+
+- **运行时形态**：AOT-friendly Minimal API（`net10.0` + `PublishAot=true`），单进程；项目位于 `src/TSLite.Server/`，引用 `TSLite`。
+- **多租户隔离**：进程内 `ConcurrentDictionary<string, Tsdb>` 注册表，一个数据库 = 一个子目录 + 一个 `Tsdb` 实例，复用现有 `BackgroundFlushWorker` / `CompactionWorker`。`CREATE DATABASE <name>` 创建子目录并注册；`DROP DATABASE` 通过引用计数 + `Dispose` 回收。**不**采用子进程隔离（与 AOT min api 风格冲突且开销过大）。
+- **协议（仅 HTTP，先不做 WebSocket）**：
+  - `POST /v1/db/{db}/sql` 提交单条 SQL；请求体 `application/json`，包含 `sql` 与可选 `parameters`。
+  - `POST /v1/db/{db}/sql/batch` 批量 INSERT（直接走 ADO.NET 的 batch 接口，零额外解析）。
+  - 结果集采用 **`application/x-ndjson` 流式输出**，配合 `System.Text.Json` AOT source generator，避免 JIT 反射 + 全量缓冲；这是 AOT + 大结果集场景下吞吐最佳的组合。
+  - WebSocket 推后评估：仅当出现真实的"订阅 / 长查询流"需求再加（订阅语义本身需要引擎层支持，目前不具备）。
+- **认证（极简）**：单层 `Authorization: Bearer <token>` + 配置文件里的静态 token 列表（角色仅 `admin` / `readwrite` / `readonly`）。实现 SQL 级 `CREATE USER / GRANT`，避免引入控制面元数据。等到真有多用户场景再升级。
+- **可观测性**：`/healthz`、`/metrics`（Prometheus 文本格式，最少包含 per-db 写入速率、Flush/Compaction 次数、活跃 segment 数）。
+
+### PR 列表
 
 | PR | 主题 | 状态 |
 |----|------|------|
-| #32 | 新建  AOT min api项目服务端项目，引用TSLite，对外通过http 和 websocket 提供sql 处理， 该服务支持 创建数据库， 支持 增删改和使用数据库的sql语句， 一个数据库对应一个 TSLite 实例提供服务 ， 提供用户用户管理sql语句| 📋 |
-| #33 | 使用vue3 编写一个管理后端， 用户管理， 数据库状态查看， sql语句执行，  | 📋 |
-| #34 | 新编写一个 针对该服务的ADO接的项目， 用户调用服务， 通过http或者websocket，   | 📋 |
+| #32 | `TSLite.Server`：AOT Minimal API + 多 `Tsdb` 实例注册表 + `POST /v1/db/{db}/sql` + ndjson 流式结果 + Bearer token 三角色认证 + `/healthz` + `/metrics` | 📋 |
+| #33 | 远端 ADO.NET 客户端 `TSLite.Client`：与 PR #28 共享 `TsdbConnectionStringBuilder`，通过 scheme（`tslite://` 本地、`tslite+http://` 远程）切换实现，结果集流式反序列化 | 📋 |
+| #34 | Vue3 管理后台：数据库列表 / 状态、SQL 控制台、token 管理（读写配置文件） | 📋 |
+
+> WebSocket、订阅、用户级 SQL 权限均不在 M8 范围；如确有需求另立 Milestone。
 
 ---
 
@@ -149,8 +167,10 @@
 | 5 | 稳定性与性能（写入侧） | #17 ~ #21 | 🚧（#17 ~ #20 完成，#21 待派单） |
 | 6 | SQL 前端 + Tag 倒排索引 | #22 ~ #28 | ✅ |
 | 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | ✅ |
-| 8 | 单文件容器（可选） | #32 ~ #33 | 📋 |
-| 9 | 性能基准与发布 | #34 ~ #36 | 📋 |
+| 8 | 服务器模式（HTTP + 远端 ADO + Vue3 后台） | #32 ~ #34 | 📋（前置：#21 + #35） |
+| 9 | 性能基准与发布 | #35 ~ #39 | 📋 |
+
+**当前推进顺序**：PR #21（Retention TTL） → PR #35（嵌入式基准） → PR #32 → PR #33 → PR #34 → PR #36 → PR #37 ~ #39。
 
 ---
 
@@ -160,5 +180,7 @@
 2. **Milestone 5 重定义**：从原"SQL 前端"改为"稳定性与性能（写入侧）"，新增 PR #17（后台 Flush + Checkpoint replay 跳过） / #18（Compaction） / #19（多 WAL 滚动） / #20（DELETE/Tombstone） / #21（Retention TTL，待派单）。
 3. **SQL 前端整体后移到 Milestone 6**，并扩充 Tag 倒排索引（PR #27）与 ADO.NET API（PR #28）。
 4. **压缩编码独立为 Milestone 7**（原 Milestone 6 的 PR #22 / #23 / #24 中，Compaction 已在新 PR #18 完成；保留的 Delta / Gorilla 编码工作迁入此处）。
-5. **单文件容器调整为 Milestone 8 且标记为可选**：当前多文件布局已稳定，单文件演进作为后续优化方向，不阻塞 0.1.0 发布。
-6. **发布顺延到 Milestone 9。
+5. **单文件容器方案放弃**：当前多文件布局（`catalog.tslcat` + `wal/*.tslwal` + `segments/*.tslseg` + `tombstones.tslmanifest`）已稳定且对运维/备份/排错友好；单文件需新增 page manager + shadow paging，会重写 M3~M5 的崩溃恢复矩阵，收益不足以覆盖成本。原 M8 改为"服务器模式"。
+6. **Milestone 8 重定义为服务器模式**：仅 HTTP（`POST /v1/db/{db}/sql` + ndjson 流式结果），WebSocket 推后评估；多租户采用进程内 `Tsdb` 注册表；权限仅 Bearer token + 三角色，不做 SQL 级 GRANT。
+7. **执行顺序前置**：PR #21（Retention TTL）与 PR #35（嵌入式 Benchmark 基线）必须先于 M8 完成。
+8. **发布顺延到 Milestone 9。**
