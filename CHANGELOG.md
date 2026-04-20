@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+### Added
+- **TSLite.Server**：Native AOT 友好的 Minimal API HTTP 服务器（PR #32）
+  - 新项目 `src/TSLite.Server/`，基于 `Microsoft.NET.Sdk.Web` + `WebApplication.CreateSlimBuilder` + `EnableRequestDelegateGenerator=true`，全程零反射，可 `dotnet publish -p:PublishAot=true` 产出单文件可执行（win-x64 ~11.5MB），AOT 警告数为 0。
+  - 多租户：进程内 `TsdbRegistry`（`ConcurrentDictionary<string, Tsdb>`）+ `DataRoot/<db>/` 子目录隔离，启动时按需加载已存在数据库；`POST /v1/db`（admin）创建、`DELETE /v1/db/{db}`（admin）销毁、`GET /v1/db` 列表；数据库名校验通过 `[GeneratedRegex]` 源生成器。
+  - SQL 端点：`POST /v1/db/{db}/sql`（单条）+ `POST /v1/db/{db}/sql/batch`（多条），结果以 `application/x-ndjson` 流式返回（meta 行 + 每行 JSON 数组 + end 行），通过手写 `Utf8JsonWriter` 避免多态序列化；其余 DTO 全部走 `System.Text.Json` 源生成器（`ServerJsonContext`）。
+  - 认证：`Authorization: Bearer <token>` 三角色（`admin` / `readwrite` / `readonly`），自定义中间件直接读 `ServerOptions.Tokens` 静态映射，非 `/healthz` `/metrics` 一律强制鉴权；写操作（INSERT/DELETE/DDL）需 `readwrite` 或 `admin`，建删数据库需 `admin`。
+  - 可观测性：`GET /healthz` 返回 JSON 健康摘要；`GET /metrics` 输出 Prometheus 文本格式（`tslite_uptime_seconds` / `tslite_databases` / `tslite_sql_requests_total` / `tslite_sql_errors_total` / `tslite_rows_inserted_total` / `tslite_rows_returned_total` / per-db `tslite_segments{db="..."}`）。
+  - 6 个端到端集成测试（`tests/TSLite.Server.Tests/ServerEndToEndTests.cs`）覆盖 Healthz / Metrics 匿名访问、SQL 鉴权、admin 角色限定、CREATE→INSERT→SELECT→DROP 全链路、ndjson 解析、未知数据库 404。
+- **整库 Native AOT 兼容**：`Directory.Build.props` 默认开启 `IsAotCompatible=true`（测试与基准项目显式关闭）；`TSLite` / `TSLite.Cli` / `TSLite.Server` 全部以零 IL/AOT 警告通过 `dotnet publish -p:PublishAot=true`。
+  - `TsdbDataReader.GetFieldType` 重构：内部 `Type[]` 改为 `enum ColumnTypeKind`，并添加 `[DynamicallyAccessedMembers]` 标注 + `typeof(...)` 常量 switch，消除 IL2063/IL2093 警告，对外 API 与运行时行为完全保持。
+- **CI**：`.github/workflows/ci.yml` 新增 `aot-publish` job（Linux + Windows 矩阵），执行 `dotnet publish -p:PublishAot=true /warnaserror` 验证 `TSLite.Cli` 与 `TSLite.Server`，并上传 publish 产物（PR #32）。
+
 ### Changed
 - `InsertBenchmark`、`QueryBenchmark`、`AggregateBenchmark`：将内存占位实现替换为真实 `Tsdb` 引擎调用（PR #35）
 - `README.md` 性能基准章节扩展为 **TSLite vs SQLite vs InfluxDB 2.7 vs TDengine 3.3.4** 四方对比（基于 1M 点数据集，单机容器）

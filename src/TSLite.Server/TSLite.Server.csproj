@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>TSLite.Server</RootNamespace>
+    <AssemblyName>TSLite.Server</AssemblyName>
+
+    <!--
+      AOT 优先。Native AOT publish 需要在命令行/CI 里加 -p:PublishAot=true。
+      这里默认不打开 PublishAot，避免日常 `dotnet build` 触发完整 AOT 链路（速度慢且不必要）。
+      但通过 IsAotCompatible（继承自 Directory.Build.props）已经在 build 阶段开启了 IL/AOT 分析器，
+      所以违反 AOT 兼容性的代码会立刻在 build 时报错。
+    -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!--
+      ASP.NET Core 的 Request Delegate Generator（RDG）source generator：
+      AOT 模式下 MapGet/MapPost 等接受 Delegate 的扩展方法是 RequiresDynamicCode 的，
+      启用 RDG 后，编译期会为每个端点生成 trim/AOT 安全的具体类型 wrapper。
+    -->
+    <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TSLite\TSLite.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="TSLite.Server.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="appsettings.Development.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

@@ -75,3 +75,53 @@ jobs:
 
       - name: Format check
         run: dotnet format TSLite.slnx --verify-no-changes --no-restore --severity warn
+
+  aot-publish:
+    name: AOT Publish (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: windows-latest
+            rid: win-x64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Publish TSLite.Cli (Native AOT)
+        run: dotnet publish src/TSLite.Cli/TSLite.Cli.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true /warnaserror
+
+      - name: Publish TSLite.Server (Native AOT)
+        run: dotnet publish src/TSLite.Server/TSLite.Server.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true /warnaserror
+
+      - name: Show AOT artifacts
+        shell: bash
+        run: |
+          echo "==== TSLite.Cli ===="
+          ls -lh src/TSLite.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/ || true
+          echo "==== TSLite.Server ===="
+          ls -lh src/TSLite.Server/bin/Release/net10.0/${{ matrix.rid }}/publish/ || true
+
+      - name: Upload AOT artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: aot-${{ matrix.rid }}
+          path: |
+            src/TSLite.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/
+            src/TSLite.Server/bin/Release/net10.0/${{ matrix.rid }}/publish/

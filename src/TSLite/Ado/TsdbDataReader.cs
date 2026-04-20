@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using TSLite.Sql.Execution;
 
@@ -24,7 +25,7 @@ public sealed class TsdbDataReader : DbDataReader
     private readonly int _recordsAffected;
     private readonly CommandBehavior _behavior;
     private readonly TsdbConnection? _connection;
-    private readonly Type[] _columnTypes;
+    private readonly ColumnTypeKind[] _columnTypes;
     private int _rowIndex = -1;
     private bool _closed;
 
@@ -41,22 +42,73 @@ public sealed class TsdbDataReader : DbDataReader
         _columnTypes = InferColumnTypes(result);
     }
 
-    private static Type[] InferColumnTypes(SelectExecutionResult result)
+    private static ColumnTypeKind[] InferColumnTypes(SelectExecutionResult result)
     {
-        var types = new Type[result.Columns.Count];
+        var types = new ColumnTypeKind[result.Columns.Count];
         for (int c = 0; c < result.Columns.Count; c++)
         {
-            Type? t = null;
+            ColumnTypeKind kind = ColumnTypeKind.Object;
             for (int r = 0; r < result.Rows.Count; r++)
             {
                 var v = result.Rows[r][c];
                 if (v is null) continue;
-                t = v.GetType();
+                kind = ClassifyValue(v);
                 break;
             }
-            types[c] = t ?? typeof(object);
+            types[c] = kind;
         }
         return types;
+    }
+
+    private static ColumnTypeKind ClassifyValue(object value) => value switch
+    {
+        bool => ColumnTypeKind.Boolean,
+        byte => ColumnTypeKind.Byte,
+        sbyte => ColumnTypeKind.SByte,
+        short => ColumnTypeKind.Int16,
+        ushort => ColumnTypeKind.UInt16,
+        int => ColumnTypeKind.Int32,
+        uint => ColumnTypeKind.UInt32,
+        long => ColumnTypeKind.Int64,
+        ulong => ColumnTypeKind.UInt64,
+        float => ColumnTypeKind.Single,
+        double => ColumnTypeKind.Double,
+        decimal => ColumnTypeKind.Decimal,
+        string => ColumnTypeKind.String,
+        DateTime => ColumnTypeKind.DateTime,
+        DateTimeOffset => ColumnTypeKind.DateTimeOffset,
+        TimeSpan => ColumnTypeKind.TimeSpan,
+        Guid => ColumnTypeKind.Guid,
+        byte[] => ColumnTypeKind.Bytes,
+        _ => ColumnTypeKind.Object,
+    };
+
+    /// <summary>
+    /// 列运行时类型枚举。改为枚举可以让 <see cref="GetFieldType"/> 用 <c>switch</c>
+    /// 返回 <c>typeof(...)</c> 常量，从而满足 IL 分析器对
+    /// <see cref="DynamicallyAccessedMembersAttribute"/> 的静态可证明性要求。
+    /// </summary>
+    private enum ColumnTypeKind : byte
+    {
+        Object = 0,
+        Boolean,
+        Byte,
+        SByte,
+        Int16,
+        UInt16,
+        Int32,
+        UInt32,
+        Int64,
+        UInt64,
+        Single,
+        Double,
+        Decimal,
+        String,
+        DateTime,
+        DateTimeOffset,
+        TimeSpan,
+        Guid,
+        Bytes,
     }
 
     /// <inheritdoc />
@@ -123,10 +175,32 @@ public sealed class TsdbDataReader : DbDataReader
     public override IEnumerator GetEnumerator() => new DbEnumerator(this);
 
     /// <inheritdoc />
+    [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicProperties)]
     public override Type GetFieldType(int ordinal)
     {
         ValidateOrdinal(ordinal);
-        return _columnTypes[ordinal];
+        return _columnTypes[ordinal] switch
+        {
+            ColumnTypeKind.Boolean => typeof(bool),
+            ColumnTypeKind.Byte => typeof(byte),
+            ColumnTypeKind.SByte => typeof(sbyte),
+            ColumnTypeKind.Int16 => typeof(short),
+            ColumnTypeKind.UInt16 => typeof(ushort),
+            ColumnTypeKind.Int32 => typeof(int),
+            ColumnTypeKind.UInt32 => typeof(uint),
+            ColumnTypeKind.Int64 => typeof(long),
+            ColumnTypeKind.UInt64 => typeof(ulong),
+            ColumnTypeKind.Single => typeof(float),
+            ColumnTypeKind.Double => typeof(double),
+            ColumnTypeKind.Decimal => typeof(decimal),
+            ColumnTypeKind.String => typeof(string),
+            ColumnTypeKind.DateTime => typeof(DateTime),
+            ColumnTypeKind.DateTimeOffset => typeof(DateTimeOffset),
+            ColumnTypeKind.TimeSpan => typeof(TimeSpan),
+            ColumnTypeKind.Guid => typeof(Guid),
+            ColumnTypeKind.Bytes => typeof(byte[]),
+            _ => typeof(object),
+        };
     }
 
     /// <inheritdoc />
