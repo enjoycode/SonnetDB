@@ -228,6 +228,14 @@ public static class Program
                 BearerAuthMiddleware.CanWrite(role), BearerAuthMiddleware.IsAdmin(role), controlPlane).ConfigureAwait(false);
         });
 
+        // ---- PR #44：批量入库快路径三端点（绕开 SQL parser）----
+        app.MapPost("/v1/db/{db}/measurements/{m}/lp", async (HttpContext ctx, string db, string m) =>
+            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.LineProtocol).ConfigureAwait(false));
+        app.MapPost("/v1/db/{db}/measurements/{m}/json", async (HttpContext ctx, string db, string m) =>
+            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.Json).ConfigureAwait(false));
+        app.MapPost("/v1/db/{db}/measurements/{m}/bulk", async (HttpContext ctx, string db, string m) =>
+            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.BulkValues).ConfigureAwait(false));
+
         // ---- 控制面 SQL（admin only，无 db 路径）----
         app.MapMethods("/v1/sql", new[] { "POST" }, (RequestDelegate)(async ctx =>
         {
@@ -275,6 +283,32 @@ public static class Program
         {
             await SseEndpointHandler.HandleAsync(ctx, broadcaster).ConfigureAwait(false);
         });
+    }
+
+    private static async Task HandleBulkAsync(
+        HttpContext ctx,
+        TsdbRegistry registry,
+        ServerMetrics metrics,
+        string db,
+        string measurement,
+        BulkIngestEndpointHandler.Format format)
+    {
+        var role = BearerAuthMiddleware.GetRole(ctx);
+        if (!BearerAuthMiddleware.CanWrite(role))
+        {
+            await WriteSimpleErrorAsync(ctx, StatusCodes.Status403Forbidden, "forbidden",
+                "批量入库需要 readwrite 或 admin 角色。").ConfigureAwait(false);
+            return;
+        }
+        if (!TryResolveDatabase(ctx, registry, db, out var tsdb))
+            return;
+        if (string.IsNullOrWhiteSpace(measurement) || measurement.Length > 255)
+        {
+            await WriteSimpleErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request",
+                $"非法 measurement 名 '{measurement}'。").ConfigureAwait(false);
+            return;
+        }
+        await BulkIngestEndpointHandler.HandleAsync(ctx, tsdb, measurement, format, metrics).ConfigureAwait(false);
     }
 
     private static bool TryResolveDatabase(HttpContext ctx, TsdbRegistry registry, string db, out Engine.Tsdb tsdb)

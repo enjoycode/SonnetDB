@@ -15,4 +15,5 @@ namespace TSLite.Data.Remote;
 [JsonSerializable(typeof(ResultMetaLine))]
 [JsonSerializable(typeof(ResultEndLine))]
 [JsonSerializable(typeof(ServerErrorBody))]
+[JsonSerializable(typeof(BulkIngestResponseBody))]
 internal sealed partial class RemoteJsonContext : JsonSerializerContext;

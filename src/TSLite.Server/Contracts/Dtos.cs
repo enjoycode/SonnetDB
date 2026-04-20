@@ -98,6 +98,14 @@ public sealed record DatabaseListResponse(IReadOnlyList<string> Databases);
 public sealed record HealthResponse(string Status, int Databases, double UptimeSeconds);
 
 /// <summary>
+/// <c>POST /v1/db/{db}/measurements/{m}/{lp|json|bulk}</c> 批量入库的成功响应。
+/// </summary>
+/// <param name="WrittenRows">实际写入数据库的行数。</param>
+/// <param name="SkippedRows"><c>onerror=skip</c> 模式下跳过的非法行数；FailFast 模式始终为 0。</param>
+/// <param name="ElapsedMilliseconds">服务端处理耗时（毫秒）。</param>
+public sealed record BulkIngestResponse(long WrittenRows, long SkippedRows, double ElapsedMilliseconds);
+
+/// <summary>
 /// <c>POST /v1/auth/login</c> 请求体。
 /// </summary>
 /// <param name="Username">用户名。</param>

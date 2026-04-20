@@ -6,6 +6,25 @@
 ## [Unreleased]
 
 ### Added
+- **PR #44：服务端三端点 + 远程 ADO 客户端打通批量入库（绕开 SQL 解析的快路径，第 3/4 步）**
+  - 服务端新增三个端点：
+    - `POST /v1/db/{db}/measurements/{m}/lp` —— Line Protocol（`text/plain`）。
+    - `POST /v1/db/{db}/measurements/{m}/json` —— JSON points（`application/json`）。
+    - `POST /v1/db/{db}/measurements/{m}/bulk` —— `INSERT INTO ... VALUES (...)` 快路径。
+    - 三个端点共用 `BulkIngestEndpointHandler`：对 `BulkValues` 走 `SchemaBoundBulkValuesReader`（按 measurement schema 解析列角色），其余直接 new reader → `BulkIngestor.Ingest`。
+    - 通过 query string 传参：`?onerror=skip` 切换到 `BulkErrorPolicy.Skip`，`?flush=true` 触发结尾 `Tsdb.FlushNow`。
+    - 鉴权：`CanWrite` 才允许（readwrite / admin），与 SQL 端点保持一致；非法 db / measurement 名走 400/404。
+    - 响应：`200 OK { "writtenRows": N, "skippedRows": K, "elapsedMilliseconds": ms }`；解析阶段失败 `400 { "error": "bulk_ingest_error", ... }`。
+    - 写入行数同步进入 `ServerMetrics.AddInsertedRows`，与 SQL 路径的 `tslite_rows_inserted_total` 计数对齐。
+  - `TSLite.Data.Remote.RemoteConnectionImpl.ExecuteBulk` 完成实现：
+    - 以 `BulkPayloadDetector.DetectWithPrefix` 嗅探协议、切首行 measurement 前缀。
+    - measurement 优先级：`cmd.Parameters["measurement"]` > 首行前缀 > JSON `m` 字段 > `INSERT INTO <name>`。
+    - 选择 `lp / json / bulk` 端点；`onerror`、`flush` 透传为 query string；payload 直接以 `text/plain`（LP / Bulk）或 `application/json`（JSON）POST。
+    - 解析 `BulkIngestResponseBody.WrittenRows` 后包成 `MaterializedExecutionResult.NonQuery`。
+  - 抽取共用 `TSLite.Ingest.SchemaBoundBulkValuesReader.Create(tsdb, sql, measurement)` 工厂：把 `tsdb.Measurements` 的 schema 桥接到 `BulkValuesReader` 的列角色 resolver。`EmbeddedConnectionImpl` 与服务端共用此工厂，避免逻辑重复。
+  - 新增 `BulkIngestResponse`（服务端契约）、`BulkIngestResponseBody`（远程客户端 DTO）；两端均纳入 source-gen JSON context（AOT 友好）。
+  - 测试：`tests/TSLite.Server.Tests/BulkIngestEndpointTests.cs`（10 用例：LP/JSON/Bulk × {成功 / onerror=skip / FailFast 400 / flush=true / RBAC / 404 / 401 / 写后 SELECT 回查}）+ `RemoteAdoBulkIngestTests.cs`（7 用例：远程 ADO `CommandType.TableDirect` 三协议 + measurement 参数 / onerror / 403 / 缺 measurement 抛 InvalidOperationException）。
+
 - **PR #43：`TSLite.Data` 接入批量入库快路径（绕开 SQL 解析的快路径，第 2/4 步）**
   - 扩展 `IConnectionImpl` 增加 `ExecuteBulk(commandText, parameters)`，与 `Execute(sql, …)` 并列。
   - `TsdbCommand.CommandType` 由只读 `Text` 改为可读写字段，允许 `CommandType.Text`（默认）与 `CommandType.TableDirect`；其它值（如 `StoredProcedure`）仍抛 `NotSupportedException`。

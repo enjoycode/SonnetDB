@@ -101,7 +101,7 @@ internal sealed class EmbeddedConnectionImpl : IConnectionImpl
         {
             BulkPayloadFormat.LineProtocol => new LineProtocolReader(payload, measurementOverride: measurement),
             BulkPayloadFormat.Json => new JsonPointsReader(payload, measurementOverride: measurement),
-            BulkPayloadFormat.BulkValues => CreateBulkValuesReader(_tsdb, payload.ToString(), measurement),
+            BulkPayloadFormat.BulkValues => SchemaBoundBulkValuesReader.Create(_tsdb, payload.ToString(), measurement),
             _ => throw new BulkIngestException($"未知协议格式 {format}。"),
         };
 
@@ -114,76 +114,6 @@ internal sealed class EmbeddedConnectionImpl : IConnectionImpl
         {
             (reader as IDisposable)?.Dispose();
         }
-    }
-
-    private static BulkValuesReader CreateBulkValuesReader(Tsdb tsdb, string sql, string? measurementOverride)
-    {
-        // 列角色 resolver：先按需求解析的 measurement 的 schema 决定（measurement 由 reader 自身解析后回填）。
-        // 这里采用闭包：第一次访问列时按 sql 的 measurement 解析 schema；override 优先。
-        Catalog.MeasurementSchema? cachedSchema = null;
-        var resolver = (string col) =>
-        {
-            if (string.Equals(col, "time", StringComparison.OrdinalIgnoreCase))
-                return BulkValuesColumnRole.Time;
-
-            if (cachedSchema is null)
-            {
-                // BulkValuesReader 在 ctor 内已解析 measurement，但此 resolver 在 ctor 内被调用，
-                // 故我们按 measurementOverride（若有）或 sql 中显式 measurement 名查找。
-                var name = measurementOverride ?? PeekMeasurementName(sql);
-                cachedSchema = tsdb.Measurements.TryGet(name)
-                    ?? throw new BulkIngestException($"Bulk INSERT: measurement '{name}' 不存在；请先 CREATE MEASUREMENT。");
-            }
-
-            var column = cachedSchema.TryGetColumn(col)
-                ?? throw new BulkIngestException($"Bulk INSERT: measurement '{cachedSchema.Name}' 没有列 '{col}'。");
-            return column.Role == Catalog.MeasurementColumnRole.Tag
-                ? BulkValuesColumnRole.Tag
-                : BulkValuesColumnRole.Field;
-        };
-
-        return new BulkValuesReader(sql, resolver, measurementOverride);
-    }
-
-    private static string PeekMeasurementName(string sql)
-    {
-        // 轻量 peek：跳过 INSERT INTO，读一个标识符（必要时支持 "..." / `...`）。
-        var span = sql.AsSpan();
-        int i = 0;
-        SkipWhitespace(span, ref i);
-        ConsumeKeyword(span, ref i, "INSERT");
-        SkipWhitespace(span, ref i);
-        ConsumeKeyword(span, ref i, "INTO");
-        SkipWhitespace(span, ref i);
-        if (i >= span.Length) throw new BulkIngestException("Bulk INSERT: 期望 measurement 名。");
-        char c = span[i];
-        if (c == '"' || c == '`')
-        {
-            int s = ++i;
-            while (i < span.Length && span[i] != c) i++;
-            return new string(span[s..i]);
-        }
-        int start = i;
-        while (i < span.Length && (char.IsLetterOrDigit(span[i]) || span[i] == '_')) i++;
-        if (i == start) throw new BulkIngestException("Bulk INSERT: 无法读取 measurement 名。");
-        return new string(span[start..i]);
-    }
-
-    private static void SkipWhitespace(ReadOnlySpan<char> span, ref int i)
-    {
-        while (i < span.Length && (span[i] == ' ' || span[i] == '\t' || span[i] == '\r' || span[i] == '\n')) i++;
-    }
-
-    private static void ConsumeKeyword(ReadOnlySpan<char> span, ref int i, string kw)
-    {
-        if (i + kw.Length > span.Length)
-            throw new BulkIngestException($"Bulk INSERT: 期望关键字 '{kw}'。");
-        for (int k = 0; k < kw.Length; k++)
-        {
-            if (char.ToUpperInvariant(span[i + k]) != kw[k])
-                throw new BulkIngestException($"Bulk INSERT: 期望关键字 '{kw}'。");
-        }
-        i += kw.Length;
     }
 
     private static string? TryGetParam(TsdbParameterCollection parameters, string name)

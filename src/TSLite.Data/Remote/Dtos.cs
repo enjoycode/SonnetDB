@@ -53,3 +53,18 @@ internal sealed class ServerErrorBody
     [JsonPropertyName("message")]
     public string Message { get; set; } = string.Empty;
 }
+
+/// <summary>
+/// <c>POST /v1/db/{db}/measurements/{m}/{lp|json|bulk}</c> 的成功响应体。
+/// </summary>
+internal sealed class BulkIngestResponseBody
+{
+    [JsonPropertyName("writtenRows")]
+    public long WrittenRows { get; set; }
+
+    [JsonPropertyName("skippedRows")]
+    public long SkippedRows { get; set; }
+
+    [JsonPropertyName("elapsedMilliseconds")]
+    public double ElapsedMilliseconds { get; set; }
+}
