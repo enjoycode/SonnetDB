@@ -6,6 +6,16 @@
 ## [Unreleased]
 
 ### Added
+- **PR #43：`TSLite.Data` 接入批量入库快路径（绕开 SQL 解析的快路径，第 2/4 步）**
+  - 扩展 `IConnectionImpl` 增加 `ExecuteBulk(commandText, parameters)`，与 `Execute(sql, …)` 并列。
+  - `TsdbCommand.CommandType` 由只读 `Text` 改为可读写字段，允许 `CommandType.Text`（默认）与 `CommandType.TableDirect`；其它值（如 `StoredProcedure`）仍抛 `NotSupportedException`。
+  - `TsdbCommand.ExecuteCore` 在 `TableDirect` 下跳过 `ParameterBinder`，把 `CommandText` 整段交给 `IConnectionImpl.ExecuteBulk`。
+  - `EmbeddedConnectionImpl.ExecuteBulk` 桥接 `TSLite.Ingest`：用 `BulkPayloadDetector.DetectWithPrefix` 嗅探协议并切首行 measurement 前缀；按 `LineProtocol`/`Json`/`BulkValues` 路由到对应 reader；对 `BulkValuesReader` 通过闭包从 `Tsdb.Measurements.TryGet(measurement).TryGetColumn(col).Role` 解析列角色（Tag/Field/Time）；最终经 `BulkIngestor.Ingest` 写入并把写入行数包成 `MaterializedExecutionResult.NonQuery`。
+  - 命令参数 hooks：`measurement`（覆盖 payload 内的 measurement）、`onerror=skip`（切换到 `BulkErrorPolicy.Skip`）、`flush=true`（写入完成后触发 `Tsdb.FlushNow`）；参数名兼容 `@`/`:` 前缀。
+  - `RemoteConnectionImpl.ExecuteBulk` 占位实现：抛 `NotSupportedException`，明确指向 PR #44。
+  - 新增 `tests/TSLite.Tests/Ado/TsdbBulkIngestAdoTests.cs`：10 个 xUnit 用例覆盖 LP / JSON / BulkValues / 首行前缀 / 参数（onerror/flush/measurement）/ 未知列 / `StoredProcedure` 拒绝 / TableDirect 与普通 SELECT 在同一连接共存等场景。
+  - 兼容性：现有 `CommandType.Text` 路径行为完全不变；不引入新依赖。
+
 - **PR #A：批量入库核心 `TSLite.Ingest` 命名空间（绕开 SQL 解析的快路径，第 1/4 步）**
   - 新增 `src/TSLite/Ingest/BulkPayloadFormat.cs`：`BulkPayloadFormat` 枚举（`LineProtocol` / `Json` / `BulkValues`）+ `TimePrecision`（`Nanoseconds` / `Microseconds` / `Milliseconds` / `Seconds`）。
   - 新增 `src/TSLite/Ingest/BulkPayloadDetector.cs`：O(1) 前后字节嗅探协议；`DetectWithPrefix` 支持可选首行 measurement 前缀（首行不含空白/`=`/`,`/`{}`/`()`/`;` 时视为 measurement）。

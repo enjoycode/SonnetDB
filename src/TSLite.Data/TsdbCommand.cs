@@ -23,6 +23,7 @@ public sealed class TsdbCommand : DbCommand
 {
     private TsdbConnection? _connection;
     private string _commandText = string.Empty;
+    private CommandType _commandType = CommandType.Text;
     private readonly TsdbParameterCollection _parameters = new();
 
     /// <summary>构造一个未关联连接的命令。</summary>
@@ -49,11 +50,13 @@ public sealed class TsdbCommand : DbCommand
     /// <inheritdoc />
     public override CommandType CommandType
     {
-        get => CommandType.Text;
+        get => _commandType;
         set
         {
-            if (value != CommandType.Text)
-                throw new NotSupportedException("TSLite 仅支持 CommandType.Text。");
+            if (value != CommandType.Text && value != CommandType.TableDirect)
+                throw new NotSupportedException(
+                    "TSLite 仅支持 CommandType.Text（普通 SQL）与 CommandType.TableDirect（批量入库快路径）。");
+            _commandType = value;
         }
     }
 
@@ -144,8 +147,15 @@ public sealed class TsdbCommand : DbCommand
         if (string.IsNullOrWhiteSpace(_commandText))
             throw new InvalidOperationException("CommandText 为空。");
 
-        var bound = ParameterBinder.Bind(_commandText, _parameters);
         var impl = _connection.GetOpenImpl();
+        if (_commandType == CommandType.TableDirect)
+        {
+            // 批量入库快路径：CommandText 即 payload（含可选首行 measurement 前缀），
+            // 不做 ParameterBinder 的 SQL 字面量替换。
+            return impl.ExecuteBulk(_commandText, _parameters);
+        }
+
+        var bound = ParameterBinder.Bind(_commandText, _parameters);
         return impl.Execute(bound, _parameters, behavior);
     }
 }

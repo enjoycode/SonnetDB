@@ -124,6 +124,13 @@ internal sealed class RemoteConnectionImpl : IConnectionImpl
         return new TsdbServerException(error, message, response.StatusCode);
     }
 
+    public IExecutionResult ExecuteBulk(string commandText, TsdbParameterCollection parameters)
+    {
+        // PR #44 将实现：分发到 POST /v1/db/{db}/measurements/{m}/{lp|json|bulk}。
+        throw new NotSupportedException(
+            "远程连接的 CommandType.TableDirect 批量入库快路径尚未实现，将在 PR #44 中加入。");
+    }
+
     /// <summary>
     /// 解析连接字符串中的 <c>Data Source</c>，返回 (baseUrl, databaseFromPath)。
     /// 支持 <c>tslite+http://host:port/dbname</c> / <c>http://host:port/dbname</c>。
