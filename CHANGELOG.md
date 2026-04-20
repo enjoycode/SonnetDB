@@ -6,6 +6,16 @@
 ## [Unreleased]
 
 ### Added
+- **PR #35：BenchmarkDotNet 五库性能基准全量收敛**
+  - 所有基准代码与 docker compose 编排在前序 PR（#32 / #33 / #36 工作流）中已陆续落地，PR #35 收敛验收并将 ROADMAP 状态置 ✅。
+  - 五个数据库的覆盖矩阵（详见 README「五库基准覆盖一览」）：
+    - **TSLite（嵌入式）**：写入 + 范围查询 + 聚合 + Compaction（4→1 段合并）。
+    - **SQLite**（`Microsoft.Data.Sqlite`，WAL）：写入 + 范围查询 + 聚合。
+    - **InfluxDB 2.7**（HTTP Line Protocol + Flux）：写入 + 范围查询 + 聚合。
+    - **TDengine 3.3**（REST + 超级表/子表）：写入 + 范围查询 + 聚合。
+    - **TSLite.Server**（HTTP Batch SQL + ndjson）：写入 + 范围查询 + 聚合。
+  - 数据规模统一 100 万点、单序列 `host=server001`、`value DOUBLE`，外部数据库不可用时各基准独立 `[SKIP]`。
+  - README 新增「五库基准覆盖一览」表，明确标注 Compaction 仅适用于 TSLite，并指向各详细结果章节；同时补 ROADMAP Milestone 9 推进顺序为 PR #37 → PR #38 → PR #39。
 - **TSLite.Server 实时事件流：SSE + 前端订阅自动刷新（PR #34c）**
   - 服务端新增 `src/TSLite.Server/Hosting/EventBroadcaster.cs`：基于 `System.Threading.Channels` 的多路广播器（`BoundedChannel` + `FullMode.DropOldest`，容量 64），按通道 `metrics` / `slow_query` / `db` 过滤订阅，慢消费者自动丢最旧帧不阻塞 publish。
   - 新增 `src/TSLite.Server/Endpoints/SseEndpointHandler.cs`：实现 `GET /v1/events`，响应 `text/event-stream`，禁用 buffering（`X-Accel-Buffering: no`），按 SSE 帧格式输出 `event:` + `id:` + `data:` 三行；30 秒空闲发 `: heartbeat` 注释行心跳；支持 `?stream=metrics,slow_query,db` 通道筛选；连接建立先发 `hello` 帧。

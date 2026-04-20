@@ -149,7 +149,7 @@
 
 | PR | 主题 | 状态 |
 |----|------|------|
-| #35 | BenchmarkDotNet：写入 / 查询 / 聚合 / Compaction 基准，编写评测 InfluxDB TDengine SQLite TSLite  TSLite.Server 等五个时序数据库的各项指标对比， 并连同机器性能都写在readme.md 里面。  | 📋|
+| #35 | BenchmarkDotNet：写入 / 查询 / 聚合 / Compaction 基准，编写评测 InfluxDB TDengine SQLite TSLite  TSLite.Server 等五个时序数据库的各项指标对比， 并连同机器性能都写在readme.md 里面。  | ✅|
 | #37 | 文档完善： `docs/getting-started.md` / `docs/data-model.md` / `docs/sql-reference.md` / `docs/file-format.md` 使用 jekllynet 构建github pages 文档， 编写readme.md ， 纠正过时的文件说明，把现在的功能和架构重新书写、 重新整理一遍， 核对路线图， 核对代码和功能是否一致，我们明确废弃的就删掉， 有遗漏的我们评估是否要补齐。  | 📋 |
 | #38 | 发布 NuGet 包 `TSLite 0.1.0` + `.github/workflows/publish.yml` ， 打包生唱成一套包含 tslite 和 tslite.data tslite.cil 的版本，并包含他们的使用说明， 发布linux和 windows版本， 再打包 TSLite.Server  一套编写版， 包含全部内容，包含前端，TSLite.cil tslite.data 等  能够一键启动，不需要额外设置，即可启动。 windows和linux分别打包， 再打包 windows 和linux的可安装的 msi和 dep rpm的版本。 | 📋 |
 | #39 |  docker 服务端模式的镜像到 maikebing iotsharp组织， 编写ci 等能自动发布| 📋 |
@@ -173,9 +173,9 @@
 | 6 | SQL 前端 + Tag 倒排索引 | #22 ~ #28 | ✅ |
 | 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | ✅ |
 | 8 | 服务器模式（HTTP + 远端 ADO + 控制面 + Vue3 后台 + SSE） | #32 ~ #34c | ✅ |
-| 9 | 性能基准与发布 | #35 ~ #39 | �（#35 进行中） |
+| 9 | 性能基准与发布 | #35 ~ #39 | 🚧（#35 已完成） |
 
-**当前推进顺序**：PR #35（嵌入式基准） → PR #36 → PR #37 ~ #39。
+**当前推进顺序**：PR #37 → PR #38 → PR #39。
 
 ---
 

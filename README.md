@@ -208,6 +208,20 @@ TSLite/
 下表为在本地开发机上对 **TSLite vs. SQLite vs. InfluxDB 2.x vs. TDengine 3.x** 四种时序/嵌入式数据库的实测结果。
 基准代码位于 [tests/TSLite.Benchmarks](tests/TSLite.Benchmarks)，使用 [BenchmarkDotNet](https://benchmarkdotnet.org/) 运行。
 
+### 五库基准覆盖一览
+
+| 数据库 | 写入 | 范围查询 | 时间桶聚合 | Compaction | 详细结果 |
+|--------|:---:|:------:|:---------:|:---------:|----------|
+| **TSLite**（嵌入式） | ✅ | ✅ | ✅ | ✅ | 见下文「嵌入式 4 库对比」 |
+| **SQLite** | ✅ | ✅ | ✅ | — | 见下文「嵌入式 4 库对比」 |
+| **InfluxDB 2.7** | ✅ | ✅ | ✅ | — | 见下文「嵌入式 4 库对比」 |
+| **TDengine 3.3** | ✅ | ✅ | ✅ | — | 见下文「嵌入式 4 库对比」 |
+| **TSLite.Server**（HTTP） | ✅ | ✅ | ✅ | — | 见下文「TSLite.Server 服务器模式」 |
+
+> Compaction 是 TSLite 段合并机制特有概念，其它数据库无对应可对比的对外接口；本基准仅记录 TSLite 单库的 4→1 段合并耗时。
+> 五库的 Insert / Query / Aggregate 基准实现在 [tests/TSLite.Benchmarks/Benchmarks/](tests/TSLite.Benchmarks/Benchmarks/) 下；外部数据库经 Docker compose 一键启动（见 [tests/TSLite.Benchmarks/docker/docker-compose.yml](tests/TSLite.Benchmarks/docker/docker-compose.yml)），不可用时对应基准自动 `[SKIP]`。
+> TSLite.Server 单独使用 Docker 容器在另一台机器测得（CPU/系统差异显著），故未与嵌入式 4 库合并到同一张表，而是独立呈现并附「嵌入式 vs 服务器模式额外开销」对比表。
+
 ### 测试环境
 
 | 项目 | 配置 |

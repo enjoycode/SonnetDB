@@ -24,7 +24,7 @@ services:
     build:
       context: ../../../
       dockerfile: src/TSLite.Server/Dockerfile
-    image: tslite-server:bench
+    image: iotsharp/tslite-server:bench
     container_name: tslite-bench-server
     ports:
       - "5080:5080"
