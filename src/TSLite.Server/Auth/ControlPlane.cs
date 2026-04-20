@@ -76,6 +76,35 @@ public sealed class ControlPlane : IControlPlane
         _grants.DeleteDatabaseGrants(databaseName);
     }
 
+    /// <inheritdoc />
+    public IReadOnlyList<UserSummary> ListUsers()
+    {
+        var detailed = _users.ListUsersDetailed();
+        var result = new UserSummary[detailed.Count];
+        for (int i = 0; i < detailed.Count; i++)
+        {
+            var u = detailed[i];
+            result[i] = new UserSummary(u.Name, u.IsSuperuser, u.CreatedUtc, u.TokenCount);
+        }
+        return result;
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<GrantSummary> ListGrants(string? userName)
+    {
+        var raw = userName is null ? _grants.ListAll() : _grants.ListByUser(userName);
+        var result = new GrantSummary[raw.Count];
+        for (int i = 0; i < raw.Count; i++)
+        {
+            var g = raw[i];
+            result[i] = new GrantSummary(g.User, g.Database, MapPermissionBack(g.Permission));
+        }
+        return result;
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<string> ListDatabases() => _registry.ListDatabases();
+
     private void EnsureUserExists(string userName)
     {
         if (!_users.Exists(userName))
@@ -95,5 +124,13 @@ public sealed class ControlPlane : IControlPlane
         GrantPermission.Write => DatabasePermission.Write,
         GrantPermission.Admin => DatabasePermission.Admin,
         _ => throw new ArgumentOutOfRangeException(nameof(permission), permission, "未知的 GRANT 权限级别。"),
+    };
+
+    private static GrantPermission MapPermissionBack(DatabasePermission permission) => permission switch
+    {
+        DatabasePermission.Read => GrantPermission.Read,
+        DatabasePermission.Write => GrantPermission.Write,
+        DatabasePermission.Admin => GrantPermission.Admin,
+        _ => throw new ArgumentOutOfRangeException(nameof(permission), permission, "无法映射的服务端权限级别。"),
     };
 }

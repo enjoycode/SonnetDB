@@ -50,6 +50,23 @@ public sealed class UserStore
             return _state.Users.Select(u => u.Name).ToArray();
     }
 
+    /// <summary>列出所有用户的详细摘要（用户名、是否超级、创建时间、当前 token 数）。</summary>
+    /// <returns>按用户名升序排列的用户摘要。</returns>
+    public IReadOnlyList<UserSummaryRecord> ListUsersDetailed()
+    {
+        lock (_lock)
+        {
+            return _state.Users
+                .OrderBy(u => u.Name, StringComparer.Ordinal)
+                .Select(u => new UserSummaryRecord(
+                    u.Name,
+                    u.IsSuperuser,
+                    DateTimeOffset.FromUnixTimeMilliseconds(u.CreatedAt).UtcDateTime,
+                    u.Tokens.Count))
+                .ToArray();
+        }
+    }
+
     /// <summary>是否存在指定用户名（不区分大小写）。</summary>
     public bool Exists(string name)
     {
@@ -288,3 +305,14 @@ public sealed class UserStore
 /// <param name="UserName">小写用户名。</param>
 /// <param name="IsSuperuser">是否超级用户。</param>
 public readonly record struct AuthenticatedUser(string UserName, bool IsSuperuser);
+
+/// <summary>用户摘要信息（用于 SHOW USERS）。</summary>
+/// <param name="Name">小写用户名。</param>
+/// <param name="IsSuperuser">是否超级用户。</param>
+/// <param name="CreatedUtc">创建时间（UTC）。</param>
+/// <param name="TokenCount">当前有效 token 数。</param>
+public sealed record UserSummaryRecord(
+    string Name,
+    bool IsSuperuser,
+    DateTime CreatedUtc,
+    int TokenCount);

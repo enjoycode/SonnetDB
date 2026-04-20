@@ -71,7 +71,8 @@ public sealed class SqlParser
             TokenKind.KeywordAlter => ParseAlterUser(),
             TokenKind.KeywordGrant => ParseGrant(),
             TokenKind.KeywordRevoke => ParseRevoke(),
-            _ => throw Error("期望 CREATE / INSERT / SELECT / DELETE / DROP / ALTER / GRANT / REVOKE 关键字"),
+            TokenKind.KeywordShow => ParseShow(),
+            _ => throw Error("期望 CREATE / INSERT / SELECT / DELETE / DROP / ALTER / GRANT / REVOKE / SHOW 关键字"),
         };
     }
 
@@ -632,6 +633,34 @@ public sealed class SqlParser
         Expect(TokenKind.KeywordFrom);
         var user = ExpectIdentifierName();
         return new RevokeStatement(db, user);
+    }
+
+    /// <summary>
+    /// <c>SHOW USERS</c> / <c>SHOW GRANTS [FOR &lt;user&gt;]</c> / <c>SHOW DATABASES</c>。
+    /// </summary>
+    private SqlStatement ParseShow()
+    {
+        Expect(TokenKind.KeywordShow);
+        switch (Current.Kind)
+        {
+            case TokenKind.KeywordUsers:
+                Advance();
+                return new ShowUsersStatement();
+            case TokenKind.KeywordDatabases:
+                Advance();
+                return new ShowDatabasesStatement();
+            case TokenKind.KeywordGrants:
+                Advance();
+                if (Current.Kind == TokenKind.KeywordFor)
+                {
+                    Advance();
+                    var user = ExpectIdentifierName();
+                    return new ShowGrantsStatement(user);
+                }
+                return new ShowGrantsStatement(null);
+            default:
+                throw Error("SHOW 后面期望 USERS / GRANTS / DATABASES");
+        }
     }
 
     private string ExpectStringLiteral()

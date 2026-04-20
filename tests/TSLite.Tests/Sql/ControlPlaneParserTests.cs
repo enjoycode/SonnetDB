@@ -138,4 +138,41 @@ public sealed class ControlPlaneParserTests
         Assert.IsType<CreateMeasurementStatement>(stmts[2]);
         Assert.IsType<DropUserStatement>(stmts[3]);
     }
+
+    [Fact]
+    public void Parse_ShowUsers()
+    {
+        var stmt = SqlParser.Parse("SHOW USERS");
+        Assert.IsType<ShowUsersStatement>(stmt);
+    }
+
+    [Fact]
+    public void Parse_ShowDatabases()
+    {
+        var stmt = SqlParser.Parse("show databases");
+        Assert.IsType<ShowDatabasesStatement>(stmt);
+    }
+
+    [Fact]
+    public void Parse_ShowGrants_NoFilter()
+    {
+        var stmt = (ShowGrantsStatement)SqlParser.Parse("SHOW GRANTS");
+        Assert.Null(stmt.UserName);
+    }
+
+    [Fact]
+    public void Parse_ShowGrants_WithFor()
+    {
+        var stmt = (ShowGrantsStatement)SqlParser.Parse("SHOW GRANTS FOR alice");
+        Assert.Equal("alice", stmt.UserName);
+    }
+
+    [Theory]
+    [InlineData("SHOW")]
+    [InlineData("SHOW FOO")]
+    [InlineData("SHOW GRANTS FOR")]
+    public void Parse_Show_BadGrammar_Throws(string sql)
+    {
+        Assert.Throws<SqlParseException>(() => SqlParser.Parse(sql));
+    }
 }

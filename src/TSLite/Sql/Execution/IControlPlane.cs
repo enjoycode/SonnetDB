@@ -50,4 +50,37 @@ public interface IControlPlane
     /// <summary>删除数据库（含其所有 measurement、segment、grant）。</summary>
     /// <param name="databaseName">数据库名。</param>
     void DropDatabase(string databaseName);
+
+    /// <summary>列出所有用户（按用户名排序）。</summary>
+    /// <returns>用户摘要序列。</returns>
+    IReadOnlyList<UserSummary> ListUsers();
+
+    /// <summary>列出 grants（按 user_name, database 排序）。</summary>
+    /// <param name="userName">可选用户名筛选；<c>null</c> 表示列出全部。</param>
+    /// <returns>grant 三元组序列。</returns>
+    IReadOnlyList<GrantSummary> ListGrants(string? userName);
+
+    /// <summary>列出所有已注册数据库（按名称排序）。</summary>
+    /// <returns>数据库名序列。</returns>
+    IReadOnlyList<string> ListDatabases();
 }
+
+/// <summary>SHOW USERS 行。</summary>
+/// <param name="Name">用户名。</param>
+/// <param name="IsSuperuser">是否超级用户。</param>
+/// <param name="CreatedUtc">创建时间（UTC）。</param>
+/// <param name="TokenCount">当前有效 token 数。</param>
+public sealed record UserSummary(
+    string Name,
+    bool IsSuperuser,
+    DateTime CreatedUtc,
+    int TokenCount);
+
+/// <summary>SHOW GRANTS 行。</summary>
+/// <param name="UserName">被授权用户名。</param>
+/// <param name="Database">数据库名（<c>*</c> 表示通配）。</param>
+/// <param name="Permission">权限级别（<c>Read</c> / <c>Write</c> / <c>Admin</c>）。</param>
+public sealed record GrantSummary(
+    string UserName,
+    string Database,
+    GrantPermission Permission);

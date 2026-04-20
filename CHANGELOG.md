@@ -23,6 +23,14 @@
   - **新端点 `POST /v1/auth/login`**：接收 `{username,password}`，PBKDF2 校验通过后调用 `UserStore.IssueToken` 颁发新 token，返回 `{username,token,tokenId,isSuperuser}`。⚠️ 该端点用 `app.MapMethods(path, ["POST"], (RequestDelegate)(async ctx => ...))` 直接以 `RequestDelegate` 形式注册（详见 `Fixed`）。
   - **SQL 端点权限收紧**：`src/TSLite.Server/Endpoints/SqlEndpointHandler.cs` 在执行前 parse 一次，识别为控制面 DDL 时要求 `isAdmin == true`，否则返回 `forbidden`；写操作（INSERT/DELETE）仍按 `canWrite` 判定。批处理同步收紧。
   - **测试**：5 个端到端用例 `tests/TSLite.Server.Tests/AuthControlPlaneEndToEndTests.cs` 覆盖：登录字段缺失 → 400、未知用户 → 401、CREATE USER + GRANT + 登录拿 token + 用 token 调 `/healthz` 与 SQL 端点（普通用户控制面 DDL → forbidden）、动态非 admin token 控制面 DDL → forbidden、ALTER USER 改密后旧 token 立即失效 → 401。服务端测试总数：49 通过 / 0 失败。
+- **TSLite.Server 控制面查询 SQL：SHOW USERS / GRANTS / DATABASES（PR #34b-1）**
+  - 新增 SQL 关键字 `SHOW / USERS / GRANTS / DATABASES / FOR`（`src/TSLite/Sql/TokenKind.cs` + `SqlLexer.cs`）。
+  - 新增 AST：`ShowUsersStatement` / `ShowGrantsStatement(UserName)` / `ShowDatabasesStatement`，`SqlParser.ParseShow()` 分发；`SHOW GRANTS [FOR <user>]` 中 `FOR` 子句可选。
+  - `IControlPlane` 扩展 3 个查询方法：`ListUsers()` → `IReadOnlyList<UserSummary>`、`ListGrants(string?)` → `IReadOnlyList<GrantSummary>`、`ListDatabases()` → `IReadOnlyList<string>`；`UserSummary(Name, IsSuperuser, CreatedUtc, TokenCount)` 与 `GrantSummary(UserName, Database, Permission)` 在核心库声明。
+  - `SqlExecutor` 把 SHOW 语句包装成 `SelectExecutionResult`，复用现有 `/v1/db/{db}/sql` ndjson 渲染管线，无需新增 REST 端点。
+  - 服务端 `UserStore.ListUsersDetailed()` 与 `GrantsStore.ListAll()` 提供枚举支撑；`ControlPlane` 用反向权限映射 (`MapPermissionBack`) 把 `DatabasePermission` 转回 `GrantPermission`。
+  - 权限收紧：`SHOW USERS` / `SHOW GRANTS` 在 `SqlEndpointHandler.IsControlPlaneStatement` 中归为 admin-only；`SHOW DATABASES` 任何已认证用户均可执行。
+  - 测试：parser 5 例（`Parse_ShowUsers/ShowDatabases/ShowGrants_NoFilter/WithFor` + 3 个 bad grammar Theory）+ ControlPlane 集成 3 例（`ListUsers_ReturnsCreatedUsersOrderedByName` / `ListGrants_NullFilter_ReturnsAll` / `ListDatabases_ReflectsRegistry`）+ E2E 3 例（`ShowUsers_AsAdmin_ReturnsRows` / `ShowUsers_AsRegularUser_Forbidden` / `ShowDatabases_AsAdmin_ReturnsRows`）。当前测试总数：1174 + 55 = 1229 全绿。
 
 ### Fixed
 - **AOT RequestDelegateGenerator workaround**：`WebApplication.CreateSlimBuilder` + `EnableRequestDelegateGenerator=true` 下，对于

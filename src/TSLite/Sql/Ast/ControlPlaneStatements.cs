@@ -58,3 +58,20 @@ public enum GrantPermission
     /// <summary>所有 DML/DDL（不含用户管理）。</summary>
     Admin = 3,
 }
+
+// PR #34b-1：SHOW 控制面查询语句。结果统一映射到 SelectExecutionResult，
+// 走与 SELECT 相同的 ndjson 渲染管线。
+
+/// <summary><c>SHOW USERS</c>：列出所有用户。返回列：<c>name</c>(string)、<c>is_superuser</c>(bool)、<c>created_utc</c>(string ISO-8601)、<c>token_count</c>(long)。</summary>
+public sealed record ShowUsersStatement : SqlStatement;
+
+/// <summary>
+/// <c>SHOW GRANTS [FOR &lt;user&gt;]</c>：列出全部 grants 或某用户的 grants。
+/// 返回列：<c>user_name</c>(string)、<c>database</c>(string)、<c>permission</c>(string，"Read"/"Write"/"Admin")。
+/// </summary>
+/// <param name="UserName">可选用户名筛选；<c>null</c> 表示列出全部。</param>
+public sealed record ShowGrantsStatement(string? UserName) : SqlStatement;
+
+/// <summary><c>SHOW DATABASES</c>：列出所有已注册数据库。返回列：<c>name</c>(string)。</summary>
+public sealed record ShowDatabasesStatement : SqlStatement;
+

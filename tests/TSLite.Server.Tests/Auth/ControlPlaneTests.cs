@@ -120,6 +120,52 @@ public sealed class ControlPlaneTests : IDisposable
     }
 
     [Fact]
+    public void ListUsers_ReturnsCreatedUsersOrderedByName()
+    {
+        using var bootstrap = Tsdb.Open(new TSLite.Engine.TsdbOptions { RootDirectory = Path.Combine(_dir, "_bootstrap") });
+        SqlExecutor.Execute(bootstrap, "CREATE USER bob WITH PASSWORD 'p'", _controlPlane);
+        SqlExecutor.Execute(bootstrap, "CREATE USER alice WITH PASSWORD 'p'", _controlPlane);
+
+        var list = _controlPlane.ListUsers();
+        Assert.Equal(2, list.Count);
+        Assert.Equal("alice", list[0].Name);
+        Assert.Equal("bob", list[1].Name);
+        Assert.False(list[0].IsSuperuser);
+        Assert.Equal(0, list[0].TokenCount);
+    }
+
+    [Fact]
+    public void ListGrants_NullFilter_ReturnsAll()
+    {
+        using var bootstrap = Tsdb.Open(new TSLite.Engine.TsdbOptions { RootDirectory = Path.Combine(_dir, "_bootstrap") });
+        SqlExecutor.Execute(bootstrap, "CREATE DATABASE m1", _controlPlane);
+        SqlExecutor.Execute(bootstrap, "CREATE DATABASE m2", _controlPlane);
+        SqlExecutor.Execute(bootstrap, "CREATE USER alice WITH PASSWORD 'p'", _controlPlane);
+        SqlExecutor.Execute(bootstrap, "CREATE USER bob WITH PASSWORD 'p'", _controlPlane);
+        SqlExecutor.Execute(bootstrap, "GRANT READ ON DATABASE m1 TO alice", _controlPlane);
+        SqlExecutor.Execute(bootstrap, "GRANT WRITE ON DATABASE m2 TO bob", _controlPlane);
+
+        var all = _controlPlane.ListGrants(null);
+        Assert.Equal(2, all.Count);
+
+        var aliceOnly = _controlPlane.ListGrants("alice");
+        Assert.Single(aliceOnly);
+        Assert.Equal("m1", aliceOnly[0].Database);
+        Assert.Equal(GrantPermission.Read, aliceOnly[0].Permission);
+    }
+
+    [Fact]
+    public void ListDatabases_ReflectsRegistry()
+    {
+        using var bootstrap = Tsdb.Open(new TSLite.Engine.TsdbOptions { RootDirectory = Path.Combine(_dir, "_bootstrap") });
+        SqlExecutor.Execute(bootstrap, "CREATE DATABASE alpha", _controlPlane);
+        SqlExecutor.Execute(bootstrap, "CREATE DATABASE beta", _controlPlane);
+        var dbs = _controlPlane.ListDatabases();
+        Assert.Contains("alpha", dbs);
+        Assert.Contains("beta", dbs);
+    }
+
+    [Fact]
     public void Grant_OnWildcardDatabase_DoesNotRequireExistingDatabase()
     {
         using var bootstrap = Tsdb.Open(new TSLite.Engine.TsdbOptions { RootDirectory = Path.Combine(_dir, "_bootstrap") });

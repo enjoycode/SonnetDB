@@ -83,7 +83,7 @@ internal static class SqlEndpointHandler
             if (IsControlPlaneStatement(parsed) && !isAdmin)
             {
                 metrics.RecordSqlError();
-                await WriteErrorAsync(context, "forbidden", "控制面 DDL（CREATE USER / GRANT / CREATE DATABASE 等）仅 admin 可执行。").ConfigureAwait(false);
+                await WriteErrorAsync(context, "forbidden", "控制面 SQL（CREATE USER / GRANT / CREATE DATABASE / SHOW USERS 等）仅 admin 可执行。").ConfigureAwait(false);
                 return;
             }
 
@@ -215,7 +215,7 @@ internal static class SqlEndpointHandler
         await body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
     }
 
-    /// <summary>判别是否为控制面 DDL（需要超级用户权限）。</summary>
+    /// <summary>判别是否为控制面 DDL（需要超级用户权限）。SHOW DATABASES 不在此列，普通认证用户可调用。</summary>
     private static bool IsControlPlaneStatement(SqlStatement statement) => statement is
         CreateUserStatement or
         AlterUserPasswordStatement or
@@ -223,5 +223,7 @@ internal static class SqlEndpointHandler
         GrantStatement or
         RevokeStatement or
         CreateDatabaseStatement or
-        DropDatabaseStatement;
+        DropDatabaseStatement or
+        ShowUsersStatement or
+        ShowGrantsStatement;
 }

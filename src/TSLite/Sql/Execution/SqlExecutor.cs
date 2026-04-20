@@ -82,9 +82,49 @@ public static class SqlExecutor
                 cp => { cp.CreateDatabase(createDb.DatabaseName); return (object)1; }),
             DropDatabaseStatement dropDb => ExecuteControlPlane(controlPlane,
                 cp => { cp.DropDatabase(dropDb.DatabaseName); return (object)1; }),
+            ShowUsersStatement => ExecuteControlPlane(controlPlane, ShowUsers),
+            ShowGrantsStatement showGrants => ExecuteControlPlane(controlPlane, cp => ShowGrants(cp, showGrants.UserName)),
+            ShowDatabasesStatement => ExecuteControlPlane(controlPlane, ShowDatabases),
             _ => throw new NotSupportedException(
                 $"SQL 语句类型 '{statement.GetType().Name}' 尚未实现。"),
         };
+    }
+
+    private static object ShowUsers(IControlPlane cp)
+    {
+        var users = cp.ListUsers();
+        var rows = new List<IReadOnlyList<object?>>(users.Count);
+        foreach (var u in users)
+        {
+            rows.Add(new object?[] { u.Name, u.IsSuperuser, u.CreatedUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture), (long)u.TokenCount });
+        }
+        return new SelectExecutionResult(
+            new[] { "name", "is_superuser", "created_utc", "token_count" },
+            rows);
+    }
+
+    private static object ShowGrants(IControlPlane cp, string? userName)
+    {
+        var grants = cp.ListGrants(userName);
+        var rows = new List<IReadOnlyList<object?>>(grants.Count);
+        foreach (var g in grants)
+        {
+            rows.Add(new object?[] { g.UserName, g.Database, g.Permission.ToString() });
+        }
+        return new SelectExecutionResult(
+            new[] { "user_name", "database", "permission" },
+            rows);
+    }
+
+    private static object ShowDatabases(IControlPlane cp)
+    {
+        var dbs = cp.ListDatabases();
+        var rows = new List<IReadOnlyList<object?>>(dbs.Count);
+        foreach (var d in dbs)
+        {
+            rows.Add(new object?[] { d });
+        }
+        return new SelectExecutionResult(new[] { "name" }, rows);
     }
 
     private static object ExecuteControlPlane(IControlPlane? controlPlane, Func<IControlPlane, object> action)

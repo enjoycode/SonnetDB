@@ -75,4 +75,11 @@ public enum TokenKind
     KeywordDatabase,
     KeywordDrop,
     KeywordAlter,
+
+    // PR #34b-1：SHOW 控制面查询
+    KeywordShow,
+    KeywordUsers,
+    KeywordGrants,
+    KeywordDatabases,
+    KeywordFor,
 }

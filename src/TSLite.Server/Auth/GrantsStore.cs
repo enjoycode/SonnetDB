@@ -64,6 +64,19 @@ public sealed class GrantsStore
         }
     }
 
+    /// <summary>列出全部 grants（按 user, database 排序）。</summary>
+    public IReadOnlyList<GrantRecord> ListAll()
+    {
+        lock (_lock)
+        {
+            return _state.Grants
+                .OrderBy(g => g.User, StringComparer.Ordinal)
+                .ThenBy(g => g.Database, StringComparer.Ordinal)
+                .Select(g => new GrantRecord { User = g.User, Database = g.Database, Permission = g.Permission })
+                .ToArray();
+        }
+    }
+
     /// <summary>
     /// 授权（同 (user, database) 仅保留最高级别）。
     /// </summary>

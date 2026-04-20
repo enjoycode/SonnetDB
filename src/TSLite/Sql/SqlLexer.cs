@@ -51,6 +51,13 @@ public sealed class SqlLexer
         ["database"] = TokenKind.KeywordDatabase,
         ["drop"] = TokenKind.KeywordDrop,
         ["alter"] = TokenKind.KeywordAlter,
+
+        // PR #34b-1：SHOW 控制面查询
+        ["show"] = TokenKind.KeywordShow,
+        ["users"] = TokenKind.KeywordUsers,
+        ["grants"] = TokenKind.KeywordGrants,
+        ["databases"] = TokenKind.KeywordDatabases,
+        ["for"] = TokenKind.KeywordFor,
     };
 
     private readonly string _source;

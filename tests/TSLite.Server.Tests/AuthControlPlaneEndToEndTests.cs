@@ -158,6 +158,51 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Unauthorized, hz.StatusCode);
     }
 
+    [Fact]
+    public async Task ShowUsers_AsAdmin_ReturnsRows()
+    {
+        await CreateDatabaseAsync("m");
+        await ExecuteSqlAsync("m", "CREATE USER eve WITH PASSWORD 'p'", AdminStaticToken);
+
+        using var admin = CreateClient(AdminStaticToken);
+        var resp = await admin.PostAsync("/v1/db/m/sql",
+            JsonContent.Create(new SqlRequest("SHOW USERS"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("eve", body);
+    }
+
+    [Fact]
+    public async Task ShowUsers_AsRegularUser_Forbidden()
+    {
+        await CreateDatabaseAsync("m");
+        await ExecuteSqlAsync("m", "CREATE USER frank WITH PASSWORD 'p'", AdminStaticToken);
+
+        using var anon = CreateClient(token: null);
+        var loginResp = await anon.PostAsync("/v1/auth/login",
+            JsonContent.Create(new LoginRequest("frank", "p"), ServerJsonContext.Default.LoginRequest));
+        var login = await loginResp.Content.ReadFromJsonAsync<LoginResponse>(ServerJsonContext.Default.LoginResponse);
+
+        using var frank = CreateClient(login!.Token);
+        var resp = await frank.PostAsync("/v1/db/m/sql",
+            JsonContent.Create(new SqlRequest("SHOW USERS"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task ShowDatabases_AsAdmin_ReturnsRows()
+    {
+        await CreateDatabaseAsync("alpha");
+        await CreateDatabaseAsync("beta");
+        using var admin = CreateClient(AdminStaticToken);
+        var resp = await admin.PostAsync("/v1/db/alpha/sql",
+            JsonContent.Create(new SqlRequest("SHOW DATABASES"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("alpha", body);
+        Assert.Contains("beta", body);
+    }
+
     private async Task CreateDatabaseAsync(string name)
     {
         using var admin = CreateClient(AdminStaticToken);
