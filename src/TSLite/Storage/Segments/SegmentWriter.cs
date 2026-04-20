@@ -159,80 +159,52 @@ public sealed class SegmentWriter
                     int fieldNameLen = Encoding.UTF8.GetBytes(bucket.Key.FieldName, fieldNameBuf);
                     ReadOnlySpan<byte> fieldNameSpan = fieldNameBuf.AsSpan(0, fieldNameLen);
 
-                    // 编码时间戳载荷：Count × 8B int64 LE
-                    int tsPayloadLen = points.Length * 8;
-                    byte[] tsBuf = ArrayPool<byte>.Shared.Rent(Math.Max(tsPayloadLen, 1));
+                    // 编码时间戳载荷：根据 SegmentWriterOptions.TimestampEncoding 选择 V1 或 V2 编码
+                    bool useDeltaTs = (_options.TimestampEncoding & BlockEncoding.DeltaTimestamp) != 0
+                        && points.Length > 0;
+
+                    int tsPayloadLen;
+                    if (useDeltaTs)
+                    {
+                        // 先把时间戳收集到临时 long[]，再调用 TimestampCodec
+                        long[] tsArr = ArrayPool<long>.Shared.Rent(points.Length);
+                        try
+                        {
+                            for (int i = 0; i < points.Length; i++)
+                                tsArr[i] = points.Span[i].Timestamp;
+                            tsPayloadLen = TimestampCodec.MeasureDeltaOfDelta(tsArr.AsSpan(0, points.Length));
+                            byte[] tsBuf = ArrayPool<byte>.Shared.Rent(Math.Max(tsPayloadLen, 1));
+                            try
+                            {
+                                if (tsPayloadLen > 0)
+                                    TimestampCodec.WriteDeltaOfDelta(tsArr.AsSpan(0, points.Length), tsBuf.AsSpan(0, tsPayloadLen));
+                                ReadOnlySpan<byte> tsSpan = tsBuf.AsSpan(0, tsPayloadLen);
+                                WriteOneBlock(bs, bucket, points, fieldNameSpan, tsSpan, BlockEncoding.DeltaTimestamp,
+                                    blockOffset, indexEntries, ref segMinTs, ref segMaxTs, ref currentOffset);
+                            }
+                            finally { ArrayPool<byte>.Shared.Return(tsBuf); }
+                        }
+                        finally { ArrayPool<long>.Shared.Return(tsArr); }
+                        continue;
+                    }
+
+                    // V1：Count × 8B int64 LE
+                    tsPayloadLen = points.Length * 8;
+                    byte[] tsBufV1 = ArrayPool<byte>.Shared.Rent(Math.Max(tsPayloadLen, 1));
                     try
                     {
                         if (tsPayloadLen > 0)
                         {
-                            var tsWriter = new IO.SpanWriter(tsBuf.AsSpan(0, tsPayloadLen));
+                            var tsWriter = new IO.SpanWriter(tsBufV1.AsSpan(0, tsPayloadLen));
                             foreach (var dp in points.Span)
                                 tsWriter.WriteInt64(dp.Timestamp);
                         }
 
-                        ReadOnlySpan<byte> tsSpan = tsBuf.AsSpan(0, tsPayloadLen);
-
-                        // 编码值载荷
-                        int valPayloadLen = ValuePayloadCodec.MeasureValuePayload(bucket.FieldType, points);
-                        byte[] valBuf = ArrayPool<byte>.Shared.Rent(Math.Max(valPayloadLen, 1));
-                        try
-                        {
-                            if (valPayloadLen > 0)
-                                ValuePayloadCodec.WritePayload(bucket.FieldType, points, valBuf.AsSpan(0, valPayloadLen));
-
-                            ReadOnlySpan<byte> valSpan = valBuf.AsSpan(0, valPayloadLen);
-
-                            // 计算 BlockHeader.Crc32 = CRC32(FieldNameUtf8 ++ TsPayload ++ ValPayload)
-                            var blockCrc = new Crc32();
-                            blockCrc.Append(fieldNameSpan);
-                            blockCrc.Append(tsSpan);
-                            blockCrc.Append(valSpan);
-                            uint crc32 = blockCrc.GetCurrentHashAsUInt32();
-
-                            // 计算字段名哈希
-                            int fieldNameHash = FieldNameHash.Compute(fieldNameSpan);
-
-                            // 构造 BlockHeader
-                            int blockLength = FormatSizes.BlockHeaderSize + fieldNameLen + tsPayloadLen + valPayloadLen;
-                            var bh = BlockHeader.CreateNew(
-                                seriesId: bucket.Key.SeriesId,
-                                min: bucket.MinTimestamp,
-                                max: bucket.MaxTimestamp,
-                                count: points.Length,
-                                fieldType: bucket.FieldType,
-                                fieldNameLen: fieldNameLen,
-                                tsLen: tsPayloadLen,
-                                valLen: valPayloadLen);
-                            bh.Crc32 = crc32;
-                            bh.Encoding = BlockEncoding.None;
-
-                            // 写入：BlockHeader → FieldNameUtf8 → TsPayload → ValPayload
-                            WriteStructToStream(bs, in bh);
-                            bs.Write(fieldNameSpan);
-                            bs.Write(tsSpan);
-                            bs.Write(valSpan);
-
-                            // 更新段级别 min/max 时间戳
-                            if (bucket.MinTimestamp < segMinTs) segMinTs = bucket.MinTimestamp;
-                            if (bucket.MaxTimestamp > segMaxTs) segMaxTs = bucket.MaxTimestamp;
-
-                            // 记录索引条目
-                            indexEntries.Add(new BlockIndexEntry
-                            {
-                                SeriesId = bucket.Key.SeriesId,
-                                MinTimestamp = bucket.MinTimestamp,
-                                MaxTimestamp = bucket.MaxTimestamp,
-                                FileOffset = blockOffset,
-                                BlockLength = blockLength,
-                                FieldNameHash = fieldNameHash,
-                            });
-
-                            currentOffset += blockLength;
-                        }
-                        finally { ArrayPool<byte>.Shared.Return(valBuf); }
+                        ReadOnlySpan<byte> tsSpan = tsBufV1.AsSpan(0, tsPayloadLen);
+                        WriteOneBlock(bs, bucket, points, fieldNameSpan, tsSpan, BlockEncoding.None,
+                            blockOffset, indexEntries, ref segMinTs, ref segMaxTs, ref currentOffset);
                     }
-                    finally { ArrayPool<byte>.Shared.Return(tsBuf); }
+                    finally { ArrayPool<byte>.Shared.Return(tsBufV1); }
                 }
                 finally { ArrayPool<byte>.Shared.Return(fieldNameBuf); }
             }
@@ -298,6 +270,76 @@ public sealed class SegmentWriter
     }
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 把已编码的时间戳载荷连同字段名/值载荷写入流，并构造对应的 BlockHeader 与 BlockIndexEntry。
+    /// </summary>
+    private static void WriteOneBlock(
+        Stream bs,
+        MemTableSeries bucket,
+        ReadOnlyMemory<TSLite.Model.DataPoint> points,
+        ReadOnlySpan<byte> fieldNameSpan,
+        ReadOnlySpan<byte> tsSpan,
+        BlockEncoding tsEncoding,
+        long blockOffset,
+        List<BlockIndexEntry> indexEntries,
+        ref long segMinTs,
+        ref long segMaxTs,
+        ref long currentOffset)
+    {
+        int valPayloadLen = ValuePayloadCodec.MeasureValuePayload(bucket.FieldType, points);
+        byte[] valBuf = ArrayPool<byte>.Shared.Rent(Math.Max(valPayloadLen, 1));
+        try
+        {
+            if (valPayloadLen > 0)
+                ValuePayloadCodec.WritePayload(bucket.FieldType, points, valBuf.AsSpan(0, valPayloadLen));
+
+            ReadOnlySpan<byte> valSpan = valBuf.AsSpan(0, valPayloadLen);
+
+            // CRC32(FieldNameUtf8 ++ TsPayload ++ ValPayload)
+            var blockCrc = new Crc32();
+            blockCrc.Append(fieldNameSpan);
+            blockCrc.Append(tsSpan);
+            blockCrc.Append(valSpan);
+            uint crc32 = blockCrc.GetCurrentHashAsUInt32();
+
+            int fieldNameHash = FieldNameHash.Compute(fieldNameSpan);
+
+            int blockLength = FormatSizes.BlockHeaderSize + fieldNameSpan.Length + tsSpan.Length + valSpan.Length;
+            var bh = BlockHeader.CreateNew(
+                seriesId: bucket.Key.SeriesId,
+                min: bucket.MinTimestamp,
+                max: bucket.MaxTimestamp,
+                count: points.Length,
+                fieldType: bucket.FieldType,
+                fieldNameLen: fieldNameSpan.Length,
+                tsLen: tsSpan.Length,
+                valLen: valSpan.Length);
+            bh.Crc32 = crc32;
+            bh.Encoding = tsEncoding;
+
+            WriteStructToStream(bs, in bh);
+            bs.Write(fieldNameSpan);
+            bs.Write(tsSpan);
+            bs.Write(valSpan);
+
+            if (bucket.MinTimestamp < segMinTs) segMinTs = bucket.MinTimestamp;
+            if (bucket.MaxTimestamp > segMaxTs) segMaxTs = bucket.MaxTimestamp;
+
+            indexEntries.Add(new BlockIndexEntry
+            {
+                SeriesId = bucket.Key.SeriesId,
+                MinTimestamp = bucket.MinTimestamp,
+                MaxTimestamp = bucket.MaxTimestamp,
+                FileOffset = blockOffset,
+                BlockLength = blockLength,
+                FieldNameHash = fieldNameHash,
+            });
+
+            currentOffset += blockLength;
+        }
+        finally { ArrayPool<byte>.Shared.Return(valBuf); }
+    }
 
     /// <summary>将 unmanaged 结构体序列化写入流。</summary>
     private static void WriteStructToStream<T>(Stream stream, in T value) where T : unmanaged

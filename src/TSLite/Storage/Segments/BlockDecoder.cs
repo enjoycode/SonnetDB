@@ -28,7 +28,7 @@ internal static class BlockDecoder
             return [];
 
         var result = new DataPoint[count];
-        ReadTimestamps(tsPayload, count, result);
+        ReadTimestamps(d.TimestampEncoding, tsPayload, count, result);
         ReadValues(d.FieldType, valPayload, count, result);
         return result;
     }
@@ -55,7 +55,7 @@ internal static class BlockDecoder
 
         // 先读所有时间戳，用二分查找确定范围
         long[] timestamps = new long[count];
-        ReadTimestampsRaw(tsPayload, count, timestamps);
+        ReadTimestampsRaw(d.TimestampEncoding, tsPayload, count, timestamps);
 
         int start = LowerBound(timestamps, from);
         int end = UpperBound(timestamps, toInclusive);
@@ -77,8 +77,17 @@ internal static class BlockDecoder
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
 
-    private static void ReadTimestamps(ReadOnlySpan<byte> tsPayload, int count, DataPoint[] result)
+    private static void ReadTimestamps(BlockEncoding tsEncoding, ReadOnlySpan<byte> tsPayload, int count, DataPoint[] result)
     {
+        if ((tsEncoding & BlockEncoding.DeltaTimestamp) != 0)
+        {
+            long[] tmp = new long[count];
+            TimestampCodec.ReadDeltaOfDelta(tsPayload, tmp);
+            for (int i = 0; i < count; i++)
+                result[i] = new DataPoint(tmp[i], default);
+            return;
+        }
+
         for (int i = 0; i < count; i++)
         {
             long ts = BinaryPrimitives.ReadInt64LittleEndian(tsPayload.Slice(i * 8, 8));
@@ -86,8 +95,14 @@ internal static class BlockDecoder
         }
     }
 
-    private static void ReadTimestampsRaw(ReadOnlySpan<byte> tsPayload, int count, long[] timestamps)
+    private static void ReadTimestampsRaw(BlockEncoding tsEncoding, ReadOnlySpan<byte> tsPayload, int count, long[] timestamps)
     {
+        if ((tsEncoding & BlockEncoding.DeltaTimestamp) != 0)
+        {
+            TimestampCodec.ReadDeltaOfDelta(tsPayload, timestamps.AsSpan(0, count));
+            return;
+        }
+
         for (int i = 0; i < count; i++)
             timestamps[i] = BinaryPrimitives.ReadInt64LittleEndian(tsPayload.Slice(i * 8, 8));
     }

@@ -108,7 +108,7 @@
 
 | PR | 主题 | 状态 |
 |----|------|------|
-| #29 | 时间戳 Delta-of-Delta 编码（block payload V2，向后兼容 V1） | 📋 |
+| #29 | 时间戳 Delta-of-Delta 编码（block payload V2，向后兼容 V1） | ✅ |
 | #30 | 数值列 Gorilla / XOR 编码（Double） + RLE（Bool） + 字典（String） | 📋 |
 | #31 | 块级压缩开关与统计：在 `SegmentWriter.Options` 暴露编码选择，`SegmentReader` 自动按 `BlockEncoding` 解码 | 📋 |
 
@@ -116,12 +116,13 @@
 
 ---
 
-## Milestone 8— 服务模式
+## Milestone 8— 服务器模式
 
 | PR | 主题 | 状态 |
 |----|------|------|
-| #32 | 新建TSNetServer AOT min api项目，引用，对外提供sql,创建数据库， 支持 增删改和使用数据库的sql语句， 一个数据库对应一个 TSLite 实例提供服务 | 📋 |
-| #33 | 单文件容器：把 catalog / wal / segments / tombstones 合并进单一 `.tsl` 文件（`FileHeader.Version` 升级；可选模式，原多文件布局保留） | 📋 |
+| #32 | 新建  AOT min api项目服务端项目，引用TSLite，对外通过http 和 websocket 提供sql 处理， 该服务支持 创建数据库， 支持 增删改和使用数据库的sql语句， 一个数据库对应一个 TSLite 实例提供服务 ， 提供用户用户管理sql语句| 📋 |
+| #33 | 使用vue3 编写一个管理后端， 用户管理， 数据库状态查看， sql语句执行，  | 📋 |
+| #34 | 新编写一个 针对该服务的ADO接的项目， 用户调用服务， 通过http或者websocket，   | 📋 |
 
 ---
 
@@ -129,10 +130,11 @@
 
 | PR | 主题 | 状态 |
 |----|------|------|
-| #34 | BenchmarkDotNet：写入 / 查询 / 聚合 / Compaction 基准 | 📋 |
-| #35 | 文档完善：`docs/getting-started.md` / `docs/data-model.md` / `docs/sql-reference.md` / `docs/file-format.md` | 📋 |
-| #36 | 发布 NuGet 包 `TSLite 0.1.0` + `.github/workflows/publish.yml` | 📋 |
-
+| #35 | BenchmarkDotNet：写入 / 查询 / 聚合 / Compaction 基准 | 📋 |
+| #36 | BenchmarkDotNet：通过docker支持 influxdb 等常见时序数据库进行测试， 支持 TSLite 嵌入式时序数据库模式的测试， 也要支持 服务器模式的性能测试 | 📋 |
+| #37 | 文档完善：`docs/getting-started.md` / `docs/data-model.md` / `docs/sql-reference.md` / `docs/file-format.md` | 📋 |
+| #38 | 发布 NuGet 包 `TSLite 0.1.0` + `.github/workflows/publish.yml` | 📋 |
+| #39 |  docker 服务端模式的镜像到 maikebing iotsharp组织， 编写ci 等能自动发布| 📋 |
 ---
 
 ## 里程碑总览
@@ -146,7 +148,7 @@
 | 4 | 查询路径 | #14 ~ #16 | ✅ |
 | 5 | 稳定性与性能（写入侧） | #17 ~ #21 | 🚧（#17 ~ #20 完成，#21 待派单） |
 | 6 | SQL 前端 + Tag 倒排索引 | #22 ~ #28 | ✅ |
-| 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | 📋 |
+| 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | �（#29 完成） |
 | 8 | 单文件容器（可选） | #32 ~ #33 | 📋 |
 | 9 | 性能基准与发布 | #34 ~ #36 | 📋 |
 

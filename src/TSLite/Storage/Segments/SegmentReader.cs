@@ -205,8 +205,12 @@ public sealed class SegmentReader : IDisposable
                 MaxTimestamp = bh.MaxTimestamp,
                 Count = bh.Count,
                 FieldType = bh.FieldType,
-                TimestampEncoding = bh.Encoding,
-                ValueEncoding = bh.Encoding,
+                TimestampEncoding = (bh.Encoding & BlockEncoding.DeltaTimestamp) != 0
+                    ? BlockEncoding.DeltaTimestamp
+                    : BlockEncoding.None,
+                ValueEncoding = (bh.Encoding & BlockEncoding.DeltaValue) != 0
+                    ? BlockEncoding.DeltaValue
+                    : BlockEncoding.None,
                 FieldName = fieldName,
                 FileOffset = headerStart,
                 BlockLength = entry.BlockLength,
