@@ -8,8 +8,8 @@ namespace TSLite.Sql.Execution;
 
 /// <summary>
 /// 把 <see cref="SqlStatement"/> AST 应用到 <see cref="Tsdb"/> 实例的执行器。
-/// 当前 Milestone 支持 <see cref="CreateMeasurementStatement"/>、<see cref="InsertStatement"/>
-/// 与 <see cref="SelectStatement"/>，其余语句留待后续 PR。
+/// 当前 Milestone 支持 <see cref="CreateMeasurementStatement"/>、<see cref="InsertStatement"/>、
+/// <see cref="SelectStatement"/> 与 <see cref="DeleteStatement"/>。
 /// </summary>
 public static class SqlExecutor
 {
@@ -48,6 +48,7 @@ public static class SqlExecutor
             CreateMeasurementStatement create => ExecuteCreateMeasurement(tsdb, create),
             InsertStatement insert => ExecuteInsert(tsdb, insert),
             SelectStatement select => ExecuteSelect(tsdb, select),
+            DeleteStatement delete => ExecuteDelete(tsdb, delete),
             _ => throw new NotSupportedException(
                 $"SQL 语句类型 '{statement.GetType().Name}' 尚未实现。"),
         };
@@ -212,6 +213,22 @@ public static class SqlExecutor
         ArgumentNullException.ThrowIfNull(tsdb);
         ArgumentNullException.ThrowIfNull(statement);
         return SelectExecutor.Execute(tsdb, statement);
+    }
+
+    /// <summary>
+    /// 执行 DELETE 语句：把 WHERE 中 tag 等值过滤 + 时间窗 落到 PR #20 的 Tombstone 体系。
+    /// 对命中 tag 过滤的所有 series × schema 中所有 Field 列追加墓碑。
+    /// </summary>
+    /// <param name="tsdb">目标 Tsdb 实例。</param>
+    /// <param name="statement">已解析的 DELETE 语句。</param>
+    /// <returns>包含 measurement 名、命中 series 数、追加墓碑数的 <see cref="DeleteExecutionResult"/>。</returns>
+    /// <exception cref="ArgumentNullException">任何参数为 null。</exception>
+    /// <exception cref="InvalidOperationException">measurement 不存在 / WHERE 包含不支持的表达式。</exception>
+    public static DeleteExecutionResult ExecuteDelete(Tsdb tsdb, DeleteStatement statement)
+    {
+        ArgumentNullException.ThrowIfNull(tsdb);
+        ArgumentNullException.ThrowIfNull(statement);
+        return DeleteExecutor.Execute(tsdb, statement);
     }
 
     private static LiteralExpression AsLiteral(SqlExpression expr, string columnName)

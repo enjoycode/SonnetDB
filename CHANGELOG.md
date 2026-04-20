@@ -6,6 +6,14 @@
 ## [Unreleased]
 
 ### Added
+- 新增 SQL `DELETE FROM ... WHERE ...` 执行支持（PR #26）
+  - `TSLite.Sql.Execution.DeleteExecutionResult`（record，含 `Measurement` / `SeriesAffected` / `TombstonesAdded`）
+  - `TSLite.Sql.Execution.DeleteExecutor`（internal）：复用 `WhereClauseDecomposer` 解析 tag 等值过滤 + 时间窗，对所有命中 tag 过滤的 series × schema 中所有 Field 列调用 `Tsdb.Delete(seriesId, fieldName, from, to)`，落到 PR #20 的 Tombstone 体系（WAL 追加 + 内存墓碑表 + 查询时过滤）
+  - `SqlExecutor.ExecuteDelete(Tsdb, DeleteStatement)` 公共入口；`Execute` 派发新增 `DeleteStatement` 分支
+  - 语义：`WHERE host = 'h1' AND time >= a AND time <= b` 等价于命中 series 的所有 field 列在 `[a, b]` 闭区间打墓碑；省略 time 比较则覆盖全时间轴；省略 tag 过滤则作用于该 measurement 下所有 series；命中 0 series 直接返回零计数（不抛错）
+  - 校验规则：measurement 必须存在；WHERE 与 SELECT 共用同一套约束（仅 AND、tag 等值、time 比较、不支持 OR/NOT/field 过滤）；空时间窗抛 `InvalidOperationException`
+  - 单元测试：13 个端到端测试覆盖时间窗 + tag 过滤 / 仅时间窗 / 仅 tag 过滤 / `time = X` 单点删除 / 命中 0 series / 跨重启持久化（WAL replay）/ 删除后聚合验证 / 各类错误场景（缺 measurement / OR / field 过滤 / 未知 tag 列 / 空时间窗 / null 参数）
+
 - 新增 SQL `SELECT ... [WHERE ...] [GROUP BY time(...)]` 执行支持（PR #25）
   - `TSLite.Sql.Execution.SelectExecutionResult`（record，含 `Columns` / `Rows`；行内运行时类型：time→`long`、tag→`string?`、field→`double/long/bool/string?`、count→`long`、其他聚合→`double`）
   - `TSLite.Sql.Execution.WhereClauseDecomposer`（internal）：将 WHERE AST 拆分为 `(TagFilter, TimeRange)`；仅支持顶层 `AND` 合取、`tag = 'literal'` 等值过滤、`time {= != >= > <= <}` 时间窗（`time !=` 暂不支持）；OR / NOT / field 过滤 / 非字面量右值 / 同 tag 列冲突值均抛 `InvalidOperationException`；自动检测空时间窗

@@ -70,15 +70,6 @@ public class SqlExecutorCreateMeasurementTests : IDisposable
     }
 
     [Fact]
-    public void Execute_UnsupportedStatement_ThrowsNotSupported()
-    {
-        using var db = Tsdb.Open(Options());
-        // DELETE 已能解析但执行尚未实现（PR #26）。
-        Assert.Throws<NotSupportedException>(() =>
-            SqlExecutor.Execute(db, "DELETE FROM cpu WHERE time = 0"));
-    }
-
-    [Fact]
     public void CreateMeasurement_DirectApi_PersistsImmediately()
     {
         var schemaFile = TsdbPaths.MeasurementSchemaPath(_root);
