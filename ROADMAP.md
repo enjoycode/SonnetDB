@@ -110,7 +110,7 @@
 |----|------|------|
 | #29 | 时间戳 Delta-of-Delta 编码（block payload V2，向后兼容 V1） | ✅ |
 | #30 | 数值列 Gorilla / XOR 编码（Double） + RLE（Bool） + 字典（String） | ✅ |
-| #31 | 块级压缩开关与统计：在 `SegmentWriter.Options` 暴露编码选择，`SegmentReader` 自动按 `BlockEncoding` 解码 | 📋 |
+| #31 | 块级压缩开关与统计：在 `SegmentWriter.Options` 暴露编码选择，`SegmentReader` 自动按 `BlockEncoding` 解码 | ✅ |
 
 > 注：BlockEncoding 字段 PR #6 已预留；本 Milestone 真正启用 Delta / Gorilla。
 
@@ -148,7 +148,7 @@
 | 4 | 查询路径 | #14 ~ #16 | ✅ |
 | 5 | 稳定性与性能（写入侧） | #17 ~ #21 | 🚧（#17 ~ #20 完成，#21 待派单） |
 | 6 | SQL 前端 + Tag 倒排索引 | #22 ~ #28 | ✅ |
-| 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | 🚧（#29, #30 完成） |
+| 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | ✅ |
 | 8 | 单文件容器（可选） | #32 ~ #33 | 📋 |
 | 9 | 性能基准与发布 | #34 ~ #36 | 📋 |
 

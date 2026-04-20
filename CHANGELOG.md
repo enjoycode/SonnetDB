@@ -6,6 +6,12 @@
 ## [Unreleased]
 
 ### Added
+- 新增段文件编码 / 字节统计快照 `SegmentReader.GetStats()`（PR #31）
+  - 新增公开 record `TSLite.Storage.Segments.SegmentStats`（含 `BlockCount` / `TotalPointCount` / `TotalFieldNameBytes` / `TotalTimestampPayloadBytes` / `TotalValuePayloadBytes` / `RawTimestampBlocks` / `DeltaTimestampBlocks` / `RawValueBlocks` / `DeltaValueBlocks` / `ByFieldType` 以及计算型属性 `AverageTimestampBytesPerPoint` / `AverageValueBytesPerPoint`）与 `FieldTypeStats`（`BlockCount` / `PointCount` / `ValuePayloadBytes` / `DeltaValueBlocks`），为运维巡检、压缩率对比、基准测试提供结构化输出。
+  - `SegmentReader.GetStats()`：按需遍历 `BlockDescriptor[]`，一次迭代同时计算总量 / 按 `BlockEncoding` 拆分 / 按 `FieldType` 分组三个维度；不缓存。可用于对同一 `MemTable` 分别以 V1 / V2 写入后对比 `Total*PayloadBytes` 验证压缩效果。
+  - `SegmentStats.ByFieldType` 使用 `IReadOnlyDictionary<FieldType, FieldTypeStats>` 提供面向查询，默认为空字典以避免空段访问 NRE。
+  - 6 个新测试（`SegmentReaderStatsTests`）覆盖：默认 V1 全部计入 raw 且字节数符合 8B/点；单独开启 V2 时间戳验证只选取时间戳压缩、值字节数不变；单独开启 V2 值（String 字典）验证值字节压缩、时间戳保持 V1；双 V2两个计数器都增加、平均字节/点均 < 8；多 `FieldType` 混合段按组计数与点数一致；空 `SegmentStats` 除零防护。
+
 - 新增数值列 V2 编码：Float64 Gorilla XOR + Boolean RLE + String 字典（PR #30）
   - 新增内部位流工具 `TSLite.Storage.Segments.BitIo`：`BitWriter` / `BitReader` ref struct，高位优先按位写读，最大 64 位/调用。
   - 新增内部值列 V2 编解码器 `TSLite.Storage.Segments.ValuePayloadCodecV2`：

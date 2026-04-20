@@ -53,6 +53,62 @@ public sealed class SegmentReader : IDisposable
     /// <summary>所有 <see cref="BlockDescriptor"/>，按写入顺序（即 (SeriesId, FieldName) 升序）。</summary>
     public IReadOnlyList<BlockDescriptor> Blocks => _blocks;
 
+    /// <summary>
+    /// 计算段文件的编码 / 字节统计快照（PR #31）。按需遍历所有 <see cref="BlockDescriptor"/>，
+    /// 不缓存；适合运维巡检与基准测试输出，亦可用于压缩率对比（同一数据用 V1 与 V2 写入后对比 payload 字节）。
+    /// </summary>
+    /// <returns>包含 Block 数、点数、字段名/时间戳/值载荷字节、按编码与按 <see cref="FieldType"/> 分组的统计。</returns>
+    public SegmentStats GetStats()
+    {
+        int totalPoints = 0;
+        long fieldNameBytes = 0L;
+        long tsBytes = 0L;
+        long valBytes = 0L;
+        int rawTs = 0, deltaTs = 0, rawVal = 0, deltaVal = 0;
+
+        var byField = new Dictionary<FieldType, (int blocks, int points, long valBytes, int deltaVal)>();
+
+        foreach (var b in _blocks)
+        {
+            totalPoints += b.Count;
+            fieldNameBytes += b.FieldNameUtf8Length;
+            tsBytes += b.TimestampPayloadLength;
+            valBytes += b.ValuePayloadLength;
+
+            if ((b.TimestampEncoding & BlockEncoding.DeltaTimestamp) != 0) deltaTs++;
+            else rawTs++;
+
+            bool isDeltaVal = (b.ValueEncoding & BlockEncoding.DeltaValue) != 0;
+            if (isDeltaVal) deltaVal++;
+            else rawVal++;
+
+            byField.TryGetValue(b.FieldType, out var s);
+            s.blocks++;
+            s.points += b.Count;
+            s.valBytes += b.ValuePayloadLength;
+            if (isDeltaVal) s.deltaVal++;
+            byField[b.FieldType] = s;
+        }
+
+        var byFieldDict = new Dictionary<FieldType, FieldTypeStats>(byField.Count);
+        foreach (var (ft, s) in byField)
+            byFieldDict[ft] = new FieldTypeStats(s.blocks, s.points, s.valBytes, s.deltaVal);
+
+        return new SegmentStats
+        {
+            BlockCount = _blocks.Length,
+            TotalPointCount = totalPoints,
+            TotalFieldNameBytes = fieldNameBytes,
+            TotalTimestampPayloadBytes = tsBytes,
+            TotalValuePayloadBytes = valBytes,
+            RawTimestampBlocks = rawTs,
+            DeltaTimestampBlocks = deltaTs,
+            RawValueBlocks = rawVal,
+            DeltaValueBlocks = deltaVal,
+            ByFieldType = byFieldDict,
+        };
+    }
+
     private SegmentReader(
         string path,
         byte[] bytes,
