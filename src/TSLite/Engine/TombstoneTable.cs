@@ -85,15 +85,16 @@ public sealed class TombstoneTable
         if (snapshot.Count == 0)
             return false;
 
-        // 快速路径：从快照读取对应桶（需要加锁以安全读取字典）
-        List<Tombstone>? list;
+        // 锁内对桶列表做数组快照，避免锁外遍历时被写入方 List.Add 修改导致枚举异常
+        Tombstone[] bucket;
         lock (_lock)
         {
-            if (!_byKey.TryGetValue((seriesId, fieldName), out list))
+            if (!_byKey.TryGetValue((seriesId, fieldName), out var list))
                 return false;
+            bucket = list.ToArray();
         }
 
-        return IsCoveredByList(timestamp, list);
+        return IsCoveredByArray(timestamp, bucket);
     }
 
     /// <summary>
@@ -107,7 +108,7 @@ public sealed class TombstoneTable
         lock (_lock)
         {
             if (_byKey.TryGetValue((seriesId, fieldName), out var list))
-                return list.AsReadOnly();
+                return list.ToArray();
         }
         return [];
     }
@@ -140,13 +141,14 @@ public sealed class TombstoneTable
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// 判定 timestamp 是否被列表中任意墓碑覆盖。
+    /// 判定 timestamp 是否被数组中任意墓碑覆盖。
     /// 对小集合（≤ 4）线性扫描；超过 4 时仍线性扫描（v1 简化，通常墓碑数量很少）。
     /// </summary>
-    private static bool IsCoveredByList(long timestamp, List<Tombstone> list)
+    private static bool IsCoveredByArray(long timestamp, Tombstone[] bucket)
     {
-        foreach (var tomb in list)
+        for (int i = 0; i < bucket.Length; i++)
         {
+            ref readonly var tomb = ref bucket[i];
             if (timestamp >= tomb.FromTimestamp && timestamp <= tomb.ToTimestamp)
                 return true;
         }
