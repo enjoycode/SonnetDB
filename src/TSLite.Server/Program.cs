@@ -302,12 +302,16 @@ public static class Program
         });
 
         // ---- PR #44：批量入库快路径三端点（绕开 SQL parser）----
+        // PR #47：批量端点 payload 可达数百 MB，移除 Kestrel 默认 30MB 上限。
         app.MapPost("/v1/db/{db}/measurements/{m}/lp", async (HttpContext ctx, string db, string m) =>
-            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.LineProtocol).ConfigureAwait(false));
+            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.LineProtocol).ConfigureAwait(false))
+            .WithMetadata(new Microsoft.AspNetCore.Mvc.DisableRequestSizeLimitAttribute());
         app.MapPost("/v1/db/{db}/measurements/{m}/json", async (HttpContext ctx, string db, string m) =>
-            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.Json).ConfigureAwait(false));
+            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.Json).ConfigureAwait(false))
+            .WithMetadata(new Microsoft.AspNetCore.Mvc.DisableRequestSizeLimitAttribute());
         app.MapPost("/v1/db/{db}/measurements/{m}/bulk", async (HttpContext ctx, string db, string m) =>
-            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.BulkValues).ConfigureAwait(false));
+            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.BulkValues).ConfigureAwait(false))
+            .WithMetadata(new Microsoft.AspNetCore.Mvc.DisableRequestSizeLimitAttribute());
 
         // ---- 控制面 SQL（admin only，无 db 路径）----
         app.MapMethods("/v1/sql", new[] { "POST" }, (RequestDelegate)(async ctx =>

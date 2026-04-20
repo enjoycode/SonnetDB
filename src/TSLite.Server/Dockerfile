@@ -5,12 +5,20 @@
 # Run:
 #   docker run -p 5080:5080 -e TSLITE_TSLiteServer__Tokens__mytoken=admin tslite-server
 
+FROM node:24-bookworm-slim AS frontend-build
+WORKDIR /repo/web/admin
+
+COPY web/admin/package.json web/admin/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY web/admin/index.html web/admin/env.d.ts web/admin/tsconfig.json web/admin/tsconfig.node.json web/admin/vite.config.ts ./
+COPY web/admin/public ./public
+COPY web/admin/src ./src
+
+RUN npm run build
+
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /repo
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm \
-    && rm -rf /var/lib/apt/lists/*
 
 # Copy project files first to maximize Docker layer reuse for restore.
 COPY Directory.Build.props ./
@@ -19,20 +27,16 @@ COPY global.json ./
 COPY .config/dotnet-tools.json .config/
 COPY src/TSLite/TSLite.csproj src/TSLite/
 COPY src/TSLite.Server/TSLite.Server.csproj src/TSLite.Server/
-COPY web/admin/package.json web/admin/package-lock.json web/admin/
 
 RUN dotnet restore src/TSLite.Server/TSLite.Server.csproj
 RUN dotnet tool restore
-RUN cd web/admin && npm ci --no-audit --no-fund
 
 COPY src/TSLite/ src/TSLite/
 COPY src/TSLite.Server/ src/TSLite.Server/
 COPY docs/ docs/
 COPY web/admin/index.html web/admin/env.d.ts web/admin/tsconfig.json web/admin/tsconfig.node.json web/admin/vite.config.ts web/admin/
 COPY web/admin/public web/admin/public
-COPY web/admin/src web/admin/src
-
-RUN cd web/admin && npm run build
+COPY --from=frontend-build /repo/web/admin/dist web/admin/dist
 RUN rm -rf src/TSLite.Server/wwwroot/help \
     && dotnet tool run jekyllnet build --source docs --destination src/TSLite.Server/wwwroot/help
 

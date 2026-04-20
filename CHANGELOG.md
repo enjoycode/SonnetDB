@@ -14,6 +14,25 @@
   - `web/admin` 首页与管理后台头部新增“帮助”入口，直接打开 `/help/`。
 
 ### Changed
+- **PR #47：服务端 + Reader 零拷贝（写入快路径专题，第 2/4 步）**
+  - `BulkIngestEndpointHandler.ReadAllAsync` 改为返回 `(byte[] Buffer, int Length)`，统一走 `ArrayPool<byte>.Shared.Rent`：已知 `Content-Length` 时按精确长度租借，未知长度则 4KB 起步翻倍扩容；`finally` 必归还，避免大 payload 直入 LOH。
+  - `JsonPointsReader` 字段重构为 `ReadOnlyMemory<byte> _utf8Memory + byte[]? _pooledBuffer`：`(ReadOnlyMemory<byte>)` ctor 直接零拷贝持有 caller buffer（原先需 `utf8Json.ToArray()` 全量复制）；`(string)` ctor 走 `ArrayPool<byte>.Shared.Rent` 转码后 Dispose 归还。
+  - `BulkIngestEndpointHandler.HandleAsync` JSON 路径直接构造 `new ReadOnlyMemory<byte>(bodyBuffer, 0, bodyLength)` 喂 reader，杜绝 string 中转；LP 路径新增 `CreateLineProtocolReader`，从 `ArrayPool<char>.Shared.Rent` 借出精确长度 char buffer + `Encoding.UTF8.GetChars` 解码后包成 `ReadOnlyMemory<char>`；BulkValues 路径走 `Encoding.UTF8.GetString(buffer, 0, length)` 精确长度版本。`finally` 顺序：dispose reader → return char buffer → return byte buffer。
+  - 服务端 `Program.cs` 三个批量端点（`/lp` / `/json` / `/bulk`）追加 `WithMetadata(new DisableRequestSizeLimitAttribute())`，移除 Kestrel 默认 30MB request body 上限，使 1M-row payload 真正可达。
+  - 旁路修复：`HelpDocsEndpoints.cs` 集合表达式三元运算符歧义（CS0173）改写为 `new[] { ... }`。
+  - **基准复测**（`ServerInsertBenchmark`，1 000 000 点 / i9-13900HX / .NET 10 / Release / `bench-admin-token` 本地 dotnet run）：
+
+    | 路径 | Mean | Allocated | vs PR #45 baseline |
+    |------|-----:|----------:|--------------------|
+    | `POST /sql/batch` 单行（baseline，PR #45 = 21.36s） | **5.09 s** | 668 MB | **−76% Mean**（受益于 PR #46 真批量） |
+    | `POST /v1/db/{db}/measurements/{m}/lp` 1M 点 | **1.20 s** | **52 MB** | **~17.8× faster** / **alloc −92%** |
+    | `POST /v1/db/{db}/measurements/{m}/json` 1M 点 | **1.20 s** | **71 MB** | **~17.8× faster** / **alloc −89%** |
+    | `POST /v1/db/{db}/measurements/{m}/bulk` 1M 点 | **1.10 s** | **34 MB** | **~19.4× faster** / **alloc −95%** |
+
+    服务端三端点首次进入「秒级 1M 点 + ≤ 80 MB 分配」区间，远超 Milestone 11 既定目标（≥ 700k pts/s）。嵌入式 `BulkIngestBenchmark` 复测无显著变化（该基准不经服务端 handler，对 PR #47 不敏感，符合预期）。
+  - 测试：`TSLite.Tests` 1237/1238 通过（`BackgroundFlushIntegrationTests.ContinuousWrite_5000Points_AutoFlushesMultipleSegments` 1 处时序敏感 flake，独立跑 2/2 通过）；`TSLite.Server.Tests` 95/95 通过。
+  - 兼容性说明：`LineProtocolReader` / `BulkValuesReader` / `SchemaBoundBulkValuesReader` 接口保持 `ReadOnlyMemory<char>` / `string`（未做接口级 byte 化），如未来需要彻底 byte-path（避免 LP/Bulk UTF-8→char 一次解码），将作为独立小 PR 推进。
+
 - **PR #46：`Tsdb.WriteMany` 真批量快路径（写入快路径专题，第 1/4 步）**
   - 新增 `Tsdb.WriteMany(ReadOnlySpan<Point>)` 重载：整批写入只获取 **一次** `_writeSync` 锁、批末仅调用 **一次** `BackgroundFlushWorker.Signal`，消除原 `foreach Write(point)` 退化批量在 N 次入锁/信号上的开销。
   - 旧 `Tsdb.WriteMany(IEnumerable<Point>)` 自动嗅探 `Point[]` / `List<Point>` / `ArraySegment<Point>` 并下沉到 span 重载（`CollectionsMarshal.AsSpan` 零拷贝），其它枚举回退到逐点写入；行为对调用方完全透明。
