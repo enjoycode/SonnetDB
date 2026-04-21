@@ -19,4 +19,7 @@ public enum FieldType : byte
 
     /// <summary>UTF-8 编码字符串（变长，仅 WAL 内使用）。</summary>
     String = 4,
+
+    /// <summary>定长 32 位浮点向量（IEEE 754，dim 由 schema 声明；WAL 内按 dim×4 字节小端排布）。</summary>
+    Vector = 5,
 }

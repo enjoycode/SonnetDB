@@ -28,6 +28,13 @@
 - **Milestone 14 — SonnetDB Copilot：MCP 工具 + 知识库 + 智能体**：基于 Microsoft Agent Framework 新建独立项目 `src/SonnetDB.Copilot/`，复用现有 `/mcp/{db}` 工具集 + Milestone 13 的向量召回，把"用户文档 / 技能库 / 数据库 schema"统一存入 `__copilot__` 系统库（dogfooding）。Embedding/Chat 走统一 `IEmbeddingProvider` / `IChatProvider` 抽象，**本地 ONNX（bge-small-zh）** 与 **OpenAI 兼容端点（国际 / 国内任意 OpenAI-compat 网关）** 同时支持，可按部署场景切换。新增 HTTP 端点 `POST /v1/copilot/chat`（NDJSON / SSE 流式）+ Web Admin Chat Tab。详见 ROADMAP PR #63 ~ #69。
 
 ### Added
+- **PR #58 a — `FieldValue.Vector` 与 WAL `WritePoint` Vector 编解码（Milestone 13 第一切片）**
+  - 新增 `FieldType.Vector = 5`：定长 32 位浮点向量，dim 由后续 schema 声明，WAL 内按 `dim(4) + dim×float32(LE)` 排布。
+  - `FieldValue` 新增 `Vector` 分支：`FromVector(ReadOnlyMemory<float>)` / `FromVector(float[])` 工厂；`AsVector()` / `VectorDimension` 取值；`Equals` 全量序列比较，`GetHashCode` 采样首/中/末三分量；`ToString` 形如 `vector(N)[a,b,...]`，超过 8 维自动截断。
+  - `WalPayloadCodec`：`MeasureWritePoint` / `WriteWritePointPayload` / `ReadWritePointPayload` 三处支持 `FieldType.Vector`；新增 `ReadVectorPayload`，对 `valueLen != 4 + dim*4`、`dim < 1` 等坏 payload 抛 `InvalidDataException`。
+  - 兼容性：`FileHeader.Version` 暂未升级（本切片只动 WAL `WritePoint` 序列化层；Schema/Segment 层尚未声明 Vector 列，因此现有 segment 文件格式完全不变）。Schema VECTOR(dim) 列、`BlockEncoding.VectorRaw`、SQL 字面量与 `FileHeader` v3 升级将随 PR #58 后续切片合入。
+  - 测试：`FieldValueTests` 新增 13 个用例（Vector round-trip / Equals / dim 不等 / `AsDouble` 抛异常 / `TryGetNumeric=false` / ToString 截断）；`WalPayloadCodecTests` 新增 4 个 dim variant（1 / 3 / 8 / 384）的 WritePoint round-trip。全量回归 1520 + 116 = 1636 通过。
+
 - **服务端内建 MCP（Model Context Protocol）只读入口**
   - `src/SonnetDB` 新增基于官方 `ModelContextProtocol.AspNetCore` 1.2.0 的 Streamable HTTP MCP 端点：`/mcp/{db}`。启用 `Stateless=true`，关闭 legacy SSE，`ConfigureSessionOptions` 会把当前数据库名写入 `ServerInstructions`，明确这是绑定到单个数据库的只读 SonnetDB MCP 会话。
   - 新增 MCP 上下文解析与预校验：所有 `/mcp/{db}` 请求在进入 MCP SDK 前先复用现有 `TsdbRegistry` 校验数据库名与存在性；非法库名返回 `400 bad_request`，不存在数据库返回 `404 db_not_found`，并把当前 `db` 与 `Tsdb` 实例缓存到 `HttpContext.Items` 供 tools/resources 读取。

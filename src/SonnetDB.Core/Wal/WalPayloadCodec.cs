@@ -26,6 +26,7 @@ internal static class WalPayloadCodec
             FieldType.Int64 => 8,
             FieldType.Boolean => 1,
             FieldType.String => _utf8.GetByteCount(value.AsString()),
+            FieldType.Vector => 4 + value.VectorDimension * 4, // dim(4) + dim*float32
             _ => throw new ArgumentOutOfRangeException(nameof(value), $"Unsupported FieldType: {value.Type}"),
         };
         // SeriesId(8) + PointTs(8) + FieldType(1) + Padding(3) + FieldNameLen(4) + FieldNameBytes + ValueLen(4) + ValueBytes
@@ -86,6 +87,16 @@ internal static class WalPayloadCodec
                     writer.WriteInt32(strBytes);
                     int strWritten = _utf8.GetBytes(str, writer.FreeSpan);
                     writer.Advance(strWritten);
+                    break;
+                }
+            case FieldType.Vector:
+                {
+                    var vec = value.AsVector().Span;
+                    int vecBytes = 4 + vec.Length * 4;
+                    writer.WriteInt32(vecBytes);
+                    writer.WriteInt32(vec.Length); // dim
+                    for (int i = 0; i < vec.Length; i++)
+                        writer.WriteSingle(vec[i]);
                     break;
                 }
             default:
@@ -184,10 +195,26 @@ internal static class WalPayloadCodec
             FieldType.Int64 => FieldValue.FromLong(reader.ReadInt64()),
             FieldType.Boolean => FieldValue.FromBool(reader.ReadByte() != 0),
             FieldType.String => FieldValue.FromString(_utf8.GetString(reader.ReadBytes(valueLen))),
+            FieldType.Vector => ReadVectorPayload(ref reader, valueLen),
             _ => throw new InvalidDataException($"Unsupported FieldType in WAL: {fieldType}"),
         };
 
         return new WritePointRecord(lsn, timestampUtcTicks, seriesId, pointTimestamp, fieldName, value);
+    }
+
+    private static FieldValue ReadVectorPayload(ref SpanReader reader, int valueLen)
+    {
+        if (valueLen < 4)
+            throw new InvalidDataException($"Invalid vector payload: valueLen={valueLen} (must be >= 4).");
+        int dim = reader.ReadInt32();
+        if (dim < 1)
+            throw new InvalidDataException($"Invalid vector payload: dim={dim} (must be >= 1).");
+        if (valueLen != 4 + dim * 4)
+            throw new InvalidDataException($"Invalid vector payload: dim={dim}, valueLen={valueLen} (expected {4 + dim * 4}).");
+        var arr = new float[dim];
+        for (int i = 0; i < dim; i++)
+            arr[i] = reader.ReadSingle();
+        return FieldValue.FromVector(arr);
     }
 
     /// <summary>

@@ -144,4 +144,37 @@ public sealed class WalPayloadCodecTests
         var record = WalPayloadCodec.ReadCheckpointPayload(reader, lsn: 1L, timestampUtcTicks: 0L);
         Assert.Equal(999L, record.CheckpointLsn);
     }
+
+    // ── Vector round-trip（PR #58 a） ────────────────────────────────────────
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    [InlineData(8)]
+    [InlineData(384)]
+    public void WritePoint_Vector_RoundTrip(int dim)
+    {
+        var arr = new float[dim];
+        for (int i = 0; i < dim; i++)
+            arr[i] = (float)Math.Sin(i * 0.1);
+        var value = FieldValue.FromVector(arr);
+
+        // 期望 valueBytes = 4(dim) + dim*4 字节，外加固定开销由 MeasureWritePoint 计算。
+        int size = WalPayloadCodec.MeasureWritePoint("embedding", value);
+        Assert.Equal(8 + 8 + 1 + 3 + 4 + "embedding".Length + 4 + 4 + dim * 4, size);
+
+        byte[] buf = new byte[size];
+        var writer = new SpanWriter(buf.AsSpan());
+        WalPayloadCodec.WriteWritePointPayload(ref writer, seriesId: 0x58UL, pointTimestamp: 1234L, "embedding", value);
+        Assert.Equal(size, writer.Position);
+
+        var reader = new SpanReader(buf.AsSpan());
+        var record = WalPayloadCodec.ReadWritePointPayload(reader, lsn: 1L, timestampUtcTicks: 0L);
+        Assert.Equal(0x58UL, record.SeriesId);
+        Assert.Equal(1234L, record.PointTimestamp);
+        Assert.Equal("embedding", record.FieldName);
+        Assert.Equal(FieldType.Vector, record.Value.Type);
+        Assert.Equal(dim, record.Value.VectorDimension);
+        Assert.True(record.Value.AsVector().Span.SequenceEqual(arr));
+    }
 }

@@ -222,4 +222,106 @@ public sealed class FieldValueTests
     [Fact]
     public void ToString_String_ReturnsStringValue()
         => Assert.Equal("hello", FieldValue.FromString("hello").ToString());
+
+    // ── Vector（PR #58 a） ───────────────────────────────────────────────────
+
+    [Fact]
+    public void FromVector_Array_AsVector_RoundTrip()
+    {
+        var src = new float[] { 0.1f, 0.2f, 0.3f, 0.4f };
+        var fv = FieldValue.FromVector(src);
+        Assert.Equal(FieldType.Vector, fv.Type);
+        Assert.Equal(4, fv.VectorDimension);
+        Assert.True(fv.AsVector().Span.SequenceEqual(src));
+    }
+
+    [Fact]
+    public void FromVector_ReadOnlyMemory_AsVector_RoundTrip()
+    {
+        ReadOnlyMemory<float> src = new float[] { 1f, 2f, 3f };
+        var fv = FieldValue.FromVector(src);
+        Assert.Equal(3, fv.VectorDimension);
+        Assert.True(fv.AsVector().Span.SequenceEqual(src.Span));
+    }
+
+    [Fact]
+    public void FromVector_NullArray_Throws()
+        => Assert.Throws<ArgumentNullException>(() => FieldValue.FromVector((float[])null!));
+
+    [Fact]
+    public void FromVector_EmptyMemory_Throws()
+        => Assert.Throws<ArgumentException>(() => FieldValue.FromVector(ReadOnlyMemory<float>.Empty));
+
+    [Fact]
+    public void FromVector_EmptyArray_Throws()
+        => Assert.Throws<ArgumentException>(() => FieldValue.FromVector(Array.Empty<float>()));
+
+    [Fact]
+    public void Vector_Equals_SameContent_ReturnsTrue()
+    {
+        var a = FieldValue.FromVector(new float[] { 1f, 2f, 3f });
+        var b = FieldValue.FromVector(new float[] { 1f, 2f, 3f });
+        Assert.True(a.Equals(b));
+        Assert.True(a == b);
+        Assert.Equal(a.GetHashCode(), b.GetHashCode());
+    }
+
+    [Fact]
+    public void Vector_Equals_DifferentContent_ReturnsFalse()
+    {
+        var a = FieldValue.FromVector(new float[] { 1f, 2f, 3f });
+        var b = FieldValue.FromVector(new float[] { 1f, 2f, 4f });
+        Assert.False(a.Equals(b));
+        Assert.True(a != b);
+    }
+
+    [Fact]
+    public void Vector_Equals_DifferentDimension_ReturnsFalse()
+    {
+        var a = FieldValue.FromVector(new float[] { 1f, 2f });
+        var b = FieldValue.FromVector(new float[] { 1f, 2f, 0f });
+        Assert.False(a.Equals(b));
+    }
+
+    [Fact]
+    public void Vector_AsDouble_Throws()
+    {
+        var fv = FieldValue.FromVector(new float[] { 1f });
+        Assert.Throws<InvalidOperationException>(() => fv.AsDouble());
+    }
+
+    [Fact]
+    public void Vector_VectorDimension_OnNonVector_Throws()
+    {
+        var fv = FieldValue.FromDouble(1.0);
+        Assert.Throws<InvalidOperationException>(() => fv.VectorDimension);
+    }
+
+    [Fact]
+    public void Vector_TryGetNumeric_ReturnsFalse()
+    {
+        var fv = FieldValue.FromVector(new float[] { 1f, 2f });
+        Assert.False(fv.TryGetNumeric(out _));
+    }
+
+    [Fact]
+    public void Vector_ToString_ShowsDimAndPrefix()
+    {
+        var fv = FieldValue.FromVector(new float[] { 0.5f, 1.5f });
+        var s = fv.ToString();
+        Assert.StartsWith("vector(2)[", s);
+        Assert.Contains("0.5", s);
+        Assert.Contains("1.5", s);
+        Assert.EndsWith("]", s);
+    }
+
+    [Fact]
+    public void Vector_ToString_LongVector_TruncatesWithEllipsis()
+    {
+        var arr = new float[16];
+        for (int i = 0; i < arr.Length; i++) arr[i] = i;
+        var s = FieldValue.FromVector(arr).ToString();
+        Assert.StartsWith("vector(16)[", s);
+        Assert.Contains(",...", s);
+    }
 }

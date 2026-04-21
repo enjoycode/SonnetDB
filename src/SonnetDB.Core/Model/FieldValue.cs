@@ -22,11 +22,23 @@ public readonly struct FieldValue : IEquatable<FieldValue>
     /// <summary>仅当 <see cref="Type"/> 为 <see cref="FieldType.String"/> 时有值。</summary>
     private readonly string? _string;
 
+    /// <summary>仅当 <see cref="Type"/> 为 <see cref="FieldType.Vector"/> 时有值（dim = <c>_vector.Length</c>）。</summary>
+    private readonly ReadOnlyMemory<float> _vector;
+
     private FieldValue(FieldType type, long numeric, string? str)
     {
         Type = type;
         _numeric = numeric;
         _string = str;
+        _vector = default;
+    }
+
+    private FieldValue(ReadOnlyMemory<float> vector)
+    {
+        Type = FieldType.Vector;
+        _numeric = vector.Length;
+        _string = null;
+        _vector = vector;
     }
 
     // ── 工厂方法 ────────────────────────────────────────────────────────────
@@ -48,6 +60,26 @@ public readonly struct FieldValue : IEquatable<FieldValue>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> 为 null。</exception>
     public static FieldValue FromString(string value)
         => new(FieldType.String, 0L, value ?? throw new ArgumentNullException(nameof(value)));
+
+    /// <summary>从 32 位浮点向量创建字段值。</summary>
+    /// <param name="vector">向量数据；维度 = <see cref="ReadOnlyMemory{T}.Length"/>，必须 ≥ 1。</param>
+    /// <exception cref="ArgumentException">向量维度小于 1。</exception>
+    public static FieldValue FromVector(ReadOnlyMemory<float> vector)
+    {
+        if (vector.Length < 1)
+            throw new ArgumentException("Vector dimension must be >= 1.", nameof(vector));
+        return new FieldValue(vector);
+    }
+
+    /// <summary>从 32 位浮点向量数组创建字段值（不复制底层数组，调用方需保证不再修改）。</summary>
+    /// <param name="vector">非空数组；长度即维度。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="vector"/> 为 null。</exception>
+    /// <exception cref="ArgumentException">数组长度小于 1。</exception>
+    public static FieldValue FromVector(float[] vector)
+    {
+        ArgumentNullException.ThrowIfNull(vector);
+        return FromVector(vector.AsMemory());
+    }
 
     // ── 取值方法 ────────────────────────────────────────────────────────────
 
@@ -74,6 +106,18 @@ public readonly struct FieldValue : IEquatable<FieldValue>
     public string AsString() => Type == FieldType.String
         ? _string!
         : throw new InvalidOperationException($"Field is {Type}, not String.");
+
+    /// <summary>以只读向量形式返回字段值。</summary>
+    /// <exception cref="InvalidOperationException">字段类型不是 Vector。</exception>
+    public ReadOnlyMemory<float> AsVector() => Type == FieldType.Vector
+        ? _vector
+        : throw new InvalidOperationException($"Field is {Type}, not Vector.");
+
+    /// <summary>当字段类型为 Vector 时返回向量维度，否则抛出。</summary>
+    /// <exception cref="InvalidOperationException">字段类型不是 Vector。</exception>
+    public int VectorDimension => Type == FieldType.Vector
+        ? (int)_numeric
+        : throw new InvalidOperationException($"Field is {Type}, not Vector.");
 
     // ── 辅助方法 ────────────────────────────────────────────────────────────
 
@@ -109,16 +153,34 @@ public readonly struct FieldValue : IEquatable<FieldValue>
     {
         if (Type != other.Type)
             return false;
-        return Type == FieldType.String
-            ? string.Equals(_string, other._string, StringComparison.Ordinal)
-            : _numeric == other._numeric;
+        return Type switch
+        {
+            FieldType.String => string.Equals(_string, other._string, StringComparison.Ordinal),
+            FieldType.Vector => _vector.Span.SequenceEqual(other._vector.Span),
+            _ => _numeric == other._numeric,
+        };
     }
 
     /// <inheritdoc/>
     public override bool Equals(object? obj) => obj is FieldValue v && Equals(v);
 
     /// <inheritdoc/>
-    public override int GetHashCode() => HashCode.Combine(Type, _numeric, _string);
+    public override int GetHashCode()
+    {
+        if (Type == FieldType.Vector)
+        {
+            var hc = new HashCode();
+            hc.Add(Type);
+            hc.Add(_vector.Length);
+            // 仅采样首/中/末三个分量参与哈希，避免长向量遍历；Equals 仍按全量比较。
+            var span = _vector.Span;
+            if (span.Length >= 1) hc.Add(span[0]);
+            if (span.Length >= 2) hc.Add(span[span.Length / 2]);
+            if (span.Length >= 3) hc.Add(span[^1]);
+            return hc.ToHashCode();
+        }
+        return HashCode.Combine(Type, _numeric, _string);
+    }
 
     /// <inheritdoc/>
     public override string ToString() => Type switch
@@ -127,8 +189,25 @@ public readonly struct FieldValue : IEquatable<FieldValue>
         FieldType.Int64 => _numeric.ToString(),
         FieldType.Boolean => _numeric != 0 ? "true" : "false",
         FieldType.String => _string!,
+        FieldType.Vector => FormatVector(_vector.Span),
         _ => $"Unknown({Type})",
     };
+
+    private static string FormatVector(ReadOnlySpan<float> span)
+    {
+        // 形如 "vector(3)[0.1,0.2,0.3]"；超过 8 维时截断展示前 8 个分量。
+        var sb = new System.Text.StringBuilder();
+        sb.Append("vector(").Append(span.Length).Append(")[");
+        int show = Math.Min(span.Length, 8);
+        for (int i = 0; i < show; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(span[i].ToString("G"));
+        }
+        if (span.Length > show) sb.Append(",...");
+        sb.Append(']');
+        return sb.ToString();
+    }
 
     /// <summary>相等运算符。</summary>
     public static bool operator ==(FieldValue l, FieldValue r) => l.Equals(r);
