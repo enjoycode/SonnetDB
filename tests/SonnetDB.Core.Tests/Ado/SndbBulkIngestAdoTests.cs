@@ -5,7 +5,7 @@ using Xunit;
 namespace SonnetDB.Core.Tests.Ado;
 
 /// <summary>
-/// <see cref="TsdbCommand"/> 的 <see cref="CommandType.TableDirect"/> 批量入库快路径测试（PR #43）。
+/// <see cref="SndbCommand"/> 的 <see cref="CommandType.TableDirect"/> 批量入库快路径测试（PR #43）。
 /// </summary>
 public sealed class TsdbBulkIngestAdoTests : IDisposable
 {
@@ -22,21 +22,21 @@ public sealed class TsdbBulkIngestAdoTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* ignore */ }
     }
 
-    private TsdbConnection OpenConn()
+    private SndbConnection OpenConn()
     {
-        var c = new TsdbConnection($"Data Source={_root}");
+        var c = new SndbConnection($"Data Source={_root}");
         c.Open();
         return c;
     }
 
-    private static int Exec(TsdbConnection c, string sql)
+    private static int Exec(SndbConnection c, string sql)
     {
         using var cmd = c.CreateCommand();
         cmd.CommandText = sql;
         return cmd.ExecuteNonQuery();
     }
 
-    private static void EnsureCpuSchema(TsdbConnection c)
+    private static void EnsureCpuSchema(SndbConnection c)
         => Exec(c, "CREATE MEASUREMENT cpu (host TAG, value FIELD FLOAT)");
 
     [Fact]

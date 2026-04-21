@@ -4,11 +4,11 @@ using System.Data.Common;
 namespace SonnetDB.Data;
 
 /// <summary>
-/// <see cref="TsdbCommand"/> 上的参数集合。仅接受 <see cref="TsdbParameter"/>。
+/// <see cref="SndbCommand"/> 上的参数集合。仅接受 <see cref="SndbParameter"/>。
 /// </summary>
-public sealed class TsdbParameterCollection : DbParameterCollection
+public sealed class SndbParameterCollection : DbParameterCollection
 {
-    private readonly List<TsdbParameter> _items = [];
+    private readonly List<SndbParameter> _items = [];
     private readonly object _sync = new();
 
     /// <inheritdoc />
@@ -26,7 +26,7 @@ public sealed class TsdbParameterCollection : DbParameterCollection
     }
 
     /// <summary>添加一个强类型参数。</summary>
-    public TsdbParameter Add(TsdbParameter parameter)
+    public SndbParameter Add(SndbParameter parameter)
     {
         ArgumentNullException.ThrowIfNull(parameter);
         _items.Add(parameter);
@@ -34,9 +34,9 @@ public sealed class TsdbParameterCollection : DbParameterCollection
     }
 
     /// <summary>便捷重载：按名称与值添加。</summary>
-    public TsdbParameter AddWithValue(string parameterName, object? value)
+    public SndbParameter AddWithValue(string parameterName, object? value)
     {
-        var p = new TsdbParameter(parameterName, value);
+        var p = new SndbParameter(parameterName, value);
         _items.Add(p);
         return p;
     }
@@ -52,7 +52,7 @@ public sealed class TsdbParameterCollection : DbParameterCollection
     public override void Clear() => _items.Clear();
 
     /// <inheritdoc />
-    public override bool Contains(object value) => value is TsdbParameter p && _items.Contains(p);
+    public override bool Contains(object value) => value is SndbParameter p && _items.Contains(p);
 
     /// <inheritdoc />
     public override bool Contains(string value) => IndexOf(value) >= 0;
@@ -75,7 +75,7 @@ public sealed class TsdbParameterCollection : DbParameterCollection
     }
 
     /// <inheritdoc />
-    public override int IndexOf(object value) => value is TsdbParameter p ? _items.IndexOf(p) : -1;
+    public override int IndexOf(object value) => value is SndbParameter p ? _items.IndexOf(p) : -1;
 
     /// <inheritdoc />
     public override int IndexOf(string parameterName)
@@ -92,7 +92,7 @@ public sealed class TsdbParameterCollection : DbParameterCollection
     /// <inheritdoc />
     public override void Remove(object value)
     {
-        if (value is TsdbParameter p) _items.Remove(p);
+        if (value is SndbParameter p) _items.Remove(p);
     }
 
     /// <inheritdoc />
@@ -116,11 +116,11 @@ public sealed class TsdbParameterCollection : DbParameterCollection
         else _items[idx] = Cast(value);
     }
 
-    private static TsdbParameter Cast(object value)
+    private static SndbParameter Cast(object value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        return value as TsdbParameter
-            ?? throw new InvalidCastException("仅支持 TsdbParameter。");
+        return value as SndbParameter
+            ?? throw new InvalidCastException("仅支持 SndbParameter。");
     }
 
     internal static string NormalizeName(string? name)
@@ -131,5 +131,5 @@ public sealed class TsdbParameterCollection : DbParameterCollection
         return span.ToString();
     }
 
-    internal IReadOnlyList<TsdbParameter> Items => _items;
+    internal IReadOnlyList<SndbParameter> Items => _items;
 }

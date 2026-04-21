@@ -8,7 +8,7 @@ namespace SonnetDB.Data;
 
 /// <summary>
 /// SonnetDB 的 ADO.NET 连接对象。同一类型同时承载嵌入式与远程两种实现，
-/// 由 <see cref="TsdbConnectionStringBuilder.ResolveMode"/> 推断分发。
+/// 由 <see cref="SndbConnectionStringBuilder.ResolveMode"/> 推断分发。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -22,18 +22,18 @@ namespace SonnetDB.Data;
 /// </para>
 /// <para>当前版本不支持事务。</para>
 /// </remarks>
-public sealed class TsdbConnection : DbConnection
+public sealed class SndbConnection : DbConnection
 {
     private string _connectionString = string.Empty;
-    private TsdbConnectionStringBuilder _builder = new();
+    private SndbConnectionStringBuilder _builder = new();
     private IConnectionImpl? _impl;
     private bool _disposed;
 
     /// <summary>使用空连接字符串构造，必须随后赋值 <see cref="ConnectionString"/> 再 <see cref="Open"/>。</summary>
-    public TsdbConnection() { }
+    public SndbConnection() { }
 
     /// <summary>使用指定的连接字符串构造。</summary>
-    public TsdbConnection(string? connectionString)
+    public SndbConnection(string? connectionString)
     {
         if (!string.IsNullOrWhiteSpace(connectionString))
             ConnectionString = connectionString;
@@ -49,7 +49,7 @@ public sealed class TsdbConnection : DbConnection
             if (State != ConnectionState.Closed)
                 throw new InvalidOperationException("不能在连接打开状态下修改 ConnectionString。");
             _connectionString = value ?? string.Empty;
-            _builder = new TsdbConnectionStringBuilder(_connectionString);
+            _builder = new SndbConnectionStringBuilder(_connectionString);
         }
     }
 
@@ -61,13 +61,13 @@ public sealed class TsdbConnection : DbConnection
 
     /// <inheritdoc />
     public override string ServerVersion
-        => _impl?.ServerVersion ?? typeof(TsdbConnection).Assembly.GetName().Version?.ToString() ?? "1.0.0";
+        => _impl?.ServerVersion ?? typeof(SndbConnection).Assembly.GetName().Version?.ToString() ?? "1.0.0";
 
     /// <inheritdoc />
     public override ConnectionState State => _impl?.State ?? ConnectionState.Closed;
 
     /// <summary>当前连接所采用的运行模式。</summary>
-    public TsdbProviderMode ProviderMode => _builder.ResolveMode();
+    public SndbProviderMode ProviderMode => _builder.ResolveMode();
 
     /// <summary>
     /// 仅嵌入式模式可用：返回底层 <see cref="SonnetDB.Engine.Tsdb"/> 引擎实例；远程模式或未打开时为 null。
@@ -88,9 +88,9 @@ public sealed class TsdbConnection : DbConnection
 
         _impl = _builder.ResolveMode() switch
         {
-            TsdbProviderMode.Embedded => new EmbeddedConnectionImpl(_builder),
-            TsdbProviderMode.Remote => new RemoteConnectionImpl(_builder),
-            _ => throw new InvalidOperationException("未知的 TsdbProviderMode。"),
+            SndbProviderMode.Embedded => new EmbeddedConnectionImpl(_builder),
+            SndbProviderMode.Remote => new RemoteConnectionImpl(_builder),
+            _ => throw new InvalidOperationException("未知的 SndbProviderMode。"),
         };
         try
         {
@@ -114,14 +114,14 @@ public sealed class TsdbConnection : DbConnection
     }
 
     /// <inheritdoc />
-    protected override DbCommand CreateDbCommand() => new TsdbCommand { Connection = this };
+    protected override DbCommand CreateDbCommand() => new SndbCommand { Connection = this };
 
     /// <inheritdoc />
     protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel)
         => throw new NotSupportedException("SonnetDB 当前版本不支持事务。");
 
-    /// <summary>使用强类型返回 <see cref="TsdbCommand"/>。</summary>
-    public new TsdbCommand CreateCommand() => new() { Connection = this };
+    /// <summary>使用强类型返回 <see cref="SndbCommand"/>。</summary>
+    public new SndbCommand CreateCommand() => new() { Connection = this };
 
     /// <inheritdoc />
     protected override void Dispose(bool disposing)

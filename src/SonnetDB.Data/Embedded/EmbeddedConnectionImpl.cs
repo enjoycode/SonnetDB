@@ -14,11 +14,11 @@ namespace SonnetDB.Data.Embedded;
 /// </summary>
 internal sealed class EmbeddedConnectionImpl : IConnectionImpl
 {
-    private readonly TsdbConnectionStringBuilder _builder;
+    private readonly SndbConnectionStringBuilder _builder;
     private Tsdb? _tsdb;
     private ConnectionState _state = ConnectionState.Closed;
 
-    public EmbeddedConnectionImpl(TsdbConnectionStringBuilder builder)
+    public EmbeddedConnectionImpl(SndbConnectionStringBuilder builder)
     {
         _builder = builder;
     }
@@ -40,7 +40,7 @@ internal sealed class EmbeddedConnectionImpl : IConnectionImpl
         if (string.IsNullOrWhiteSpace(path))
             throw new InvalidOperationException("ConnectionString 缺少 'Data Source'。");
 
-        _tsdb = SharedTsdbRegistry.Acquire(new TsdbOptions { RootDirectory = path });
+        _tsdb = SharedSndbRegistry.Acquire(new TsdbOptions { RootDirectory = path });
         _state = ConnectionState.Open;
     }
 
@@ -51,12 +51,12 @@ internal sealed class EmbeddedConnectionImpl : IConnectionImpl
         _tsdb = null;
         _state = ConnectionState.Closed;
         if (t != null)
-            SharedTsdbRegistry.Release(t);
+            SharedSndbRegistry.Release(t);
     }
 
     public void Dispose() => Close();
 
-    public IExecutionResult Execute(string sql, TsdbParameterCollection parameters, CommandBehavior behavior)
+    public IExecutionResult Execute(string sql, SndbParameterCollection parameters, CommandBehavior behavior)
     {
         if (_tsdb is null || _state != ConnectionState.Open)
             throw new InvalidOperationException("连接未打开。");
@@ -79,7 +79,7 @@ internal sealed class EmbeddedConnectionImpl : IConnectionImpl
         return MaterializedExecutionResult.NonQuery(0);
     }
 
-    public IExecutionResult ExecuteBulk(string commandText, TsdbParameterCollection parameters)
+    public IExecutionResult ExecuteBulk(string commandText, SndbParameterCollection parameters)
     {
         if (_tsdb is null || _state != ConnectionState.Open)
             throw new InvalidOperationException("连接未打开。");
@@ -116,7 +116,7 @@ internal sealed class EmbeddedConnectionImpl : IConnectionImpl
         }
     }
 
-    private static string? TryGetParam(TsdbParameterCollection parameters, string name)
+    private static string? TryGetParam(SndbParameterCollection parameters, string name)
     {
         for (int i = 0; i < parameters.Count; i++)
         {

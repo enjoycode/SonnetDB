@@ -32,7 +32,7 @@ dotnet add package SonnetDB.Data --version 0.1.0
 ```csharp
 using SonnetDB.Data;
 
-using var connection = new TsdbConnection("Data Source=./demo-data");
+using var connection = new SndbConnection("Data Source=./demo-data");
 connection.Open();
 
 using var create = connection.CreateCommand();
@@ -63,7 +63,7 @@ while (reader.Read())
 ```csharp
 using SonnetDB.Data;
 
-using var connection = new TsdbConnection("Data Source=./demo-data");
+using var connection = new SndbConnection("Data Source=./demo-data");
 connection.Open();
 
 using var command = connection.CreateCommand();
@@ -84,7 +84,7 @@ using var reader = command.ExecuteReader();
 ```csharp
 using SonnetDB.Data;
 
-using var connection = new TsdbConnection(
+using var connection = new SndbConnection(
     "Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=your-token;Timeout=30");
 connection.Open();
 
@@ -102,7 +102,7 @@ while (reader.Read())
 
 - 数据面 SQL 通过 `POST /v1/db/{db}/sql` 调用
 - 结果以 ndjson 流式返回，再转成 `DbDataReader`
-- 服务端错误会映射成 `TsdbServerException`
+- 服务端错误会映射成 `SndbServerException`
 
 ## 远程异常处理
 
@@ -112,7 +112,7 @@ using SonnetDB.Data.Remote;
 
 try
 {
-    using var connection = new TsdbConnection(
+    using var connection = new SndbConnection(
         "Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=bad-token");
     connection.Open();
 
@@ -120,7 +120,7 @@ try
     command.CommandText = "SELECT * FROM cpu";
     command.ExecuteNonQuery();
 }
-catch (TsdbServerException ex)
+catch (SndbServerException ex)
 {
     Console.WriteLine($"{ex.StatusCode} {ex.Error} {ex.ServerMessage}");
 }
@@ -147,7 +147,7 @@ catch (TsdbServerException ex)
 ```csharp
 using SonnetDB.Data;
 
-using var connection = new TsdbConnection("Data Source=./demo-data");
+using var connection = new SndbConnection("Data Source=./demo-data");
 connection.Open();
 
 using var command = connection.CreateCommand();

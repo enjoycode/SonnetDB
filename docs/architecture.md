@@ -22,7 +22,7 @@ permalink: /architecture/
 Application / Service / Tooling
         |
         +-- Tsdb + SqlExecutor
-        +-- TsdbConnection / TsdbCommand
+        +-- SndbConnection / SndbCommand
         +-- sndb CLI
         +-- HTTP / Admin UI
                 |

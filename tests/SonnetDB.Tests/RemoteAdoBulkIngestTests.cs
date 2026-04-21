@@ -72,9 +72,9 @@ public sealed class RemoteAdoBulkIngestTests : IAsyncLifetime
     private string ConnString(string token = _adminToken)
         => $"Data Source=sonnetdb+http://{new Uri(_baseUrl).Authority}/{_dbName};Token={token};Timeout=30";
 
-    private TsdbConnection Open(string token = _adminToken)
+    private SndbConnection Open(string token = _adminToken)
     {
-        var c = new TsdbConnection(ConnString(token));
+        var c = new SndbConnection(ConnString(token));
         c.Open();
         return c;
     }
@@ -150,7 +150,7 @@ public sealed class RemoteAdoBulkIngestTests : IAsyncLifetime
         using var cmd = c.CreateCommand();
         cmd.CommandType = CommandType.TableDirect;
         cmd.CommandText = "cpu\ncpu,host=a value=1 1";
-        var ex = Assert.Throws<TsdbServerException>(() => cmd.ExecuteNonQuery());
+        var ex = Assert.Throws<SndbServerException>(() => cmd.ExecuteNonQuery());
         Assert.Equal(System.Net.HttpStatusCode.Forbidden, ex.StatusCode);
     }
 

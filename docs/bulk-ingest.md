@@ -25,7 +25,7 @@ permalink: /bulk-ingest/
 using System.Data;
 using SonnetDB.Data;
 
-using var connection = new TsdbConnection("Data Source=./demo-data");
+using var connection = new SndbConnection("Data Source=./demo-data");
 connection.Open();
 
 using var command = connection.CreateCommand();
@@ -64,7 +64,7 @@ ignored,host=server-02 value=2.0 2
 using System.Data;
 using SonnetDB.Data;
 
-using var connection = new TsdbConnection(
+using var connection = new SndbConnection(
     "Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=your-token");
 connection.Open();
 
@@ -102,7 +102,7 @@ ADO.NET 示例：
 using System.Data;
 using SonnetDB.Data;
 
-using var connection = new TsdbConnection("Data Source=./demo-data");
+using var connection = new SndbConnection("Data Source=./demo-data");
 connection.Open();
 
 using var command = connection.CreateCommand();
@@ -135,7 +135,7 @@ ADO.NET 示例：
 using System.Data;
 using SonnetDB.Data;
 
-using var connection = new TsdbConnection("Data Source=./demo-data");
+using var connection = new SndbConnection("Data Source=./demo-data");
 connection.Open();
 
 using var command = connection.CreateCommand();

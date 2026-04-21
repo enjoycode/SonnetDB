@@ -95,7 +95,7 @@ internal sealed class RemoteExecutionResult : IExecutionResult
                         ? msgProp.GetString() ?? string.Empty
                         : string.Empty;
                     _ended = true;
-                    throw new TsdbServerException(error, message, System.Net.HttpStatusCode.OK);
+                    throw new SndbServerException(error, message, System.Net.HttpStatusCode.OK);
                 }
             }
 
@@ -150,7 +150,7 @@ internal sealed class RemoteExecutionResult : IExecutionResult
                 reader.Dispose();
                 stream.Dispose();
                 response.Dispose();
-                throw new TsdbServerException(error, message, System.Net.HttpStatusCode.OK);
+                throw new SndbServerException(error, message, System.Net.HttpStatusCode.OK);
             }
 
             if (root.TryGetProperty("type", out var typeProp) && typeProp.ValueKind == JsonValueKind.String)

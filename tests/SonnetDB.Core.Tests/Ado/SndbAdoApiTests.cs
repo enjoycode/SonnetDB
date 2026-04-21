@@ -5,7 +5,7 @@ using Xunit;
 namespace SonnetDB.Core.Tests.Ado;
 
 /// <summary>
-/// <see cref="TsdbConnection"/> / <see cref="TsdbCommand"/> / <see cref="TsdbDataReader"/>
+/// <see cref="SndbConnection"/> / <see cref="SndbCommand"/> / <see cref="SndbDataReader"/>
 /// 的 ADO.NET 端到端测试（PR #28）。
 /// </summary>
 public sealed class TsdbAdoApiTests : IDisposable
@@ -25,21 +25,21 @@ public sealed class TsdbAdoApiTests : IDisposable
 
     private string ConnString => $"Data Source={_root}";
 
-    private TsdbConnection OpenConn()
+    private SndbConnection OpenConn()
     {
-        var c = new TsdbConnection(ConnString);
+        var c = new SndbConnection(ConnString);
         c.Open();
         return c;
     }
 
-    private static int ExecNonQuery(TsdbConnection c, string sql)
+    private static int ExecNonQuery(SndbConnection c, string sql)
     {
         using var cmd = c.CreateCommand();
         cmd.CommandText = sql;
         return cmd.ExecuteNonQuery();
     }
 
-    private static void EnsureCpuSchema(TsdbConnection c)
+    private static void EnsureCpuSchema(SndbConnection c)
     {
         ExecNonQuery(c, "CREATE MEASUREMENT cpu (host TAG, value FIELD FLOAT)");
     }
@@ -58,7 +58,7 @@ public sealed class TsdbAdoApiTests : IDisposable
     [Fact]
     public void Open_MissingDataSource_Throws()
     {
-        using var c = new TsdbConnection();
+        using var c = new SndbConnection();
         Assert.Throws<InvalidOperationException>(c.Open);
     }
 
@@ -98,16 +98,16 @@ public sealed class TsdbAdoApiTests : IDisposable
     [Fact]
     public void ConnectionStringBuilder_RoundTripsDataSource()
     {
-        var b = new TsdbConnectionStringBuilder { DataSource = "C:/data/x" };
+        var b = new SndbConnectionStringBuilder { DataSource = "C:/data/x" };
         Assert.Contains("Data Source", b.ConnectionString);
-        var parsed = new TsdbConnectionStringBuilder(b.ConnectionString);
+        var parsed = new SndbConnectionStringBuilder(b.ConnectionString);
         Assert.Equal("C:/data/x", parsed.DataSource);
     }
 
     [Fact]
     public void ConnectionStringBuilder_KeyIsCaseInsensitive()
     {
-        var b = new TsdbConnectionStringBuilder("DATA SOURCE=./x");
+        var b = new SndbConnectionStringBuilder("DATA SOURCE=./x");
         Assert.Equal("./x", b.DataSource);
     }
 
@@ -376,14 +376,14 @@ public sealed class TsdbAdoApiTests : IDisposable
     [Fact]
     public void ExecuteNonQuery_NoConnection_Throws()
     {
-        using var cmd = new TsdbCommand("CREATE MEASUREMENT cpu (host TAG, v FIELD FLOAT)");
+        using var cmd = new SndbCommand("CREATE MEASUREMENT cpu (host TAG, v FIELD FLOAT)");
         Assert.Throws<InvalidOperationException>(() => cmd.ExecuteNonQuery());
     }
 
     [Fact]
     public void ExecuteNonQuery_ConnectionClosed_Throws()
     {
-        using var c = new TsdbConnection(ConnString);
+        using var c = new SndbConnection(ConnString);
         using var cmd = c.CreateCommand();
         cmd.CommandText = "CREATE MEASUREMENT cpu (host TAG, v FIELD FLOAT)";
         Assert.Throws<InvalidOperationException>(() => cmd.ExecuteNonQuery());
@@ -401,7 +401,7 @@ public sealed class TsdbAdoApiTests : IDisposable
     [Fact]
     public void CommandType_NonText_Throws()
     {
-        using var cmd = new TsdbCommand();
+        using var cmd = new SndbCommand();
         Assert.Throws<NotSupportedException>(() => cmd.CommandType = CommandType.StoredProcedure);
     }
 

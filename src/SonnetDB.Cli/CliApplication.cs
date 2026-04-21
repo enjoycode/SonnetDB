@@ -381,17 +381,17 @@ internal sealed class CliApplication
     // ── connection string builders ────────────────────────────────────────────
 
     private static string CreateLocalConnectionString(string rootPath)
-        => new TsdbConnectionStringBuilder
+        => new SndbConnectionStringBuilder
         {
-            Mode = TsdbProviderMode.Embedded,
+            Mode = SndbProviderMode.Embedded,
             DataSource = rootPath,
         }.ConnectionString;
 
     private static string CreateRemoteConnectionString(RemoteCommandOptions options)
     {
-        var builder = new TsdbConnectionStringBuilder
+        var builder = new SndbConnectionStringBuilder
         {
-            Mode = TsdbProviderMode.Remote,
+            Mode = SndbProviderMode.Remote,
             DataSource = $"{options.BaseUrl!.TrimEnd('/')}/{options.Database}",
             Timeout = options.Timeout ?? 100,
         };
@@ -402,9 +402,9 @@ internal sealed class CliApplication
 
     private static string CreateRemoteConnectionStringFromProfile(CliRemoteProfile profile)
     {
-        var builder = new TsdbConnectionStringBuilder
+        var builder = new SndbConnectionStringBuilder
         {
-            Mode = TsdbProviderMode.Remote,
+            Mode = SndbProviderMode.Remote,
             DataSource = $"{profile.BaseUrl.TrimEnd('/')}/{profile.Database}",
             Timeout = profile.Timeout,
         };
@@ -417,7 +417,7 @@ internal sealed class CliApplication
 
     private void ExecuteAndRender(string connectionString, string sqlText)
     {
-        using var connection = new TsdbConnection(connectionString);
+        using var connection = new SndbConnection(connectionString);
         connection.Open();
 
         using var command = connection.CreateCommand();

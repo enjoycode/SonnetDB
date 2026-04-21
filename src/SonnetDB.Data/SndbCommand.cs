@@ -19,18 +19,18 @@ namespace SonnetDB.Data;
 /// CREATE MEASUREMENT 返回 0；SELECT 返回 -1（与 <see cref="DbCommand"/> 标准一致）。
 /// </para>
 /// </remarks>
-public sealed class TsdbCommand : DbCommand
+public sealed class SndbCommand : DbCommand
 {
-    private TsdbConnection? _connection;
+    private SndbConnection? _connection;
     private string _commandText = string.Empty;
     private CommandType _commandType = CommandType.Text;
-    private readonly TsdbParameterCollection _parameters = new();
+    private readonly SndbParameterCollection _parameters = new();
 
     /// <summary>构造一个未关联连接的命令。</summary>
-    public TsdbCommand() { }
+    public SndbCommand() { }
 
     /// <summary>用 SQL 文本与连接构造命令。</summary>
-    public TsdbCommand(string commandText, TsdbConnection? connection = null)
+    public SndbCommand(string commandText, SndbConnection? connection = null)
     {
         _commandText = commandText ?? string.Empty;
         _connection = connection;
@@ -70,8 +70,8 @@ public sealed class TsdbCommand : DbCommand
     protected override DbConnection? DbConnection
     {
         get => _connection;
-        set => _connection = value as TsdbConnection
-            ?? (value is null ? null : throw new InvalidCastException("Connection 必须是 TsdbConnection。"));
+        set => _connection = value as SndbConnection
+            ?? (value is null ? null : throw new InvalidCastException("Connection 必须是 SndbConnection。"));
     }
 
     /// <inheritdoc />
@@ -89,10 +89,10 @@ public sealed class TsdbCommand : DbCommand
     }
 
     /// <summary>强类型参数集合。</summary>
-    public new TsdbParameterCollection Parameters => _parameters;
+    public new SndbParameterCollection Parameters => _parameters;
 
     /// <summary>强类型连接。</summary>
-    public new TsdbConnection? Connection
+    public new SndbConnection? Connection
     {
         get => _connection;
         set => _connection = value;
@@ -105,7 +105,7 @@ public sealed class TsdbCommand : DbCommand
     public override void Prepare() { /* no-op */ }
 
     /// <inheritdoc />
-    protected override DbParameter CreateDbParameter() => new TsdbParameter();
+    protected override DbParameter CreateDbParameter() => new SndbParameter();
 
     /// <inheritdoc />
     public override int ExecuteNonQuery()
@@ -137,7 +137,7 @@ public sealed class TsdbCommand : DbCommand
     protected override DbDataReader ExecuteDbDataReader(CommandBehavior behavior)
     {
         var result = ExecuteCore(behavior);
-        return new TsdbDataReader(result, behavior, _connection);
+        return new SndbDataReader(result, behavior, _connection);
     }
 
     private IExecutionResult ExecuteCore(CommandBehavior behavior)

@@ -20,7 +20,7 @@
   - **解决方案 / 目录**：`TSLite.slnx` → `SonnetDB.slnx`；`src/TSLite*` 与 `tests/TSLite*` 整体迁移至 `src/SonnetDB*` 与 `tests/SonnetDB*`。
   - **服务端 Bundle / 安装包**：`tslite-server-full-<ver>-<rid>` → `sonnetdb-full-<ver>-<rid>`；启动脚本 `start-tslite-server.{cmd,sh}` → `start-sonnetdb.{cmd,sh}`；Linux 包路径 `/opt/tslite-server` → `/opt/sonnetdb`。
   - **代码命名空间**：`TSLite.*` → `SonnetDB.*`，`TSLite.Server.*` → `SonnetDB.*`（服务端去掉 `.Server` 子命名空间，与对外品牌一致）。
-  - **保留**：核心类型名 `Tsdb` / `TsdbOptions` / `TsdbConnection` 等不变（`Tsdb` 是通用时序库缩写而非品牌词）。
+  - **保留**：核心类型名 `Tsdb` / `TsdbOptions` / `SndbConnection` 等不变（`Tsdb` 是通用时序库缩写而非品牌词）。
 - **版本升级**：`0.1.0` → `1.0.0`。
 
 ### Added
@@ -259,8 +259,8 @@
 
 - **PR #43：`SonnetDB.Data` 接入批量入库快路径（绕开 SQL 解析的快路径，第 2/4 步）**
   - 扩展 `IConnectionImpl` 增加 `ExecuteBulk(commandText, parameters)`，与 `Execute(sql, …)` 并列。
-  - `TsdbCommand.CommandType` 由只读 `Text` 改为可读写字段，允许 `CommandType.Text`（默认）与 `CommandType.TableDirect`；其它值（如 `StoredProcedure`）仍抛 `NotSupportedException`。
-  - `TsdbCommand.ExecuteCore` 在 `TableDirect` 下跳过 `ParameterBinder`，把 `CommandText` 整段交给 `IConnectionImpl.ExecuteBulk`。
+  - `SndbCommand.CommandType` 由只读 `Text` 改为可读写字段，允许 `CommandType.Text`（默认）与 `CommandType.TableDirect`；其它值（如 `StoredProcedure`）仍抛 `NotSupportedException`。
+  - `SndbCommand.ExecuteCore` 在 `TableDirect` 下跳过 `ParameterBinder`，把 `CommandText` 整段交给 `IConnectionImpl.ExecuteBulk`。
   - `EmbeddedConnectionImpl.ExecuteBulk` 桥接 `SonnetDB.Ingest`：用 `BulkPayloadDetector.DetectWithPrefix` 嗅探协议并切首行 measurement 前缀；按 `LineProtocol`/`Json`/`BulkValues` 路由到对应 reader；对 `BulkValuesReader` 通过闭包从 `Tsdb.Measurements.TryGet(measurement).TryGetColumn(col).Role` 解析列角色（Tag/Field/Time）；最终经 `BulkIngestor.Ingest` 写入并把写入行数包成 `MaterializedExecutionResult.NonQuery`。
   - 命令参数 hooks：`measurement`（覆盖 payload 内的 measurement）、`onerror=skip`（切换到 `BulkErrorPolicy.Skip`）、`flush=true`（写入完成后触发 `Tsdb.FlushNow`）；参数名兼容 `@`/`:` 前缀。
   - `RemoteConnectionImpl.ExecuteBulk` 占位实现：抛 `NotSupportedException`，明确指向 PR #44。
@@ -283,7 +283,7 @@
   - 新增 `src/SonnetDB/PackageReadme.md`、`src/SonnetDB.Data/PackageReadme.md`、`src/SonnetDB.Cli/PackageReadme.md`，并在三个项目文件中补齐 `PackageId`、`PackageReadmeFile`、版本元数据，支持直接生成 `SonnetDB`、`SonnetDB.Data`、`SonnetDB.Cli` 三个 `0.1.0` 包。
   - `SonnetDB.Cli` 从占位程序升级为可用命令行工具：支持 `sndb version`、`sndb sql --connection ... --command|--file ...` 和 `sndb repl --connection ...`，可直接连接本地嵌入式数据库或远程 `SonnetDB`。
   - 新增 `tests/SonnetDB.Core.Tests/Cli/CliApplicationTests.cs`，覆盖 CLI 帮助输出与本地 SQL 执行回归场景。
-  - 新增 `src/SonnetDB.Data/Internal/ExecutionFieldTypeResolver.cs`，并为 `TsdbDataReader` / `IExecutionResult` / `MaterializedExecutionResult` / `RemoteExecutionResult` 补齐 trim/AOT 注解与显式类型映射，保持 `SonnetDB.Cli` 接入 `SonnetDB.Data` 后仍可 `PublishAot=true` 通过发布。
+  - 新增 `src/SonnetDB.Data/Internal/ExecutionFieldTypeResolver.cs`，并为 `SndbDataReader` / `IExecutionResult` / `MaterializedExecutionResult` / `RemoteExecutionResult` 补齐 trim/AOT 注解与显式类型映射，保持 `SonnetDB.Cli` 接入 `SonnetDB.Data` 后仍可 `PublishAot=true` 通过发布。
   - 新增 `docs/releases/README.md`、`docs/releases/sdk-bundle.md`、`docs/releases/server-bundle.md`、`docs/releases/installers.md`，说明 NuGet 包、SDK Bundle、Server Full Bundle、MSI/DEB/RPM 安装包的用途、目录结构、默认启动方式与凭据。
   - 新增跨平台发布脚本 `eng/release.ps1`：
     - 生成 `SonnetDB` / `SonnetDB.Data` / `SonnetDB.Cli` NuGet 包；
@@ -402,13 +402,13 @@
   绕过 generator 拦截，行为稳定（PR #34a）。
 
 - **SonnetDB.Data**：将 ADO.NET API 从 `SonnetDB` 核心库剥离为独立的 `src/SonnetDB.Data/`（PR #33）
-  - 公共表面保持兼容：`TsdbConnection` / `TsdbCommand` / `TsdbDataReader` / `TsdbParameter` / `TsdbParameterCollection` / `TsdbConnectionStringBuilder` 命名空间从 `SonnetDB.Ado` 迁移到 `SonnetDB.Data`；`src/SonnetDB/Ado/` 目录整体删除。
+  - 公共表面保持兼容：`SndbConnection` / `SndbCommand` / `SndbDataReader` / `SndbParameter` / `SndbParameterCollection` / `SndbConnectionStringBuilder` 命名空间从 `SonnetDB.Ado` 迁移到 `SonnetDB.Data`；`src/SonnetDB/Ado/` 目录整体删除。
   - **嵌入式 + 远程双模式**：通过连接字符串 scheme 自动分派，由内部接口 `IConnectionImpl` 统一抽象。
-    - 嵌入式：`Data Source=<path>` 或 `sonnetdb://<path>` → `EmbeddedConnectionImpl` 复用 `SharedTsdbRegistry` + 进程内 `Tsdb`，行为与原 `SonnetDB.Ado` 完全一致。
-    - 远程：`Data Source=sonnetdb+http://host:port/<db>;Token=<bearer>` 或 `http(s)://...` → `RemoteConnectionImpl` 通过 `HttpClient` + ndjson 流式协议直连 `SonnetDB` 的 `POST /v1/db/{db}/sql` 端点；服务端错误抛 `TsdbServerException`（含 `Error` / `ServerMessage` / `StatusCode`）。
-    - `TsdbConnectionStringBuilder.ResolveMode()` 支持显式 `Mode=Embedded|Remote` 覆盖；新增 `Token` / `Timeout`（默认 100s）键。
-    - `TsdbConnection.ProviderMode` 暴露当前模式；`UnderlyingTsdb` 仅在嵌入式模式返回非空。
-  - 新增 `TsdbProviderFactory : DbProviderFactory`（单例 `Instance`），可注册到 `DbProviderFactories` 供通用 ADO 工具使用。
+    - 嵌入式：`Data Source=<path>` 或 `sonnetdb://<path>` → `EmbeddedConnectionImpl` 复用 `SharedSndbRegistry` + 进程内 `Tsdb`，行为与原 `SonnetDB.Ado` 完全一致。
+    - 远程：`Data Source=sonnetdb+http://host:port/<db>;Token=<bearer>` 或 `http(s)://...` → `RemoteConnectionImpl` 通过 `HttpClient` + ndjson 流式协议直连 `SonnetDB` 的 `POST /v1/db/{db}/sql` 端点；服务端错误抛 `SndbServerException`（含 `Error` / `ServerMessage` / `StatusCode`）。
+    - `SndbConnectionStringBuilder.ResolveMode()` 支持显式 `Mode=Embedded|Remote` 覆盖；新增 `Token` / `Timeout`（默认 100s）键。
+    - `SndbConnection.ProviderMode` 暴露当前模式；`UnderlyingTsdb` 仅在嵌入式模式返回非空。
+  - 新增 `SndbProviderFactory : DbProviderFactory`（单例 `Instance`），可注册到 `DbProviderFactories` 供通用 ADO 工具使用。
   - `IsAotCompatible=false` 并附详细注释（理由：`DbConnection` / `DbCommand` 基类大量反射；主流 ADO 提供程序如 Npgsql、MySqlConnector 也未承诺 AOT；需要 AOT 的场景请直接使用 `Tsdb` API）。
   - 远程客户端 ndjson 解析使用 `System.Text.Json` 源生成器（`RemoteJsonContext`）+ `JsonDocument` 解析行级数组，`HttpCompletionOption.ResponseHeadersRead` 实现真流式读取。
   - 9 个端到端测试（`tests/SonnetDB.Tests/RemoteAdoEndToEndTests.cs`）覆盖：scheme 分派、嵌入式回退、CREATE→INSERT→SELECT 全链路、参数绑定与单引号转义、`ExecuteScalar`、只读令牌 INSERT 拒绝、SQL 错误、缺失令牌 401、未知数据库 404；既有 31 个 `TsdbAdoApiTests` 全部保持通过。
@@ -421,7 +421,7 @@
   - 可观测性：`GET /healthz` 返回 JSON 健康摘要；`GET /metrics` 输出 Prometheus 文本格式（`sonnetdb_uptime_seconds` / `sonnetdb_databases` / `sonnetdb_sql_requests_total` / `sonnetdb_sql_errors_total` / `sonnetdb_rows_inserted_total` / `sonnetdb_rows_returned_total` / per-db `sonnetdb_segments{db="..."}`）。
   - 6 个端到端集成测试（`tests/SonnetDB.Tests/ServerEndToEndTests.cs`）覆盖 Healthz / Metrics 匿名访问、SQL 鉴权、admin 角色限定、CREATE→INSERT→SELECT→DROP 全链路、ndjson 解析、未知数据库 404。
 - **整库 Native AOT 兼容**：`Directory.Build.props` 默认开启 `IsAotCompatible=true`（测试与基准项目显式关闭）；`SonnetDB` / `SonnetDB.Cli` / `SonnetDB` 全部以零 IL/AOT 警告通过 `dotnet publish -p:PublishAot=true`。
-  - `TsdbDataReader.GetFieldType` 重构：内部 `Type[]` 改为 `enum ColumnTypeKind`，并添加 `[DynamicallyAccessedMembers]` 标注 + `typeof(...)` 常量 switch，消除 IL2063/IL2093 警告，对外 API 与运行时行为完全保持。
+  - `SndbDataReader.GetFieldType` 重构：内部 `Type[]` 改为 `enum ColumnTypeKind`，并添加 `[DynamicallyAccessedMembers]` 标注 + `typeof(...)` 常量 switch，消除 IL2063/IL2093 警告，对外 API 与运行时行为完全保持。
 - **CI**：`.github/workflows/ci.yml` 新增 `aot-publish` job（Linux + Windows 矩阵），执行 `dotnet publish -p:PublishAot=true /warnaserror` 验证 `SonnetDB.Cli` 与 `SonnetDB`，并上传 publish 产物（PR #32）。
 
 ### Changed
@@ -461,11 +461,11 @@
   - `BlockDecoder` 联合读取路径（全量与范围）根据 `descriptor.TimestampEncoding` 分发；V2 路径需要完整重现时间戳后才能二分，已与现有范围查询逻辑保持一致。
   - 13 个新测试（`TimestampCodecTests`）覆盖：空序列、单点、规则间隔压缩占比、不规则间隔、负二阶差分、大锐点、buffer 长度不匹配、锐点截断、varint 越界、SegmentWriter 默认 V1、V1↔V2 跳点一致、`DecodeRange` 一致、`BlockDescriptor` 标志保留。
 
-- 新增标准 ADO.NET API，提供 `TsdbConnection` / `TsdbCommand` / `TsdbDataReader` / `TsdbParameter` / `TsdbParameterCollection` / `TsdbConnectionStringBuilder`（PR #28）
-  - `SonnetDB.Ado.TsdbConnection : System.Data.Common.DbConnection`：连接字符串为 `Data Source=<根目录>`（大小写不敏感，由 `DbConnectionStringBuilder` 提供）；同进程同路径多次 `Open` 通过内部 `SharedTsdbRegistry` 引用计数共享同一 `Tsdb`，避免 WAL 锁冲突；事务与 `ChangeDatabase` 抛 `NotSupportedException`
-  - `SonnetDB.Ado.TsdbCommand : DbCommand`：包装 `SqlExecutor`；`ExecuteNonQuery` 返回 INSERT 写入行数 / DELETE 増加的墓碑总数 / CREATE MEASUREMENT 0 / SELECT -1；`ExecuteScalar` 返回 SELECT 首行首列（空集返 null）；`ExecuteReader` 包装 `SelectExecutionResult`，非 SELECT 语句返回零行 reader 并携带 `RecordsAffected`
+- 新增标准 ADO.NET API，提供 `SndbConnection` / `SndbCommand` / `SndbDataReader` / `SndbParameter` / `SndbParameterCollection` / `SndbConnectionStringBuilder`（PR #28）
+  - `SonnetDB.Ado.SndbConnection : System.Data.Common.DbConnection`：连接字符串为 `Data Source=<根目录>`（大小写不敏感，由 `DbConnectionStringBuilder` 提供）；同进程同路径多次 `Open` 通过内部 `SharedSndbRegistry` 引用计数共享同一 `Tsdb`，避免 WAL 锁冲突；事务与 `ChangeDatabase` 抛 `NotSupportedException`
+  - `SonnetDB.Ado.SndbCommand : DbCommand`：包装 `SqlExecutor`；`ExecuteNonQuery` 返回 INSERT 写入行数 / DELETE 増加的墓碑总数 / CREATE MEASUREMENT 0 / SELECT -1；`ExecuteScalar` 返回 SELECT 首行首列（空集返 null）；`ExecuteReader` 包装 `SelectExecutionResult`，非 SELECT 语句返回零行 reader 并携带 `RecordsAffected`
   - 参数绑定：支持 `@name` 与 `:name` 占位符，执行前以状态机扫描 SQL 文本并跳过字符串字面量 / 双引号标识符 / 行注释；支持类型包括 `string` / `bool` / 整型 / 浮点 / `decimal` / `DateTime` / `DateTimeOffset`（后两者转为 Unix 毫秒）/ `null` / `DBNull`；字符串值会被单引号包裹并把内部 `'` 转义为 `''`，避免 SQL 注入
-  - `TsdbDataReader : DbDataReader`：完整实现 `Read` / `GetXxx` / `IsDBNull` / `GetOrdinal` / `GetFieldType`（以首个非 null 行推断）/ `HasRows` / `RecordsAffected` / `CommandBehavior.CloseConnection`。`NextResult` 总为 `false`，`GetBytes` / `GetChars` 抛 `NotSupported`
+  - `SndbDataReader : DbDataReader`：完整实现 `Read` / `GetXxx` / `IsDBNull` / `GetOrdinal` / `GetFieldType`（以首个非 null 行推断）/ `HasRows` / `RecordsAffected` / `CommandBehavior.CloseConnection`。`NextResult` 总为 `false`，`GetBytes` / `GetChars` 抛 `NotSupported`
   - 单元测试：31 个端到端测试（`TsdbAdoApiTests`）覆盖连接生命周期 / 共享 `Tsdb` / `BeginTransaction` 不支持 / `ConnectionStringBuilder` 大小写不敏感 / 三种 `ExecuteXxx` / 参数状态机（跳过字面量与标识符）/ 参数转义防注入（`O'Brien` 场景）/ 缺失参数报错 / `:name` 形式 / NULL 参数 / 多个 CommandText 错误路径 / `CloseConnection` 行为
 
 - 新增 Tag 倒排索引以加速 `SELECT/DELETE` 的 `WHERE tag = '...'` 过滤（PR #27）
@@ -721,7 +721,7 @@
 - 聚合：`min/max/sum/avg/count` + 时间桶 `time(10s)` 分组
 - SQL 词法与语法分析器（手写递归下降）
 - `CREATE MEASUREMENT` / `INSERT INTO ... VALUES` / `SELECT ... WHERE ... GROUP BY time(...)` 语句支持
-- ADO.NET 风格 API：`TsdbConnection / TsdbCommand / TsdbDataReader`
+- ADO.NET 风格 API：`SndbConnection / SndbCommand / SndbDataReader`
 
 ---
 

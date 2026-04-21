@@ -8,13 +8,13 @@ namespace SonnetDB.Data;
 /// 整数族 / <see cref="float"/> / <see cref="double"/> / <see cref="decimal"/> /
 /// <see cref="DateTime"/> / <see cref="DateTimeOffset"/>）。
 /// </summary>
-public sealed class TsdbParameter : DbParameter
+public sealed class SndbParameter : DbParameter
 {
     /// <summary>构造一个空参数。</summary>
-    public TsdbParameter() { }
+    public SndbParameter() { }
 
     /// <summary>构造命名参数并赋值。</summary>
-    public TsdbParameter(string parameterName, object? value)
+    public SndbParameter(string parameterName, object? value)
     {
         ParameterName = parameterName;
         Value = value;

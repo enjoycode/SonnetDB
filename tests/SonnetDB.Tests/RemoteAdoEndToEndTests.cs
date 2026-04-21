@@ -11,7 +11,7 @@ using Xunit;
 namespace SonnetDB.Tests;
 
 /// <summary>
-/// 端到端测试：启动真实 Kestrel + 用 <see cref="TsdbConnection"/> 远程模式作为客户端调用。
+/// 端到端测试：启动真实 Kestrel + 用 <see cref="SndbConnection"/> 远程模式作为客户端调用。
 /// 验证 PR #33：远程客户端 + 嵌入式客户端共享同一套 ADO.NET API，仅 ConnectionString scheme 不同。
 /// </summary>
 public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
@@ -69,9 +69,9 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
     private string RemoteConnString(string token = _adminToken)
         => $"Data Source=sonnetdb+http://{new Uri(_baseUrl).Authority}/{_dbName};Token={token};Timeout=30";
 
-    private TsdbConnection OpenRemote(string token = _adminToken)
+    private SndbConnection OpenRemote(string token = _adminToken)
     {
-        var c = new TsdbConnection(RemoteConnString(token));
+        var c = new SndbConnection(RemoteConnString(token));
         c.Open();
         return c;
     }
@@ -80,7 +80,7 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
     public void ConnectionString_Scheme_DispatchesToRemote()
     {
         using var c = OpenRemote();
-        Assert.Equal(TsdbProviderMode.Remote, c.ProviderMode);
+        Assert.Equal(SndbProviderMode.Remote, c.ProviderMode);
         Assert.Equal(ConnectionState.Open, c.State);
         Assert.Null(c.UnderlyingTsdb); // 远程模式没有本地 Tsdb
         Assert.Equal(_dbName, c.Database);
@@ -93,9 +93,9 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
         var path = Path.Combine(Path.GetTempPath(), "sndb-emb-" + Guid.NewGuid().ToString("N"));
         try
         {
-            using var c = new TsdbConnection($"Data Source={path}");
+            using var c = new SndbConnection($"Data Source={path}");
             c.Open();
-            Assert.Equal(TsdbProviderMode.Embedded, c.ProviderMode);
+            Assert.Equal(SndbProviderMode.Embedded, c.ProviderMode);
             Assert.NotNull(c.UnderlyingTsdb);
         }
         finally
@@ -197,7 +197,7 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
         using var c = OpenRemote(_readOnlyToken);
         using var ins = c.CreateCommand();
         ins.CommandText = "INSERT INTO m3 (time, host, v) VALUES (1, 'a', 1)";
-        var ex = Assert.Throws<TsdbServerException>(() => ins.ExecuteNonQuery());
+        var ex = Assert.Throws<SndbServerException>(() => ins.ExecuteNonQuery());
         Assert.Equal("forbidden", ex.Error);
     }
 
@@ -207,7 +207,7 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
         using var c = OpenRemote();
         using var bad = c.CreateCommand();
         bad.CommandText = "SELECT FROM nope_table";
-        var ex = Assert.Throws<TsdbServerException>(() => bad.ExecuteNonQuery());
+        var ex = Assert.Throws<SndbServerException>(() => bad.ExecuteNonQuery());
         Assert.Equal("sql_error", ex.Error);
     }
 
@@ -215,11 +215,11 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
     public void Remote_MissingToken_Unauthorized()
     {
         var cs = $"Data Source=sonnetdb+http://{new Uri(_baseUrl).Authority}/{_dbName}";
-        using var c = new TsdbConnection(cs);
+        using var c = new SndbConnection(cs);
         c.Open();
         using var cmd = c.CreateCommand();
         cmd.CommandText = "SELECT * FROM whatever";
-        var ex = Assert.Throws<TsdbServerException>(() => cmd.ExecuteNonQuery());
+        var ex = Assert.Throws<SndbServerException>(() => cmd.ExecuteNonQuery());
         Assert.Equal("unauthorized", ex.Error);
     }
 
@@ -227,11 +227,11 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
     public void Remote_UnknownDatabase_NotFound()
     {
         var cs = $"Data Source=sonnetdb+http://{new Uri(_baseUrl).Authority}/no_such_db;Token={_adminToken}";
-        using var c = new TsdbConnection(cs);
+        using var c = new SndbConnection(cs);
         c.Open();
         using var cmd = c.CreateCommand();
         cmd.CommandText = "SELECT * FROM x";
-        var ex = Assert.Throws<TsdbServerException>(() => cmd.ExecuteNonQuery());
+        var ex = Assert.Throws<SndbServerException>(() => cmd.ExecuteNonQuery());
         Assert.Equal("db_not_found", ex.Error);
     }
 }

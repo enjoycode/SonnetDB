@@ -8,14 +8,14 @@ namespace SonnetDB.Data.Embedded;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 同一进程内的多个 <see cref="TsdbConnection"/> 打开同一根目录时会复用同一 <see cref="Tsdb"/> 实例，
+/// 同一进程内的多个 <see cref="SndbConnection"/> 打开同一根目录时会复用同一 <see cref="Tsdb"/> 实例，
 /// 避免 WAL 文件锁冲突；最后一个连接关闭时引擎才被 <see cref="Tsdb.Dispose"/>。
 /// </para>
 /// <para>
 /// 不同进程仍受 WAL active segment 文件句柄锁的保护，重复打开同一目录会失败。
 /// </para>
 /// </remarks>
-internal static class SharedTsdbRegistry
+internal static class SharedSndbRegistry
 {
     private static readonly ConcurrentDictionary<string, Entry> _entries
         = new(StringComparer.OrdinalIgnoreCase);

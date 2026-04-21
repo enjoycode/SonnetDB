@@ -9,15 +9,15 @@ namespace SonnetDB.Data.Internal;
 /// </summary>
 internal static class ParameterBinder
 {
-    public static string Bind(string sql, TsdbParameterCollection parameters)
+    public static string Bind(string sql, SndbParameterCollection parameters)
     {
         if (sql.IndexOf('@') < 0 && sql.IndexOf(':') < 0)
             return sql;
 
-        var byName = new Dictionary<string, TsdbParameter>(StringComparer.OrdinalIgnoreCase);
+        var byName = new Dictionary<string, SndbParameter>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in parameters.Items)
         {
-            var n = TsdbParameterCollection.NormalizeName(p.ParameterName);
+            var n = SndbParameterCollection.NormalizeName(p.ParameterName);
             if (string.IsNullOrEmpty(n))
                 throw new InvalidOperationException("参数名不能为空。");
             byName[n] = p;

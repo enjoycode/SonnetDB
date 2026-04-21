@@ -5,7 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace SonnetDB.Data.Internal;
 
 /// <summary>
-/// 内部连接实现契约。<see cref="TsdbConnection"/> 是公开 facade，
+/// 内部连接实现契约。<see cref="SndbConnection"/> 是公开 facade，
 /// 真正的工作分别由 <c>EmbeddedConnectionImpl</c> 与 <c>RemoteConnectionImpl</c> 完成。
 /// </summary>
 internal interface IConnectionImpl : IDisposable
@@ -19,16 +19,16 @@ internal interface IConnectionImpl : IDisposable
     void Close();
 
     /// <summary>同步执行 SQL，并将结果分发为 <see cref="IExecutionResult"/>。</summary>
-    IExecutionResult Execute(string sql, TsdbParameterCollection parameters, CommandBehavior behavior);
+    IExecutionResult Execute(string sql, SndbParameterCollection parameters, CommandBehavior behavior);
 
     /// <summary>
     /// 批量入库快路径（绕开 SQL Lexer→Parser→Planner）。
-    /// 由 <see cref="TsdbCommand"/> 在 <see cref="System.Data.CommandType.TableDirect"/> 下分发。
+    /// 由 <see cref="SndbCommand"/> 在 <see cref="System.Data.CommandType.TableDirect"/> 下分发。
     /// </summary>
     /// <param name="commandText">原始 <c>CommandText</c>，可能包含可选的首行 measurement 前缀。</param>
     /// <param name="parameters">命令参数；目前识别 <c>measurement</c> / <c>onerror</c> / <c>flush</c>。</param>
     /// <returns>结果集中只含 <see cref="IExecutionResult.RecordsAffected"/>（写入行数）。</returns>
-    IExecutionResult ExecuteBulk(string commandText, TsdbParameterCollection parameters);
+    IExecutionResult ExecuteBulk(string commandText, SndbParameterCollection parameters);
 }
 
 /// <summary>

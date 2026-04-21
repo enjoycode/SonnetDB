@@ -11,15 +11,15 @@ namespace SonnetDB.Data;
 /// SonnetDB ADO.NET 数据读取器。基于内部 <see cref="IExecutionResult"/> 抽象，
 /// 嵌入式模式下持有内存物化结果，远程模式下持有 ndjson 流式结果。
 /// </summary>
-public sealed class TsdbDataReader : DbDataReader
+public sealed class SndbDataReader : DbDataReader
 {
     private readonly IExecutionResult _result;
     private readonly CommandBehavior _behavior;
-    private readonly TsdbConnection? _connection;
+    private readonly SndbConnection? _connection;
     private bool _hasRow;
     private bool _closed;
 
-    internal TsdbDataReader(IExecutionResult result, CommandBehavior behavior, TsdbConnection? connection)
+    internal SndbDataReader(IExecutionResult result, CommandBehavior behavior, SndbConnection? connection)
     {
         _result = result;
         _behavior = behavior;

@@ -99,7 +99,7 @@ docker run --rm -p 5080:5080 -v ./sonnetdb-data:/data iotsharp/sonnetdb:latest
 ```csharp
 using SonnetDB.Data;
 
-using var connection = new TsdbConnection("Data Source=./demo-data");
+using var connection = new SndbConnection("Data Source=./demo-data");
 connection.Open();
 
 using var command = connection.CreateCommand();
@@ -114,7 +114,7 @@ Console.WriteLine(count);
 ```csharp
 using SonnetDB.Data;
 
-using var connection = new TsdbConnection(
+using var connection = new SndbConnection(
     "Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=your-token");
 connection.Open();
 ```

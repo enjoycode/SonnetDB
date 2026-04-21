@@ -3,13 +3,13 @@
 namespace SonnetDB.Data;
 
 /// <summary>
-/// <see cref="TsdbConnection"/> 的连接字符串解析器。同时承载嵌入式与远程两种模式。
+/// <see cref="SndbConnection"/> 的连接字符串解析器。同时承载嵌入式与远程两种模式。
 /// </summary>
 /// <remarks>
 /// <para>支持的键（大小写不敏感）：</para>
 /// <list type="table">
 ///   <listheader><term>键</term><description>含义</description></listheader>
-///   <item><term><c>Mode</c></term><description>显式指定 <see cref="TsdbProviderMode.Embedded"/> 或 <see cref="TsdbProviderMode.Remote"/>；省略时按 <c>Data Source</c> 推断。</description></item>
+///   <item><term><c>Mode</c></term><description>显式指定 <see cref="SndbProviderMode.Embedded"/> 或 <see cref="SndbProviderMode.Remote"/>；省略时按 <c>Data Source</c> 推断。</description></item>
 ///   <item><term><c>Data Source</c></term><description>
 ///     嵌入式：本地目录路径（如 <c>./data</c> 或 <c>sonnetdb://./data</c>）。
 ///     远程：服务器 URL，scheme 必须为 <c>http</c>/<c>https</c>/<c>sonnetdb+http</c>/<c>sonnetdb+https</c>，
@@ -20,7 +20,7 @@ namespace SonnetDB.Data;
 ///   <item><term><c>Timeout</c></term><description>远程模式下 HTTP 请求超时（秒），默认 100。</description></item>
 /// </list>
 /// </remarks>
-public sealed class TsdbConnectionStringBuilder : DbConnectionStringBuilder
+public sealed class SndbConnectionStringBuilder : DbConnectionStringBuilder
 {
     private const string _keyMode = "Mode";
     private const string _keyDataSource = "Data Source";
@@ -29,24 +29,24 @@ public sealed class TsdbConnectionStringBuilder : DbConnectionStringBuilder
     private const string _keyTimeout = "Timeout";
 
     /// <summary>使用空连接字符串构造。</summary>
-    public TsdbConnectionStringBuilder() { }
+    public SndbConnectionStringBuilder() { }
 
     /// <summary>用已有的连接字符串构造。</summary>
-    public TsdbConnectionStringBuilder(string? connectionString)
+    public SndbConnectionStringBuilder(string? connectionString)
     {
         if (!string.IsNullOrWhiteSpace(connectionString))
             ConnectionString = connectionString;
     }
 
     /// <summary>显式模式；未设置时由 <see cref="ResolveMode"/> 按 <see cref="DataSource"/> 推断。</summary>
-    public TsdbProviderMode? Mode
+    public SndbProviderMode? Mode
     {
         get
         {
             if (!TryGetValue(_keyMode, out var raw) || raw is null) return null;
             var s = raw.ToString();
             if (string.IsNullOrWhiteSpace(s)) return null;
-            return Enum.TryParse<TsdbProviderMode>(s, ignoreCase: true, out var m)
+            return Enum.TryParse<SndbProviderMode>(s, ignoreCase: true, out var m)
                 ? m
                 : throw new FormatException($"无效的 Mode 值 '{s}'，应为 Embedded 或 Remote。");
         }
@@ -96,22 +96,22 @@ public sealed class TsdbConnectionStringBuilder : DbConnectionStringBuilder
     /// <summary>
     /// 推断当前连接字符串应使用的运行模式：优先取 <see cref="Mode"/>，其次按 <see cref="DataSource"/> scheme。
     /// </summary>
-    public TsdbProviderMode ResolveMode()
+    public SndbProviderMode ResolveMode()
     {
         if (Mode is { } explicitMode) return explicitMode;
 
         var ds = DataSource;
         if (string.IsNullOrWhiteSpace(ds))
-            return TsdbProviderMode.Embedded;
+            return SndbProviderMode.Embedded;
 
         // scheme://...
         int idx = ds.IndexOf("://", StringComparison.Ordinal);
-        if (idx <= 0) return TsdbProviderMode.Embedded;
+        if (idx <= 0) return SndbProviderMode.Embedded;
         var scheme = ds[..idx].ToLowerInvariant();
         return scheme switch
         {
-            "http" or "https" or "sonnetdb+http" or "sonnetdb+https" => TsdbProviderMode.Remote,
-            _ => TsdbProviderMode.Embedded,
+            "http" or "https" or "sonnetdb+http" or "sonnetdb+https" => SndbProviderMode.Remote,
+            _ => SndbProviderMode.Embedded,
         };
     }
 }

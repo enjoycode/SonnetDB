@@ -15,13 +15,13 @@ namespace SonnetDB.Data.Remote;
 /// </summary>
 internal sealed class RemoteConnectionImpl : IConnectionImpl
 {
-    private readonly TsdbConnectionStringBuilder _builder;
+    private readonly SndbConnectionStringBuilder _builder;
     private HttpClient? _http;
     private string _baseUrl = string.Empty;
     private string _database = string.Empty;
     private ConnectionState _state = ConnectionState.Closed;
 
-    public RemoteConnectionImpl(TsdbConnectionStringBuilder builder)
+    public RemoteConnectionImpl(SndbConnectionStringBuilder builder)
     {
         _builder = builder;
     }
@@ -67,7 +67,7 @@ internal sealed class RemoteConnectionImpl : IConnectionImpl
 
     public void Dispose() => Close();
 
-    public IExecutionResult Execute(string sql, TsdbParameterCollection parameters, CommandBehavior behavior)
+    public IExecutionResult Execute(string sql, SndbParameterCollection parameters, CommandBehavior behavior)
     {
         if (_http is null || _state != ConnectionState.Open)
             throw new InvalidOperationException("连接未打开。");
@@ -99,7 +99,7 @@ internal sealed class RemoteConnectionImpl : IConnectionImpl
         }
     }
 
-    private static TsdbServerException BuildHttpError(HttpResponseMessage response)
+    private static SndbServerException BuildHttpError(HttpResponseMessage response)
     {
         string body = string.Empty;
         try
@@ -123,10 +123,10 @@ internal sealed class RemoteConnectionImpl : IConnectionImpl
             }
             catch { /* 非 JSON 响应保留 raw body */ message = body; }
         }
-        return new TsdbServerException(error, message, response.StatusCode);
+        return new SndbServerException(error, message, response.StatusCode);
     }
 
-    public IExecutionResult ExecuteBulk(string commandText, TsdbParameterCollection parameters)
+    public IExecutionResult ExecuteBulk(string commandText, SndbParameterCollection parameters)
     {
         if (_http is null || _state != ConnectionState.Open)
             throw new InvalidOperationException("连接未打开。");
@@ -191,11 +191,11 @@ internal sealed class RemoteConnectionImpl : IConnectionImpl
         // 6) 解析响应 JSON
         var stream = response.Content.ReadAsStream();
         var body = JsonSerializer.Deserialize(stream, RemoteJsonContext.Default.BulkIngestResponseBody)
-            ?? throw new TsdbServerException("bulk_ingest_error", "服务端响应体为空。", response.StatusCode);
+            ?? throw new SndbServerException("bulk_ingest_error", "服务端响应体为空。", response.StatusCode);
         return MaterializedExecutionResult.NonQuery((int)body.WrittenRows);
     }
 
-    private static string? TryGetParam(TsdbParameterCollection parameters, string name)
+    private static string? TryGetParam(SndbParameterCollection parameters, string name)
     {
         for (int i = 0; i < parameters.Count; i++)
         {
@@ -280,10 +280,10 @@ internal sealed class RemoteConnectionImpl : IConnectionImpl
 /// <summary>
 /// 服务端返回非 2xx 响应时抛出的异常。
 /// </summary>
-public sealed class TsdbServerException : Exception
+public sealed class SndbServerException : Exception
 {
     /// <summary>构造一条服务端错误。</summary>
-    public TsdbServerException(string error, string message, HttpStatusCode statusCode)
+    public SndbServerException(string error, string message, HttpStatusCode statusCode)
         : base($"[{(int)statusCode} {statusCode}] {error}: {message}")
     {
         Error = error;
