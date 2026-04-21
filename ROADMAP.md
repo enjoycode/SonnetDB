@@ -188,8 +188,81 @@
 
 **推进顺序**：PR #46 ✅ → PR #47 ✅ → PR #48 ✅ → PR #49 ✅。Milestone 11 「写入快路径」专题完整收尾：嵌入式写入达到 ~1.83 M pts/s（545 ms / 1M 点）；服务端三端点 LP/JSON/Bulk 全部重跑通过后仍保持 1.12–1.35 s / 34–71 MB，远超 Milestone 11 原定 ≥ 700k pts/s 目标；对外同机粗略对比表明 TSLite 写入比 InfluxDB 快 **9.6×**、比 TDengine REST INSERT 快 **81×**、比 TDengine schemaless LP 快 **1.83×**，范围查询比 InfluxDB 快 **61×**、比 SQLite 快 **6.6×**。
 
+---
 
+## Milestone 12 — 函数与算子扩展（PID / Forecast / UDF）
 
+> **背景**：当前 `Aggregator` 是 `enum`（7 个内置聚合）+ `AggregateResult` 单累加器结构，已经无法承载 stddev / percentile / derivative / PID / forecast 等函数族。本里程碑把"函数"提升为一等公民，引入 `FunctionRegistry` + `IAggregateFunction` + `WindowOperator` + `TableValuedFunction` 四类扩展点，并以 **PID 与 Forecast** 作为首批内置示例，建立 TSLite 在工业 / IoT / 可观测性场景的差异化能力。
+>
+> **设计原则**：
+> 1. **零破坏**：现有 7 个聚合迁移到 `IAggregateFunction`，对外 SQL / ADO.NET / Server 行为不变。
+> 2. **贴合现有架构**：复用 `AggregateResult.Merge` 的 mergeable accumulator 模型，与 MemTable + N 路堆合并 + 跨段聚合天然兼容。
+> 3. **AOT 友好**：内置函数 `sealed class` + 静态注册，零反射，与 `TSLite.Server` 的 `PublishAot=true` 路线兼容。
+> 4. **Dogfooding**：PID / Forecast 自身使用 UDF 接口实现，验证 API 设计合理性。
+
+### Tier 划分
+
+| Tier | 主题 | 代表函数 |
+|------|------|----------|
+| 1 | 标量 / 逐点函数 | `abs` `round` `sqrt` `log` `coalesce` `case when` `cast` `time_bucket` `date_trunc` `extract` |
+| 2 | 扩展聚合 | `stddev` `variance` `percentile` `p50/p90/p95/p99` `median` `mode` `spread` `distinct_count(HLL)` `tdigest_agg` `histogram` |
+| 3 | 时序窗口算子 | `derivative` `non_negative_derivative` `difference` `integral` `moving_average` `ewma` `cumulative_sum` `rate` `irate` `increase` `delta` `holt_winters` `interpolate` `fill` `locf` `state_duration` `state_changes` |
+| 4 | 控制与预测 | `pid(value, setpoint, kp, ki, kd)` `pid_series(...)` `forecast(...)` `anomaly(...)` `changepoint(...)` `dtw_distance(...)` |
+| 5 | UDF 扩展点 | `RegisterScalarFunction` `RegisterAggregateFunction` `RegisterTableValuedFunction` |
+
+### PR 列表
+
+| PR | 主题 | 状态 |
+|----|------|------|
+| #50 | **`FunctionRegistry` + `IAggregateFunction` 基础设施**：新增 `src/TSLite/Query/Functions/`，定义 `IAggregateFunction` / `IAggregateState` / `FunctionRegistry`；把现有 7 个聚合（Count/Sum/Min/Max/Avg/First/Last）迁移为内置实现；保留 `enum Aggregator` 作为内部 fast-path 兼容层；现有 SQL / ADO.NET / Server / Benchmark 行为完全不变 | 📋 |
+| #51 | **Tier 1 标量函数 + SQL 函数调用表达式**：SQL Parser/AST 增加 `FunctionCallExpr`，binder 阶段查 `FunctionRegistry` 区分 标量 / 聚合 / 窗口 / TVF；落地数学 / 时间 / 逻辑 / `cast` / `time_bucket` / `date_trunc` / `extract` 等 ~20 个标量函数 | 📋 |
+| #52 | **Tier 2 扩展聚合**：`stddev` `variance` `percentile/p50/p90/p95/p99` `median` `mode` `spread` `distinct_count(HLL)` `tdigest_agg` `histogram`；`tdigest` 与 `HLL` 必须实现可合并 `Merge`，跨段聚合 / `GROUP BY time(...)` 桶聚合一致 | 📋 |
+| #53 | **Tier 3 窗口算子框架**：新增 `src/TSLite/Query/Window/WindowOperator`，支持基于点数 N 和基于时间 `RANGE INTERVAL` 的滑动窗口；落地 `derivative` `non_negative_derivative` `difference` `integral` `moving_average` `ewma` `cumulative_sum` `rate` `irate` `increase` `delta` `holt_winters` `interpolate` `fill` `locf` `state_duration` `state_changes` | 📋 |
+| #54 | **PID 内置函数 + 控制回写示例**：聚合形态 `pid(value, setpoint, kp, ki, kd)` 在 `GROUP BY time(...)` 桶内输出最终 u(t)；行级窗口形态 `pid_series(...)` 输出每行 u(t) 用于回测；状态结构 `{ integral, prevError, prevTimeMs }`，跨段 `Merge` 按时间序拼接；新增 `docs/pid-control.md` 端到端教程 + `INSERT … SELECT pid_series(...)` 控制回写示例 | 📋 |
+| #55 | **Forecast TVF + 异常 / 变点检测**：表值函数 `forecast(subquery, horizon, algo, season)` 内置 **线性外推 + Holt-Winters**（纯 C#，无外部依赖），返回 `(time, value, lower, upper)`；`anomaly(x, 'zscore|mad|iqr', threshold)` `changepoint(x, 'cusum')`；ARIMA / Prophet 留给 UDF；新增 `docs/forecast.md` | 📋 |
+| #56 | **UDF 注册 API**：`Tsdb.Functions.RegisterScalar(name, Func<...>)` / `RegisterAggregate(IAggregateFunction)` / `RegisterTableValuedFunction(...)`；嵌入式直接走委托，Server 端默认禁用 UDF（仅内置函数）以保证 AOT；新增 `docs/extending-functions.md` | 📋 |
+| #57 | **函数基准 + README 函数支持矩阵**：在 `tests/TSLite.Benchmarks` 扩展 `AggregateBenchmark`，对比 InfluxDB `derivative` / `holt_winters`、Timescale `time_weight`、TDengine `forecast`；README 新增「支持的 SQL 函数」矩阵表 | 📋 |
+
+### SQL 用法预览
+
+```sql
+-- Tier 2：扩展聚合
+SELECT time_bucket('1m', time) AS minute,
+       avg(usage), p95(usage), stddev(usage), spread(usage)
+FROM cpu WHERE host = 'server-01' AND time > now() - 1h
+GROUP BY minute;
+
+-- Tier 3：速率与平滑
+SELECT time, host,
+       rate(bytes_in, 1s) AS bps,
+       ewma(temperature, 0.2) AS temp_smooth
+FROM nic WHERE time > now() - 5m;
+
+-- Tier 4：PID 控制律回写
+INSERT INTO actuator (time, device, valve)
+SELECT time, device,
+       pid_series(temperature, 75.0, 0.6, 0.1, 0.05) AS valve
+FROM reactor WHERE time > now() - 1m;
+
+-- Tier 4：预测
+SELECT * FROM forecast(
+    (SELECT time, value FROM meter WHERE device='m1' AND time > now()-7d),
+    horizon => 1440, algo => 'holt_winters', season => 1440);
+```
+
+### 嵌入式 UDF 注册预览（Tier 5）
+
+```csharp
+using var db = Tsdb.Open(new TsdbOptions { RootDirectory = "./data" });
+
+db.Functions.RegisterScalar("c2f",
+    args => FieldValue.Float64(args[0].AsDouble() * 9 / 5 + 32));
+
+db.Functions.RegisterAggregate(new KalmanAggregate()); // 实现 IAggregateFunction
+```
+
+**推进顺序**：PR #50 → #51 → #52 → #53 → #54 → #55 → #56 → #57。
+其中 PR #50 是基础设施重构，必须先合并；PR #54 / #55 / #56 是对外差异化卖点，建议在 Milestone 9（发布）完成后立刻推进。
 
 ## 里程碑总览
 
@@ -207,8 +280,9 @@
 | 9 | 性能基准与发布 | #35 ~ #39 | 🚧（#35 已完成） |
 | 10 | 扩展和第三方 | #40, #41 + #42~#45 批量入库专题 | 🚧（#42~#45 ✅） |
 | 11 | 写入快路径（PR #45 瓶颈收尾） | #46 ~ #49 | ✅ |
+| 12 | 函数与算子扩展（PID / Forecast / UDF） | #50 ~ #57 | 📋 |
 
-**当前推进顺序**：PR #37 → PR #38 → PR #39（Milestone 9 发布与发表会中间件）。
+**当前推进顺序**：PR #37 → PR #38 → PR #39（Milestone 9 发布与发表会中间件） → PR #50（Milestone 12 函数注册表基础设施）。
 
 ---
 
@@ -222,3 +296,4 @@
 6. **Milestone 8 重定义为服务器模式**：仅 HTTP（`POST /v1/db/{db}/sql` + ndjson 流式结果），WebSocket 推后评估；多租户采用进程内 `Tsdb` 注册表；权限仅 Bearer token + 三角色，不做 SQL 级 GRANT。
 7. **执行顺序前置**：PR #21（Retention TTL）与 PR #35（嵌入式 Benchmark 基线）必须先于 M8 完成。
 8. **发布顺延到 Milestone 9。**
+9. **新增 Milestone 12 — 函数与算子扩展**：将 `enum Aggregator` 重构为 `FunctionRegistry` + `IAggregateFunction`，引入 Tier 1–5 共 ~50 个函数；以 **PID 与 Forecast** 作为内置差异化能力，并开放 UDF 注册 API 给嵌入式生态。该里程碑独立于原路线图，定位为 TSLite 在工业 / IoT / 可观测性场景的横向扩展层。
