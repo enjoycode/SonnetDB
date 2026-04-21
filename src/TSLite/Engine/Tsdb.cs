@@ -4,6 +4,7 @@ using TSLite.Engine.Retention;
 using TSLite.Memory;
 using TSLite.Model;
 using TSLite.Query;
+using TSLite.Query.Functions;
 using TSLite.Storage.Segments;
 using TSLite.Wal;
 
@@ -50,6 +51,14 @@ public sealed class Tsdb : IDisposable
 
     /// <summary>查询执行器：合并 MemTable 与多个 Segment 的候选 Block，提供原始点查询与聚合查询。</summary>
     public QueryEngine Query { get; }
+
+    /// <summary>
+    /// 用户自定义函数（UDF）注册表；可通过其 <c>RegisterScalar</c> /
+    /// <c>RegisterAggregate</c> / <c>RegisterWindow</c> / <c>RegisterTableValuedFunction</c>
+    /// 扩展 SQL 函数。当 <see cref="TsdbOptions.AllowUserFunctions"/> 为 <c>false</c> 时，
+    /// 该实例存在但任何 Register 操作都会抛出。
+    /// </summary>
+    public UserFunctionRegistry Functions { get; }
 
     /// <summary>进程内墓碑集合，支持查询过滤与 Compaction 消化。</summary>
     public TombstoneTable Tombstones { get; private set; } = new TombstoneTable();
@@ -116,6 +125,7 @@ public sealed class Tsdb : IDisposable
         Segments = segmentManager;
         _flushCoordinator = new FlushCoordinator(options);
         Query = new QueryEngine(memTable, segmentManager, catalog, Tombstones);
+        Functions = new UserFunctionRegistry(options.AllowUserFunctions);
         _checkpointLsn = checkpointLsn;
     }
 

@@ -362,6 +362,7 @@ public static class SqlExecutor
     {
         ArgumentNullException.ThrowIfNull(tsdb);
         ArgumentNullException.ThrowIfNull(statement);
+        using var _ = TSLite.Query.Functions.UserFunctionRegistry.EnterScope(tsdb.Functions);
         return SelectExecutor.Execute(tsdb, statement);
     }
 

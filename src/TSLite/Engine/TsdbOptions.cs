@@ -43,6 +43,12 @@ public sealed class TsdbOptions
     /// <summary>Retention TTL 策略（默认禁用，保持向后兼容）。</summary>
     public RetentionPolicy Retention { get; init; } = RetentionPolicy.Default;
 
+    /// <summary>
+    /// 是否允许通过 <c>Tsdb.Functions</c> 注册用户自定义函数（UDF）。
+    /// 默认 <c>true</c>（嵌入式场景启用）；TSLite.Server 默认设为 <c>false</c> 以保证 AOT 兼容。
+    /// </summary>
+    public bool AllowUserFunctions { get; init; } = true;
+
     /// <summary>默认配置实例。</summary>
     public static TsdbOptions Default { get; } = new();
 }

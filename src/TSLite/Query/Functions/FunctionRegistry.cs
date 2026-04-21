@@ -42,6 +42,9 @@ public static class FunctionRegistry
     public static bool TryGetAggregate(string name, [MaybeNullWhen(false)] out IAggregateFunction function)
     {
         ArgumentNullException.ThrowIfNull(name);
+        var udf = UserFunctionRegistry.Current;
+        if (udf is not null && udf.TryGetAggregate(name, out function))
+            return true;
         return _aggregateFunctions.TryGetValue(name, out function);
     }
 
@@ -49,6 +52,9 @@ public static class FunctionRegistry
     public static bool TryGetScalar(string name, [MaybeNullWhen(false)] out IScalarFunction function)
     {
         ArgumentNullException.ThrowIfNull(name);
+        var udf = UserFunctionRegistry.Current;
+        if (udf is not null && udf.TryGetScalar(name, out function))
+            return true;
         return _scalarFunctions.TryGetValue(name, out function);
     }
 
@@ -56,6 +62,9 @@ public static class FunctionRegistry
     public static bool TryGetWindow(string name, [MaybeNullWhen(false)] out IWindowFunction function)
     {
         ArgumentNullException.ThrowIfNull(name);
+        var udf = UserFunctionRegistry.Current;
+        if (udf is not null && udf.TryGetWindow(name, out function))
+            return true;
         return _windowFunctions.TryGetValue(name, out function);
     }
 
@@ -63,6 +72,14 @@ public static class FunctionRegistry
     public static FunctionKind GetFunctionKind(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
+        var udf = UserFunctionRegistry.Current;
+        if (udf is not null)
+        {
+            if (udf.TryGetAggregate(name, out _)) return FunctionKind.Aggregate;
+            if (udf.TryGetScalar(name, out _)) return FunctionKind.Scalar;
+            if (udf.TryGetWindow(name, out _)) return FunctionKind.Window;
+            if (udf.TryGetTableValuedFunction(name, out _)) return FunctionKind.TableValued;
+        }
         if (_aggregateFunctions.ContainsKey(name)) return FunctionKind.Aggregate;
         if (_scalarFunctions.ContainsKey(name)) return FunctionKind.Scalar;
         if (_windowFunctions.ContainsKey(name)) return FunctionKind.Window;

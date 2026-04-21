@@ -97,7 +97,7 @@ public sealed partial class TsdbRegistry : IDisposable
 
             var path = Path.Combine(_dataRoot, name);
             Directory.CreateDirectory(path);
-            var instance = Tsdb.Open(new TsdbOptions { RootDirectory = path });
+            var instance = Tsdb.Open(new TsdbOptions { RootDirectory = path, AllowUserFunctions = false });
             _databases[name] = instance;
             tsdb = instance;
             _broadcaster?.Publish(ServerEventFactory.Database(
@@ -119,7 +119,7 @@ public sealed partial class TsdbRegistry : IDisposable
                 var name = Path.GetFileName(dir);
                 if (!IsValidName(name) || _databases.ContainsKey(name))
                     continue;
-                var instance = Tsdb.Open(new TsdbOptions { RootDirectory = dir });
+                var instance = Tsdb.Open(new TsdbOptions { RootDirectory = dir, AllowUserFunctions = false });
                 _databases[name] = instance;
             }
         }

@@ -6,6 +6,14 @@
 ## [Unreleased]
 
 ### Added
+- **Milestone 12 — PR #56：Tier 5 用户自定义函数（UDF）注册 API**
+  - 新增公开类型 `TSLite.Query.Functions.UserFunctionRegistry`：按 `Tsdb` 实例隔离的 UDF 注册表，挂在新增的 `Tsdb.Functions` 属性上。提供 `RegisterScalar(name, evaluator, min, max)` / `RegisterScalar(IScalarFunction)` / `RegisterAggregate(IAggregateFunction)` / `RegisterWindow(IWindowFunction)` / `RegisterTableValuedFunction(name, executor)` 五条注册路径，以及 `Unregister(name)` 与 `TryGet*` 查询。聚合 UDF 强制 `LegacyAggregator == null`（仅内置 7 个聚合可用 legacy fast-path）；TVF UDF 不允许使用保留名 `forecast`。
+  - 通过 `AsyncLocal<UserFunctionRegistry?>` + `UserFunctionRegistry.AmbientScope` 提供查询作用域 ambient；`SqlExecutor.ExecuteSelect` 在执行前 `EnterScope(tsdb.Functions)`、退出时自动恢复，确保多 `Tsdb` 实例并发执行 SQL 时互不可见。
+  - `FunctionRegistry.GetFunctionKind` / `TryGetAggregate` / `TryGetScalar` / `TryGetWindow` 全部改为「优先查 ambient UDF，未命中再回退内置」，保持 PR #50~#55 的所有内置函数行为零变化。`TableValuedFunctionExecutor.Execute` 同样优先匹配用户 TVF，再走内置 `forecast` 路由。
+  - 新增 `TsdbOptions.AllowUserFunctions` 选项（默认 `true`，嵌入式启用）；`TSLite.Server.Hosting.TsdbRegistry` 在两条 `Tsdb.Open` 调用上将其设为 `false`，从而 Server / HTTP 模式默认禁用 UDF 以保证 AOT 兼容（`Functions.IsEnabled == false`，所有 `Register*` 抛 `InvalidOperationException`）。
+  - 新增 `docs/extending-functions.md`：覆盖标量 / 聚合 / 窗口 / TVF 四类 UDF 的注册示例（`Func` 委托形态 + `IScalarFunction` 等接口形态）、`Merge` 可结合性约束、跨实例隔离、`forecast` 保留名、Server 模式禁用策略与 UDF 不覆盖的功能边界。
+  - 新增测试：`tests/TSLite.Tests/Query/Functions/UserFunctionRegistryTests.cs`（9 项端到端）：委托标量 UDF 解析、UDF 覆盖同名内置（`abs` 路径）、聚合 UDF 通过 `IAggregateAccumulator` 接入 SELECT、TVF UDF 路由 + 行集构造、TVF 保留名 `forecast` 拒绝、`Unregister` 后查询失败、`AllowUserFunctions=false` 时 Register 全部抛、ambient 在两个 `Tsdb` 实例间隔离、聚合 UDF 设置 `LegacyAggregator` 时拒绝注册。
+
 - **Milestone 12 — PR #55：Tier 4 Forecast TVF + 异常 / 变点检测**
   - 新增公开类型 `TSLite.Query.Functions.Forecasting.TimeSeriesForecaster`：纯 C#、零外部依赖的预测库 API，提供 `Forecast(long[] timestampsMs, double[] values, int horizon, ForecastAlgorithm algorithm, int season = 0)`，输出 `ForecastPoint[] (TimestampMs, Value, Lower, Upper)`；支持 **线性最小二乘外推** 与 **Holt / Holt-Winters 三次指数平滑（加性季节）**，置信区间按残差 RMSE × $z_{0.975}$ × $\sqrt{h+1}$ 给出。
   - 新增 SQL 表值函数 `forecast(measurement, field, horizon, 'algo'[, season])`：在 `FROM` 子句中作为数据源，按 measurement / FIELD 拉取历史数据并按 series 维度独立预测；输出列 `(time, value, lower, upper, ...tag_columns)`。Parser 在 `ParseSelect()` 中识别 `FROM <ident>(` 调用形态并填充 `SelectStatement.TableValuedFunction`；新增 `TableValuedFunctionExecutor` 路由器：校验参数（measurement / FIELD 标识符、`horizon` 正整数字面量、`'linear'` / `'holt_winters'` / `'hw'` 算法、可选 `season` 非负整数），复用 `WhereClauseDecomposer` 处理标签过滤，按 series 调用 `TimeSeriesForecaster.Forecast` 并按预测点落行。当前要求 `SELECT *`。

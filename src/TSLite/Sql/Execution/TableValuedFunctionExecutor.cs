@@ -19,11 +19,16 @@ internal static class TableValuedFunctionExecutor
         var call = statement.TableValuedFunction
             ?? throw new InvalidOperationException("内部错误：TVF 调用为空。");
 
+        // 优先匹配用户注册的 TVF（PR #56）
+        var udf = TSLite.Query.Functions.UserFunctionRegistry.Current;
+        if (udf is not null && udf.TryGetTableValuedFunction(call.Name, out var executor))
+            return executor(tsdb, statement);
+
         return call.Name.ToLowerInvariant() switch
         {
             "forecast" => ExecuteForecast(tsdb, statement, call),
             _ => throw new InvalidOperationException(
-                $"未知表值函数 '{call.Name}'；当前 FROM 子句仅支持 forecast(...)。"),
+                $"未知表值函数 '{call.Name}'；当前 FROM 子句仅支持 forecast(...) 及通过 Tsdb.Functions 注册的 UDF。"),
         };
     }
 
