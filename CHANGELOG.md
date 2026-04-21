@@ -6,6 +6,17 @@
 ## [Unreleased]
 
 ### Added
+- **Milestone 12 — PR #52：Tier 2 扩展聚合（可合并累加器）**
+  - 新增 9 个扩展聚合函数：`stddev` / `variance` / `spread` / `mode` / `median` / `percentile(field, q)` / `p50` / `p90` / `p95` / `p99` / `tdigest_agg` / `distinct_count` / `histogram(field, bin_width)`，全部走新增的 `IAggregateAccumulator` 路径，与既有 7 个 legacy 聚合并存、零性能回归。
+  - 新增公共契约 `IAggregateAccumulator`（`Count` / `Add` / `Merge` / `Finalize`）与 `IAggregateFunction.CreateAccumulator(call, schema)`（默认实现返回 `null`），用于让扩展聚合声明跨段、跨桶、跨序列可合并的中间状态。
+  - 新增三类核心累加器算法（位于 `src/TSLite/Query/Functions/Aggregates/`）：
+    - **Welford** 在线方差/标准差，附 Chan-Golub-LeVeque 并行合并公式；样本数 < 2 时 `stddev` 返回 `null`。
+    - **TDigest** 简化的 Ben Haim merging digest（compression=200、k(q) ≈ 4q(1−q)/δ），支持 `Add` / `Merge` / `Quantile` / `Serialize` / `ToJson`，作为 `percentile` / `pXX` / `median` / `tdigest_agg` 的统一后端。
+    - **HyperLogLog**（precision 14、16384 寄存器、AlphaMM 修正、小基数 linear-counting），作为 `distinct_count` 的统一后端，使用 `System.IO.Hashing.XxHash64` 哈希双精度浮点的 IEEE 字节序。
+  - `SelectExecutor.ExecuteAggregate` 重构为 `AggSlot` 分发：legacy 聚合走原 `BucketState`，扩展聚合走 `IAggregateAccumulator`；`AggSpec` 新增 `IsExtended` / `IsCountStar` 与字段解析支持，`first` / `last` 多序列保护仅作用于 legacy 路径。
+  - `histogram(field, bin_width)` 输出 `{"[lo,hi)":n,...}` 格式 JSON，跨段合并时校验 `bin_width` 一致性；`tdigest_agg` 输出可后续合并的 JSON 状态串。
+  - 新增 `tests/TSLite.Tests/Query/Functions/ExtendedAggregateAccumulatorTests.cs`（14 项单元测试，覆盖 Welford / TDigest / HLL 合并一致性、空集 / 单点边界、参数校验）与 `tests/TSLite.Tests/Sql/SqlExecutorExtendedAggregateTests.cs`（13 项 SQL 端到端测试，覆盖单序列、多序列合并、`GROUP BY time(...)` 桶聚合、混合 legacy + 扩展聚合、参数错误）。
+
 - **PR #39：Docker 镜像自动发布**
   - 新增 `.github/workflows/docker-publish.yml`：在 `main` 分支相关文件变更、`v*` 标签或手动触发时，自动构建 `src/TSLite.Server/Dockerfile` 并推送镜像。
   - 目标镜像仓库：

@@ -48,7 +48,10 @@ public sealed class FunctionRegistryTests
     [Theory]
     [InlineData("count", FunctionKind.Aggregate)]
     [InlineData("sqrt", FunctionKind.Scalar)]
-    [InlineData("stddev", FunctionKind.Unknown)]
+    [InlineData("stddev", FunctionKind.Aggregate)]
+    [InlineData("p95", FunctionKind.Aggregate)]
+    [InlineData("histogram", FunctionKind.Aggregate)]
+    [InlineData("nonexistent_xyz", FunctionKind.Unknown)]
     public void GetFunctionKind_ReturnsRegisteredKind(string name, FunctionKind kind)
     {
         Assert.Equal(kind, FunctionRegistry.GetFunctionKind(name));
@@ -57,7 +60,7 @@ public sealed class FunctionRegistryTests
     [Fact]
     public void TryGetAggregate_UnknownFunction_ReturnsFalse()
     {
-        Assert.False(FunctionRegistry.TryGetAggregate("stddev", out _));
+        Assert.False(FunctionRegistry.TryGetAggregate("nonexistent_xyz", out _));
     }
 
     [Fact]

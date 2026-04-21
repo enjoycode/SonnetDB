@@ -436,27 +436,31 @@ internal static class SelectExecutor
     {
         long bucketSizeMs = groupByTime?.BucketSizeMs ?? 0;
 
-        // 解析每个聚合投影的 (aggregator, fieldName)
+        // 解析每个聚合投影：legacy 7 个聚合走 BucketState 快路径；
+        // 扩展聚合（PR #52：stddev / percentile / tdigest_agg / ...）走 IAggregateAccumulator。
         var aggSpecs = projections.Select(p =>
         {
             var fn = p.Function!;
-            var (agg, field) = ResolveAggregate(fn, schema);
-            // first/last 多 series 暂不支持
-            if ((agg == Aggregator.First || agg == Aggregator.Last) && matchedSeries.Count > 1)
+            var spec = ResolveAggregateSpec(fn, p.ColumnName, schema);
+            if (spec.LegacyAggregator is Aggregator.First or Aggregator.Last
+                && matchedSeries.Count > 1)
+            {
                 throw new InvalidOperationException(
-                    $"{agg} 聚合在多 series 场景下尚未支持（v1）；请用 WHERE 过滤到单一 series。");
-            return new AggSpec(p.ColumnName, agg, field);
+                    $"{spec.LegacyAggregator} 聚合在多 series 场景下尚未支持（v1）；请用 WHERE 过滤到单一 series。");
+            }
+            return spec;
         }).ToList();
 
-        // 为每个 (bucketStart, aggSpec) 累积 (count, sum, min, max, first, last) 并按 bucket 排序输出。
-        // 桶按 bucketSize 切分；bucketSize <= 0 时全局单桶。
-        var bucketAccumulators = new SortedDictionary<long, BucketState[]>();
+        // 为每个 (bucketStart, specIdx) 维护 AggSlot：legacy 用 BucketState，扩展聚合用 IAggregateAccumulator。
+        var bucketAccumulators = new SortedDictionary<long, AggSlot[]>();
 
         for (int specIdx = 0; specIdx < aggSpecs.Count; specIdx++)
         {
             var spec = aggSpecs[specIdx];
             // count(*) 时跨所有 field 列累加
-            var fields = spec.IsCountStar ? schema.FieldColumns.Select(c => c.Name).ToList() : [spec.FieldName!];
+            var fields = spec.IsCountStar
+                ? schema.FieldColumns.Select(c => c.Name).ToList()
+                : [spec.FieldName!];
 
             foreach (var series in matchedSeries)
             {
@@ -473,39 +477,30 @@ internal static class SelectExecutor
                             ? TimeBucket.Floor(dp.Timestamp, bucketSizeMs)
                             : long.MinValue;
 
-                        if (!bucketAccumulators.TryGetValue(bucketStart, out var states))
+                        if (!bucketAccumulators.TryGetValue(bucketStart, out var slots))
                         {
-                            states = new BucketState[aggSpecs.Count];
-                            for (int k = 0; k < states.Length; k++) states[k] = BucketState.Empty;
-                            bucketAccumulators[bucketStart] = states;
+                            slots = new AggSlot[aggSpecs.Count];
+                            for (int k = 0; k < slots.Length; k++)
+                                slots[k] = AggSlot.Create(aggSpecs[k]);
+                            bucketAccumulators[bucketStart] = slots;
                         }
 
-                        // count 不需要数值；其他聚合需要
-                        double value = spec.Aggregator == Aggregator.Count
-                            ? 0.0
-                            : FieldValueToDouble(dp.Value, col);
-                        states[specIdx] = states[specIdx].Update(dp.Timestamp, value);
+                        // count(*) 不需要数值；其他聚合需要把字段值转为 double
+                        bool needsValue = !(spec.IsCountStar
+                            || spec.LegacyAggregator == Aggregator.Count);
+                        double value = needsValue ? FieldValueToDouble(dp.Value, col) : 0.0;
+                        slots[specIdx].Update(dp.Timestamp, value);
                     }
                 }
             }
         }
 
         var rows = new List<IReadOnlyList<object?>>(bucketAccumulators.Count);
-        if (bucketAccumulators.Count == 0)
-        {
-            // 空数据：聚合查询返回 0 行（与 QueryEngine 行为一致）。
-            // 例外：count(*) / count(field) 通常约定返回 0；此处选择"空数据 → 空表"以保持一致。
-        }
-
-        foreach (var (_, states) in bucketAccumulators)
+        foreach (var (_, slots) in bucketAccumulators)
         {
             var row = new object?[aggSpecs.Count];
             for (int i = 0; i < aggSpecs.Count; i++)
-            {
-                var spec = aggSpecs[i];
-                var st = states[i];
-                row[i] = ComputeAggregateValue(spec.Aggregator, st);
-            }
+                row[i] = slots[i].Finalize();
             rows.Add(row);
         }
 
@@ -520,7 +515,7 @@ internal static class SelectExecutor
             $"聚合不支持 String 字段（列 '{col?.Name ?? "?"}'）。");
     }
 
-    private static object ComputeAggregateValue(Aggregator agg, BucketState st) => agg switch
+    private static object ComputeLegacyAggregateValue(Aggregator agg, BucketState st) => agg switch
     {
         Aggregator.Count => (object)st.Count,
         Aggregator.Sum => st.Sum,
@@ -532,23 +527,73 @@ internal static class SelectExecutor
         _ => throw new InvalidOperationException($"不支持的聚合 {agg}。"),
     };
 
-    private static (Aggregator Agg, string? FieldName) ResolveAggregate(
+    private static AggSpec ResolveAggregateSpec(
         FunctionCallExpression fn,
+        string columnName,
         MeasurementSchema schema)
     {
-        if (!FunctionRegistry.TryGetAggregate(fn.Name, out var aggregate)
-            || aggregate.LegacyAggregator is not { } legacyAggregator)
-        {
+        if (!FunctionRegistry.TryGetAggregate(fn.Name, out var aggregate))
             throw new InvalidOperationException($"未知聚合函数 '{fn.Name}'。");
-        }
 
         var fieldName = aggregate.ResolveFieldName(fn, schema);
-        return (legacyAggregator, fieldName);
+
+        if (aggregate.LegacyAggregator is { } legacy)
+            return new AggSpec(columnName, legacy, fieldName,
+                ExtendedFunction: null, ExtendedCall: null, Schema: null);
+
+        // 扩展聚合：保留函数与 AST 引用以便每个桶按需创建独立累加器。
+        return new AggSpec(columnName, default, fieldName,
+            ExtendedFunction: aggregate, ExtendedCall: fn, Schema: schema);
     }
 
-    private sealed record AggSpec(string ColumnName, Aggregator Aggregator, string? FieldName)
+    private sealed record AggSpec(
+        string ColumnName,
+        Aggregator LegacyAggregator,
+        string? FieldName,
+        IAggregateFunction? ExtendedFunction,
+        FunctionCallExpression? ExtendedCall,
+        MeasurementSchema? Schema)
     {
-        public bool IsCountStar => Aggregator == Aggregator.Count && FieldName is null;
+        public bool IsExtended => ExtendedFunction is not null;
+        public bool IsCountStar => !IsExtended && LegacyAggregator == Aggregator.Count && FieldName is null;
+    }
+
+    /// <summary>每个 (bucket × spec) 的累加槽：legacy 走 <see cref="BucketState"/>，扩展聚合走累加器。</summary>
+    private sealed class AggSlot
+    {
+        private readonly AggSpec _spec;
+        private BucketState _legacy = BucketState.Empty;
+        private readonly IAggregateAccumulator? _extended;
+
+        private AggSlot(AggSpec spec, IAggregateAccumulator? extended)
+        {
+            _spec = spec;
+            _extended = extended;
+        }
+
+        public static AggSlot Create(AggSpec spec)
+        {
+            if (!spec.IsExtended)
+                return new AggSlot(spec, extended: null);
+
+            var accumulator = spec.ExtendedFunction!.CreateAccumulator(spec.ExtendedCall!, spec.Schema!)
+                ?? throw new InvalidOperationException(
+                    $"扩展聚合 '{spec.ExtendedFunction.Name}' 未返回累加器实例。");
+            return new AggSlot(spec, accumulator);
+        }
+
+        public void Update(long timestamp, double value)
+        {
+            if (_extended is null)
+                _legacy = _legacy.Update(timestamp, value);
+            else
+                _extended.Add(value);
+        }
+
+        public object? Finalize()
+            => _extended is not null
+                ? _extended.Finalize()
+                : ComputeLegacyAggregateValue(_spec.LegacyAggregator, _legacy);
     }
 
     private readonly record struct BucketState(

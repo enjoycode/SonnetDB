@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using TSLite.Catalog;
+using TSLite.Query.Functions.Aggregates;
 using TSLite.Sql.Ast;
 using TSLite.Storage.Format;
 
@@ -66,6 +67,20 @@ public static class FunctionRegistry
         new BuiltInAggregateFunction("avg", Aggregator.Avg),
         new BuiltInAggregateFunction("first", Aggregator.First),
         new BuiltInAggregateFunction("last", Aggregator.Last),
+        // Tier 2 — 扩展聚合（PR #52）
+        new StddevFunction(),
+        new VarianceFunction(),
+        new SpreadFunction(),
+        new ModeFunction(),
+        new FixedPercentileFunction("median", 0.5),
+        new PercentileFunction(),
+        new FixedPercentileFunction("p50", 0.50),
+        new FixedPercentileFunction("p90", 0.90),
+        new FixedPercentileFunction("p95", 0.95),
+        new FixedPercentileFunction("p99", 0.99),
+        new TDigestAggFunction(),
+        new DistinctCountFunction(),
+        new HistogramFunction(),
     ];
 
     private static IScalarFunction[] CreateScalarFunctionList() =>
