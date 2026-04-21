@@ -123,6 +123,60 @@ public sealed class QueryEngineAggregateTests : IDisposable
         Assert.Equal(3.0, result[0].Value, precision: 9);  // (1+2+3+4+5)/5 = 3
     }
 
+    [Fact]
+    public void Execute_GlobalSum_AfterFlush_UsesPersistedBlockMetadataCorrectly()
+    {
+        using var db = Tsdb.Open(_opts);
+
+        for (int i = 1; i <= 10; i++)
+            db.Write(MakePoint("m", i * 100L, "v", FieldValue.FromDouble(i)));
+
+        db.FlushNow();
+
+        var entry = db.Catalog.Snapshot().First();
+        var q = new AggregateQuery(entry.Id, "v", TimeRange.All, Aggregator.Sum, 0);
+        var result = db.Query.Execute(q).ToList();
+
+        Assert.Single(result);
+        Assert.Equal(55.0, result[0].Value, precision: 9);
+    }
+
+    [Fact]
+    public void Execute_GlobalAvg_AfterFlush_UsesPersistedBlockMetadataCorrectly()
+    {
+        using var db = Tsdb.Open(_opts);
+
+        for (int i = 1; i <= 5; i++)
+            db.Write(MakePoint("m", i * 100L, "v", FieldValue.FromDouble(i)));
+
+        db.FlushNow();
+
+        var entry = db.Catalog.Snapshot().First();
+        var q = new AggregateQuery(entry.Id, "v", TimeRange.All, Aggregator.Avg, 0);
+        var result = db.Query.Execute(q).ToList();
+
+        Assert.Single(result);
+        Assert.Equal(3.0, result[0].Value, precision: 9);
+    }
+
+    [Fact]
+    public void Execute_GlobalSum_PartialRange_FallsBackAndRemainsCorrect()
+    {
+        using var db = Tsdb.Open(_opts);
+
+        for (int i = 1; i <= 10; i++)
+            db.Write(MakePoint("m", i * 100L, "v", FieldValue.FromDouble(i)));
+
+        db.FlushNow();
+
+        var entry = db.Catalog.Snapshot().First();
+        var q = new AggregateQuery(entry.Id, "v", new TimeRange(250L, 850L), Aggregator.Sum, 0);
+        var result = db.Query.Execute(q).ToList();
+
+        Assert.Single(result);
+        Assert.Equal(33.0, result[0].Value, precision: 9);
+    }
+
     // ── Long 全局聚合 ─────────────────────────────────────────────────────
 
     [Fact]

@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using TSLite.Memory;
+using TSLite.Model;
 using TSLite.Storage.Format;
 
 namespace TSLite.Storage.Segments;
@@ -326,6 +327,13 @@ public sealed class SegmentWriter
                 valLen: valSpan.Length);
             bh.Crc32 = crc32;
             bh.Encoding = tsEncoding | (useV2Val ? BlockEncoding.DeltaValue : BlockEncoding.None);
+            if (TryBuildAggregateMetadata(bucket.FieldType, points.Span, out var aggregateSum, out var aggregateMin, out var aggregateMax))
+            {
+                bh.AggregateFlags = 1;
+                bh.AggregateSum = aggregateSum;
+                bh.AggregateMinBits = aggregateMin;
+                bh.AggregateMaxBits = aggregateMax;
+            }
 
             WriteStructToStream(bs, in bh);
             bs.Write(fieldNameSpan);
@@ -348,6 +356,81 @@ public sealed class SegmentWriter
             currentOffset += blockLength;
         }
         finally { ArrayPool<byte>.Shared.Return(valBuf); }
+    }
+
+    private static bool TryBuildAggregateMetadata(
+        FieldType fieldType,
+        ReadOnlySpan<DataPoint> points,
+        out double sum,
+        out int minBits,
+        out int maxBits)
+    {
+        sum = 0;
+        minBits = 0;
+        maxBits = 0;
+
+        if (points.IsEmpty)
+            return false;
+
+        switch (fieldType)
+        {
+            case FieldType.Float64:
+            {
+                double min = double.PositiveInfinity;
+                double max = double.NegativeInfinity;
+                for (int i = 0; i < points.Length; i++)
+                {
+                    double value = points[i].Value.AsDouble();
+                    sum += value;
+                    if (value < min) min = value;
+                    if (value > max) max = value;
+                }
+
+                minBits = BitConverter.SingleToInt32Bits((float)min);
+                maxBits = BitConverter.SingleToInt32Bits((float)max);
+                return true;
+            }
+
+            case FieldType.Int64:
+            {
+                long min = long.MaxValue;
+                long max = long.MinValue;
+                for (int i = 0; i < points.Length; i++)
+                {
+                    long value = points[i].Value.AsLong();
+                    sum += value;
+                    if (value < min) min = value;
+                    if (value > max) max = value;
+                }
+
+                if (min < int.MinValue || min > int.MaxValue || max < int.MinValue || max > int.MaxValue)
+                    return false;
+
+                minBits = (int)min;
+                maxBits = (int)max;
+                return true;
+            }
+
+            case FieldType.Boolean:
+            {
+                int min = 1;
+                int max = 0;
+                for (int i = 0; i < points.Length; i++)
+                {
+                    int value = points[i].Value.AsBool() ? 1 : 0;
+                    sum += value;
+                    if (value < min) min = value;
+                    if (value > max) max = value;
+                }
+
+                minBits = min;
+                maxBits = max;
+                return true;
+            }
+
+            default:
+                return false;
+        }
     }
 
     /// <summary>将 unmanaged 结构体序列化写入流。</summary>

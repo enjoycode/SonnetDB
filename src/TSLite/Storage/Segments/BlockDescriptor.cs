@@ -44,6 +44,18 @@ public readonly struct BlockDescriptor
     /// <summary>BlockHeader 中记录的 CRC32 校验值。</summary>
     public uint Crc32 { get; init; }
 
+    /// <summary>是否持久化了数值聚合元数据。</summary>
+    public bool HasAggregateMetadata { get; init; }
+
+    /// <summary>数值聚合的 Sum（统一按 double 存储）。</summary>
+    public double AggregateSum { get; init; }
+
+    /// <summary>数值聚合的 Min（统一按 double 暴露）。</summary>
+    public double AggregateMin { get; init; }
+
+    /// <summary>数值聚合的 Max（统一按 double 暴露）。</summary>
+    public double AggregateMax { get; init; }
+
     /// <summary>字段名 UTF-8 编码的字节数（跟在 BlockHeader 之后）。</summary>
     internal int FieldNameUtf8Length { get; init; }
 

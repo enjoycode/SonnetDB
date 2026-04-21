@@ -271,6 +271,10 @@ public sealed class SegmentReader : IDisposable
                 FileOffset = headerStart,
                 BlockLength = entry.BlockLength,
                 Crc32 = bh.Crc32,
+                HasAggregateMetadata = bh.AggregateFlags != 0,
+                AggregateSum = bh.AggregateSum,
+                AggregateMin = DecodeAggregateBoundary(bh.FieldType, bh.AggregateMinBits),
+                AggregateMax = DecodeAggregateBoundary(bh.FieldType, bh.AggregateMaxBits),
                 FieldNameUtf8Length = bh.FieldNameUtf8Length,
                 TimestampPayloadLength = bh.TimestampPayloadLength,
                 ValuePayloadLength = bh.ValuePayloadLength,
@@ -423,6 +427,17 @@ public sealed class SegmentReader : IDisposable
     internal static byte[] LoadAll(string path) => File.ReadAllBytes(path);
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
+
+    private static double DecodeAggregateBoundary(FieldType fieldType, int bits)
+    {
+        return fieldType switch
+        {
+            FieldType.Float64 => BitConverter.Int32BitsToSingle(bits),
+            FieldType.Int64 => bits,
+            FieldType.Boolean => bits != 0 ? 1.0 : 0.0,
+            _ => 0.0,
+        };
+    }
 
     private void ThrowIfDisposed()
     {

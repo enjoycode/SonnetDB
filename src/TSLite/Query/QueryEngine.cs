@@ -303,7 +303,7 @@ public sealed class QueryEngine
 
             AddDecodedPointsToGlobal(memSlice, ref state, useObservedStart);
             AddSegmentBlocksToGlobal(
-                candidates, readers, memFieldType, query.Range, ref state, useObservedStart);
+                candidates, readers, memFieldType, query.Range, query.Aggregator, ref state, useObservedStart);
 
             if (!state.HasData)
                 return Array.Empty<AggregateBucket>();
@@ -426,6 +426,7 @@ public sealed class QueryEngine
         Dictionary<long, SegmentReader> readers,
         FieldType? memFieldType,
         TimeRange range,
+        Aggregator aggregator,
         ref AggregateState state,
         bool useObservedStart)
     {
@@ -435,6 +436,12 @@ public sealed class QueryEngine
 
             if (!readers.TryGetValue(blockRef.SegmentId, out var reader))
                 continue;
+
+            if (CanUseAggregateMetadata(blockRef.Descriptor, range, aggregator))
+            {
+                state.AddMetadataBlock(blockRef.Descriptor, useObservedStart);
+                continue;
+            }
 
             var data = reader.ReadBlock(blockRef.Descriptor);
             AddBlockToGlobal(
@@ -539,6 +546,21 @@ public sealed class QueryEngine
             range.FromInclusive,
             range.ToInclusive);
         AddDecodedPointsToBuckets(points.AsSpan(), bucketSizeMs, buckets);
+    }
+
+    private static bool CanUseAggregateMetadata(
+        in BlockDescriptor descriptor,
+        TimeRange range,
+        Aggregator aggregator)
+    {
+        if (!descriptor.HasAggregateMetadata)
+            return false;
+
+        if (aggregator is not (Aggregator.Count or Aggregator.Sum or Aggregator.Min or Aggregator.Max or Aggregator.Avg))
+            return false;
+
+        return descriptor.MinTimestamp >= range.FromInclusive
+            && descriptor.MaxTimestamp <= range.ToInclusive;
     }
 
     private static void AddValueToBucket(
@@ -659,6 +681,21 @@ public sealed class QueryEngine
             Sum += value;
             if (value < Min) Min = value;
             if (value > Max) Max = value;
+        }
+
+        public void AddMetadataBlock(in BlockDescriptor descriptor, bool useObservedStart)
+        {
+            if (useObservedStart && descriptor.MinTimestamp < BucketStart)
+                BucketStart = descriptor.MinTimestamp;
+
+            if (Count == 0)
+                FirstValue = descriptor.AggregateMin;
+
+            LastValue = descriptor.AggregateMax;
+            Count += descriptor.Count;
+            Sum += descriptor.AggregateSum;
+            if (descriptor.AggregateMin < Min) Min = descriptor.AggregateMin;
+            if (descriptor.AggregateMax > Max) Max = descriptor.AggregateMax;
         }
 
         public readonly AggregateBucket ToBucket(Aggregator aggregator)

@@ -95,13 +95,14 @@ public sealed class BlockHeaderTests
         Assert.Equal(original.FieldType, read.FieldType);
     }
 
-    // ── InlineBytes ─────────────────────────────────────────────────────────
-
     [Fact]
-    public void InlineBytes_Reserved16_WriteAndRead_RoundTrip()
+    public void AggregateMetadata_WriteAndRead_RoundTrip()
     {
-        BlockHeader original = BlockHeader.CreateNew(1UL, 0L, 0L, 0, FieldType.Unknown, 0, 0, 0);
-        original.Reserved16.AsSpan().Fill(0x77);
+        BlockHeader original = BlockHeader.CreateNew(1UL, 0L, 0L, 3, FieldType.Float64, 0, 0, 0);
+        original.AggregateFlags = 1;
+        original.AggregateSum = 12.5;
+        original.AggregateMinBits = BitConverter.SingleToInt32Bits(1.25f);
+        original.AggregateMaxBits = BitConverter.SingleToInt32Bits(9.5f);
 
         Span<byte> buffer = stackalloc byte[FormatSizes.BlockHeaderSize];
         var writer = new SpanWriter(buffer);
@@ -110,6 +111,9 @@ public sealed class BlockHeaderTests
         var reader = new SpanReader(buffer);
         BlockHeader read = reader.ReadStruct<BlockHeader>();
 
-        Assert.True(original.Reserved16.AsReadOnlySpan().SequenceEqual(read.Reserved16.AsReadOnlySpan()));
+        Assert.Equal(original.AggregateFlags, read.AggregateFlags);
+        Assert.Equal(original.AggregateSum, read.AggregateSum);
+        Assert.Equal(original.AggregateMinBits, read.AggregateMinBits);
+        Assert.Equal(original.AggregateMaxBits, read.AggregateMaxBits);
     }
 }

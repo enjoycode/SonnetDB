@@ -21,9 +21,11 @@ namespace TSLite.Storage.Format;
 /// 36      4     FieldNameUtf8Length     (字段名 UTF-8 字节数)
 /// 40      1     Encoding                (<see cref="BlockEncoding"/>)
 /// 41      1     FieldType               (<see cref="Format.FieldType"/>)
-/// 42      2     Reserved0
-/// 44      16    Reserved16
-/// 60      4     Reserved4
+/// 42      2     AggregateFlags
+/// 44      8     AggregateSum
+/// 52      4     AggregateMinBits
+/// 56      4     AggregateMaxBits
+/// 60      4     Crc32
 /// ─────────────────────────────────
 /// Total  64
 /// </code>
@@ -59,11 +61,17 @@ public struct BlockHeader
     /// <summary>字段数据类型（见 <see cref="Format.FieldType"/>）。</summary>
     public FieldType FieldType;
 
-    /// <summary>保留字段（0）。</summary>
-    public short Reserved0;
+    /// <summary>聚合元数据标记（0 = 无，1 = 含 sum/min/max）。</summary>
+    public short AggregateFlags;
 
-    /// <summary>保留字节（全 0）。</summary>
-    public InlineBytes16 Reserved16;
+    /// <summary>数值聚合的 Sum（统一按 double 持久化）。</summary>
+    public double AggregateSum;
+
+    /// <summary>数值聚合的 Min 位模式（float 用 double 截断存储，int/bool 用 int32 数值）。</summary>
+    public int AggregateMinBits;
+
+    /// <summary>数值聚合的 Max 位模式（float 用 double 截断存储，int/bool 用 int32 数值）。</summary>
+    public int AggregateMaxBits;
 
     /// <summary>块数据 CRC32 校验值（CRC32(FieldNameUtf8 ++ TimestampPayload ++ ValuePayload)）。</summary>
     public uint Crc32;
