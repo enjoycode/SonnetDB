@@ -1,8 +1,8 @@
-import { defineConfig } from 'vite';
+﻿import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { fileURLToPath, URL } from 'node:url';
 
-// TSLite Admin UI 由 ASP.NET Core 嵌入资源托管在 /admin/ 前缀下。
+// SonnetDB Admin UI 由 ASP.NET Core 嵌入资源托管在 /admin/ 前缀下。
 export default defineConfig({
   base: '/admin/',
   plugins: [vue()],

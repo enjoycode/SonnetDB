@@ -1,6 +1,6 @@
-import axios, { type AxiosInstance } from 'axios';
+﻿import axios, { type AxiosInstance } from 'axios';
 
-const STORAGE_KEY = 'tslite.auth';
+const STORAGE_KEY = 'sndb.auth';
 
 export interface AuthState {
   username: string;

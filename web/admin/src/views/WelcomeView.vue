@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="welcome-page">
     <header class="hero-header">
       <BrandLogo />
@@ -15,7 +15,7 @@
           <div class="hero-eyebrow">{{ heroEyebrow }}</div>
           <h1>让时序数据库像一个可交付产品，而不是一组零散接口。</h1>
           <p>
-            TSLite 把单文件时序引擎、SQL 写入查询、嵌入式管理后台和首次安装向导收束成一套完整体验。
+            SonnetDB 把单文件时序引擎、SQL 写入查询、嵌入式管理后台和首次安装向导收束成一套完整体验。
             你可以先完成初始化，再通过管理控制台接管数据库、用户、权限与实时事件流。
           </p>
 
@@ -153,7 +153,7 @@ const features = [
   },
 ];
 
-const heroEyebrow = computed(() => (setup.needsSetup ? 'First Install' : 'TSLite Control Surface'));
+const heroEyebrow = computed(() => (setup.needsSetup ? 'First Install' : 'SonnetDB Control Surface'));
 const primaryActionLabel = computed(() => {
   if (setup.loading) return '加载中...';
   if (setup.needsSetup) return '开始首次安装';
@@ -195,7 +195,7 @@ onMounted(async () => {
 <style scoped>
 .welcome-page {
   min-height: 100%;
-  color: var(--tslite-ink-strong);
+  color: var(--sndb-ink-strong);
   background:
     radial-gradient(circle at top left, rgba(24, 160, 88, 0.14), transparent 28%),
     radial-gradient(circle at top right, rgba(13, 59, 102, 0.12), transparent 34%),
@@ -229,14 +229,14 @@ onMounted(async () => {
   padding: 10px 14px;
   border-radius: 999px;
   background: transparent;
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
   font: inherit;
 }
 
 .nav-link:hover,
 .secondary-action:hover {
   transform: translateY(-1px);
-  color: var(--tslite-ink-strong);
+  color: var(--sndb-ink-strong);
 }
 
 .nav-cta,
@@ -311,7 +311,7 @@ onMounted(async () => {
 .hero-copy p {
   margin: 18px 0 0;
   max-width: 56ch;
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
   font-size: 1.03rem;
   line-height: 1.75;
 }
@@ -327,7 +327,7 @@ onMounted(async () => {
   padding: 11px 18px;
   border-radius: 999px;
   background: rgba(13, 59, 102, 0.06);
-  color: var(--tslite-ink-strong);
+  color: var(--sndb-ink-strong);
   font: inherit;
   font-weight: 600;
 }
@@ -372,7 +372,7 @@ onMounted(async () => {
 .stage-kicker,
 .feature-index {
   display: block;
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
   font-size: 0.78rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -391,7 +391,7 @@ onMounted(async () => {
 .feature-card p,
 .help-card p {
   margin: 10px 0 0;
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
   line-height: 1.65;
 }
 

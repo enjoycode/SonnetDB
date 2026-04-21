@@ -1,8 +1,8 @@
-# TSLite Admin UI
+﻿# SonnetDB Admin UI
 
 基于 **Vite + Vue 3 + TypeScript + Naive UI + Pinia + Vue Router** 的单页应用。
 
-构建产物 (`dist/`) 在 `dotnet build` 时通过 MSBuild target 自动生成（如检测到 `npm` 可用），并以 `EmbeddedResource` 形式打包进 `TSLite.Server.dll`，运行时由服务器在 `/admin/*` 路由下托管。
+构建产物 (`dist/`) 在 `dotnet build` 时通过 MSBuild target 自动生成（如检测到 `npm` 可用），并以 `EmbeddedResource` 形式打包进 `SonnetDB.dll`，运行时由服务器在 `/admin/*` 路由下托管。
 
 ## 本地开发
 
@@ -15,7 +15,7 @@ npm run dev          # http://localhost:5173 （API 反向代理到 :5000）
 需要先启动后端：
 
 ```bash
-dotnet run --project src/TSLite.Server -- --Kestrel:Endpoints:Http:Url=http://localhost:5000
+dotnet run --project src/SonnetDB -- --Kestrel:Endpoints:Http:Url=http://localhost:5000
 ```
 
 ## 生产构建（手动）
@@ -26,7 +26,7 @@ npm install
 npm run build        # 输出到 web/admin/dist/
 ```
 
-之后运行 `dotnet build src/TSLite.Server`，dist 会被嵌入。
+之后运行 `dotnet build src/SonnetDB`，dist 会被嵌入。
 
 ## 设计要点
 

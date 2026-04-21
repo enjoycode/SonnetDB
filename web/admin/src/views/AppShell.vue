@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <n-layout has-sider class="app-shell">
     <n-layout-sider
       bordered
@@ -11,7 +11,7 @@
       <div class="brand-pane">
         <BrandLogo :compact="false" />
         <div class="brand-meta">
-          <strong>{{ setup.organization ?? 'TSLite Organization' }}</strong>
+          <strong>{{ setup.organization ?? 'SonnetDB Organization' }}</strong>
           <span>{{ setup.serverId ?? '未命名服务器' }}</span>
         </div>
       </div>
@@ -182,12 +182,12 @@ onBeforeUnmount(() => {
   padding: 14px;
   border-radius: 18px;
   background: rgba(13, 59, 102, 0.04);
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
   font-size: 0.88rem;
 }
 
 .brand-meta strong {
-  color: var(--tslite-ink-strong);
+  color: var(--sndb-ink-strong);
 }
 
 .app-header {
@@ -211,7 +211,7 @@ onBeforeUnmount(() => {
   padding: 8px 12px;
   border-radius: 999px;
   background: rgba(13, 59, 102, 0.06);
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
   font: inherit;
   cursor: pointer;
 }

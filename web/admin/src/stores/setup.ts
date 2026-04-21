@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue';
+﻿import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { createApiClient } from '@/api/client';
 import {
@@ -18,7 +18,7 @@ export const useSetupStore = defineStore('setup', () => {
   const needsSetup = computed(() => status.value?.needsSetup ?? true);
   const serverId = computed(() => status.value?.serverId ?? null);
   const organization = computed(() => status.value?.organization ?? null);
-  const suggestedServerId = computed(() => status.value?.suggestedServerId ?? 'tslite-local');
+  const suggestedServerId = computed(() => status.value?.suggestedServerId ?? 'sndb-local');
 
   async function refresh(): Promise<SetupStatus> {
     loading.value = true;

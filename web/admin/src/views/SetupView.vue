@@ -1,10 +1,10 @@
-<template>
+﻿<template>
   <div class="setup-page">
     <section class="setup-aside">
       <BrandLogo light />
       <div class="setup-copy">
         <span class="setup-kicker">First Install</span>
-        <h1>初始化这台 TSLite Server。</h1>
+        <h1>初始化这台 SonnetDB Server。</h1>
         <p>
           首次安装会把服务器 ID、组织名称、管理员账号和第一枚 Bearer Token 一次性写入
           <code>.system</code>。完成后，你就可以直接进入管理后台。
@@ -41,7 +41,7 @@
 
         <n-form class="setup-form" @submit.prevent="onSubmit">
           <n-form-item label="服务器 ID">
-            <n-input v-model:value="serverId" placeholder="tslite-dev-01" />
+            <n-input v-model:value="serverId" placeholder="sonnetdb-dev-01" />
           </n-form-item>
           <n-form-item label="组织">
             <n-input v-model:value="organization" placeholder="Acme Observability" />
@@ -243,7 +243,7 @@ onMounted(async () => {
 .back-link {
   border: 0;
   background: transparent;
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
   font: inherit;
   cursor: pointer;
 }
@@ -254,7 +254,7 @@ onMounted(async () => {
   padding: 8px 12px;
   border-radius: 999px;
   background: rgba(13, 59, 102, 0.06);
-  color: var(--tslite-ink-strong);
+  color: var(--sndb-ink-strong);
   font-size: 0.86rem;
   font-weight: 600;
 }
@@ -276,7 +276,7 @@ onMounted(async () => {
 
 .setup-intro {
   margin: 10px 0 0;
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
 }
 
 .setup-alert {
@@ -289,7 +289,7 @@ onMounted(async () => {
 
 .setup-hint {
   margin-top: 6px;
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
   font-size: 0.92rem;
   line-height: 1.65;
 }

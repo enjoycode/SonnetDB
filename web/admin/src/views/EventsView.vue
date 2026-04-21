@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <n-space vertical :size="16">
     <n-card title="实时指标" :bordered="false">
       <n-grid :cols="4" :x-gap="16" :y-gap="16">
@@ -39,7 +39,7 @@
         :max-height="320"
       />
       <n-text v-if="events.slowQueries.length === 0" depth="3">
-        尚无慢查询。阈值由服务端 <code>TSLiteServer:SlowQueryThresholdMs</code> 配置。
+        尚无慢查询。阈值由服务端 <code>SonnetDBServer:SlowQueryThresholdMs</code> 配置。
       </n-text>
     </n-card>
 

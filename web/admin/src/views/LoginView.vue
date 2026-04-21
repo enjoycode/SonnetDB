@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="login-page">
     <section class="login-hero">
       <BrandLogo light />
@@ -151,7 +151,7 @@ onMounted(async () => {
   border: 0;
   padding: 0;
   background: transparent;
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
   font: inherit;
   cursor: pointer;
 }
@@ -163,7 +163,7 @@ onMounted(async () => {
 
 .login-intro {
   margin: 10px 0 0;
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
 }
 
 .login-error {

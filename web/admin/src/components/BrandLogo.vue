@@ -1,15 +1,15 @@
-<template>
+﻿<template>
   <div class="brand-logo" :class="{ compact, light }">
     <div class="brand-mark" aria-hidden="true">
       <svg viewBox="0 0 88 88" role="img">
         <defs>
-          <linearGradient id="tsliteMarkGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <linearGradient id="sonnetdbMarkGradient" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stop-color="#0d3b66" />
             <stop offset="55%" stop-color="#146c94" />
             <stop offset="100%" stop-color="#18a058" />
           </linearGradient>
         </defs>
-        <rect x="6" y="6" width="76" height="76" rx="24" fill="url(#tsliteMarkGradient)" />
+        <rect x="6" y="6" width="76" height="76" rx="24" fill="url(#sonnetdbMarkGradient)" />
         <path
           d="M22 58 L34 46 L44 52 L56 34 L66 40"
           fill="none"
@@ -29,7 +29,7 @@
       </svg>
     </div>
     <div v-if="!compact" class="brand-copy">
-      <span class="brand-name">TSLite</span>
+      <span class="brand-name">SonnetDB</span>
       <span class="brand-tagline">Single-File Time-Series Engine</span>
     </div>
   </div>
@@ -69,7 +69,7 @@ defineProps<{
   font-weight: 700;
   line-height: 1.1;
   letter-spacing: 0.03em;
-  color: var(--tslite-ink-strong);
+  color: var(--sndb-ink-strong);
 }
 
 .brand-tagline {
@@ -77,7 +77,7 @@ defineProps<{
   line-height: 1.2;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--tslite-ink-soft);
+  color: var(--sndb-ink-soft);
 }
 
 .compact .brand-mark {

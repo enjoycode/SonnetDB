@@ -1,4 +1,4 @@
-import type { AxiosInstance, AxiosResponse } from 'axios';
+﻿import type { AxiosInstance, AxiosResponse } from 'axios';
 
 export interface ApiError {
   code: string;
@@ -44,7 +44,7 @@ export async function loadSegmentCounts(api: AxiosInstance): Promise<SegmentCoun
   const lines = resp.data.split(/\r?\n/);
   for (const rawLine of lines) {
     const line = rawLine.trim();
-    const match = /^tslite_segments\{db="([^"]+)"\}\s+([0-9]+(?:\.[0-9]+)?)$/.exec(line);
+    const match = /^sonnetdb_segments\{db="([^"]+)"\}\s+([0-9]+(?:\.[0-9]+)?)$/.exec(line);
     if (!match) {
       continue;
     }
