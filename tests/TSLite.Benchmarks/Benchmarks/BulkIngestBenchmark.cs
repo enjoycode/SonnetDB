@@ -32,12 +32,12 @@ namespace TSLite.Benchmarks.Benchmarks;
 [BenchmarkCategory("BulkIngest")]
 public class BulkIngestBenchmark
 {
-    private const int DataPointCount = 100_000;
-    private const int RowsPerStatement = 100;
+    private const int _dataPointCount = 100_000;
+    private const int _rowsPerStatement = 100;
 
     private BenchmarkDataPoint[] _dataPoints = [];
 
-    /// <summary>预先构造好的 SQL 语句序列（每条含 <see cref="RowsPerStatement"/> 行 VALUES）。</summary>
+    /// <summary>预先构造好的 SQL 语句序列（每条含 <see cref="_rowsPerStatement"/> 行 VALUES）。</summary>
     private string[] _sqlStatements = [];
     private string _lpPayload = string.Empty;
     private string _jsonPayload = string.Empty;
@@ -50,14 +50,14 @@ public class BulkIngestBenchmark
     [GlobalSetup]
     public void GlobalSetup()
     {
-        _dataPoints = DataGenerator.Generate(DataPointCount);
+        _dataPoints = DataGenerator.Generate(_dataPointCount);
 
         // ── SQL：每 100 行一条 INSERT VALUES，共 1000 条 ─────────────────
-        var sqls = new List<string>(DataPointCount / RowsPerStatement);
-        for (int offset = 0; offset < _dataPoints.Length; offset += RowsPerStatement)
+        var sqls = new List<string>(_dataPointCount / _rowsPerStatement);
+        for (int offset = 0; offset < _dataPoints.Length; offset += _rowsPerStatement)
         {
-            int end = Math.Min(offset + RowsPerStatement, _dataPoints.Length);
-            var sb = new StringBuilder("INSERT INTO sensor_data(host, value, time) VALUES ", capacity: 64 + RowsPerStatement * 48);
+            int end = Math.Min(offset + _rowsPerStatement, _dataPoints.Length);
+            var sb = new StringBuilder("INSERT INTO sensor_data(host, value, time) VALUES ", capacity: 64 + _rowsPerStatement * 48);
             for (int i = offset; i < end; i++)
             {
                 if (i > offset) sb.Append(',');
@@ -70,7 +70,7 @@ public class BulkIngestBenchmark
         _sqlStatements = sqls.ToArray();
 
         // ── Line Protocol ────────────────────────────────────────────────
-        var lp = new StringBuilder(capacity: DataPointCount * 50);
+        var lp = new StringBuilder(capacity: _dataPointCount * 50);
         for (int i = 0; i < _dataPoints.Length; i++)
         {
             var dp = _dataPoints[i];
@@ -79,7 +79,7 @@ public class BulkIngestBenchmark
         _lpPayload = lp.ToString();
 
         // ── JSON ────────────────────────────────────────────────────────
-        var json = new StringBuilder(capacity: DataPointCount * 80);
+        var json = new StringBuilder(capacity: _dataPointCount * 80);
         json.Append("{\"m\":\"sensor_data\",\"points\":[");
         for (int i = 0; i < _dataPoints.Length; i++)
         {
@@ -92,7 +92,7 @@ public class BulkIngestBenchmark
         _jsonPayload = json.ToString();
 
         // ── Bulk VALUES（一条超长 INSERT INTO ... VALUES ...）────────────
-        var bulk = new StringBuilder(capacity: 64 + DataPointCount * 48);
+        var bulk = new StringBuilder(capacity: 64 + _dataPointCount * 48);
         bulk.Append("INSERT INTO sensor_data(host, value, time) VALUES ");
         for (int i = 0; i < _dataPoints.Length; i++)
         {

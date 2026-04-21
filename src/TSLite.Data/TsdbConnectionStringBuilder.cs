@@ -22,11 +22,11 @@ namespace TSLite.Data;
 /// </remarks>
 public sealed class TsdbConnectionStringBuilder : DbConnectionStringBuilder
 {
-    private const string KeyMode = "Mode";
-    private const string KeyDataSource = "Data Source";
-    private const string KeyDatabase = "Database";
-    private const string KeyToken = "Token";
-    private const string KeyTimeout = "Timeout";
+    private const string _keyMode = "Mode";
+    private const string _keyDataSource = "Data Source";
+    private const string _keyDatabase = "Database";
+    private const string _keyToken = "Token";
+    private const string _keyTimeout = "Timeout";
 
     /// <summary>使用空连接字符串构造。</summary>
     public TsdbConnectionStringBuilder() { }
@@ -43,7 +43,7 @@ public sealed class TsdbConnectionStringBuilder : DbConnectionStringBuilder
     {
         get
         {
-            if (!TryGetValue(KeyMode, out var raw) || raw is null) return null;
+            if (!TryGetValue(_keyMode, out var raw) || raw is null) return null;
             var s = raw.ToString();
             if (string.IsNullOrWhiteSpace(s)) return null;
             return Enum.TryParse<TsdbProviderMode>(s, ignoreCase: true, out var m)
@@ -52,45 +52,45 @@ public sealed class TsdbConnectionStringBuilder : DbConnectionStringBuilder
         }
         set
         {
-            if (value is null) Remove(KeyMode);
-            else base[KeyMode] = value.Value.ToString();
+            if (value is null) Remove(_keyMode);
+            else base[_keyMode] = value.Value.ToString();
         }
     }
 
     /// <summary>原始 <c>Data Source</c> 值（路径或 URL）。</summary>
     public string DataSource
     {
-        get => TryGetValue(KeyDataSource, out var v) ? v?.ToString() ?? string.Empty : string.Empty;
-        set => base[KeyDataSource] = value;
+        get => TryGetValue(_keyDataSource, out var v) ? v?.ToString() ?? string.Empty : string.Empty;
+        set => base[_keyDataSource] = value;
     }
 
     /// <summary>远程模式下的数据库名。</summary>
     public string? Database
     {
-        get => TryGetValue(KeyDatabase, out var v) ? v?.ToString() : null;
+        get => TryGetValue(_keyDatabase, out var v) ? v?.ToString() : null;
         set
         {
-            if (value is null) Remove(KeyDatabase);
-            else base[KeyDatabase] = value;
+            if (value is null) Remove(_keyDatabase);
+            else base[_keyDatabase] = value;
         }
     }
 
     /// <summary>远程模式下的 Bearer token。</summary>
     public string? Token
     {
-        get => TryGetValue(KeyToken, out var v) ? v?.ToString() : null;
+        get => TryGetValue(_keyToken, out var v) ? v?.ToString() : null;
         set
         {
-            if (value is null) Remove(KeyToken);
-            else base[KeyToken] = value;
+            if (value is null) Remove(_keyToken);
+            else base[_keyToken] = value;
         }
     }
 
     /// <summary>远程模式下 HTTP 请求超时（秒），默认 100。</summary>
     public int Timeout
     {
-        get => TryGetValue(KeyTimeout, out var v) && int.TryParse(v?.ToString(), out var t) ? t : 100;
-        set => base[KeyTimeout] = value;
+        get => TryGetValue(_keyTimeout, out var v) && int.TryParse(v?.ToString(), out var t) ? t : 100;
+        set => base[_keyTimeout] = value;
     }
 
     /// <summary>

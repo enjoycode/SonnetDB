@@ -511,17 +511,17 @@ public sealed class Tsdb : IDisposable
                         {
                             // manifest 保存失败不阻止关闭（WAL 仍可作为恢复手段）
 
-                    // 保存 measurement schema
-                    try
-                    {
-                        MeasurementSchemaCodec.Save(
-                            TsdbPaths.MeasurementSchemaPath(RootDirectory),
-                            Measurements.Snapshot());
-                    }
-                    catch
-                    {
-                        // schema 保存失败不阻止关闭（已写入磁盘的版本仍可恢复）
-                    }
+                            // 保存 measurement schema
+                            try
+                            {
+                                MeasurementSchemaCodec.Save(
+                                    TsdbPaths.MeasurementSchemaPath(RootDirectory),
+                                    Measurements.Snapshot());
+                            }
+                            catch
+                            {
+                                // schema 保存失败不阻止关闭（已写入磁盘的版本仍可恢复）
+                            }
                         }
                     }
 

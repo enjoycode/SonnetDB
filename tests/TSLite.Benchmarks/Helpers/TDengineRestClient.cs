@@ -1,7 +1,7 @@
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using System.Globalization;
 
 namespace TSLite.Benchmarks.Helpers;
 

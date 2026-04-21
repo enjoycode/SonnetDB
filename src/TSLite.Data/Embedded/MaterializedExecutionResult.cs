@@ -1,6 +1,6 @@
+using System.Diagnostics.CodeAnalysis;
 using TSLite.Data.Internal;
 using TSLite.Sql.Execution;
-using System.Diagnostics.CodeAnalysis;
 
 namespace TSLite.Data.Embedded;
 

@@ -1,8 +1,8 @@
+using System.Globalization;
 using BenchmarkDotNet.Attributes;
 using InfluxDB.Client;
 using InfluxDB.Client.Writes;
 using Microsoft.Data.Sqlite;
-using System.Globalization;
 using TSLite.Benchmarks.Helpers;
 using TSLite.Engine;
 using TSLite.Engine.Compaction;
@@ -22,15 +22,15 @@ namespace TSLite.Benchmarks.Benchmarks;
 public class AggregateBenchmark
 {
     // ── 配置 ──────────────────────────────────────────────────────────────
-    private const int DataPointCount = 1_000_000;
-    private const string InfluxUrl = "http://localhost:8086";
-    private const string InfluxToken = "my-super-secret-auth-token";
-    private const string InfluxOrg = "tslite";
-    private const string InfluxBucket = "benchmarks";
-    private const string TDengineUrl = "http://localhost:6041";
-    private const string TDengineDb = "bench_aggregate";
-    private const string TDengineTable = "sd_server001";
-    private const string TDengineSubTable = TDengineDb + "." + TDengineTable;
+    private const int _dataPointCount = 1_000_000;
+    private const string _influxUrl = "http://localhost:8086";
+    private const string _influxToken = "my-super-secret-auth-token";
+    private const string _influxOrg = "tslite";
+    private const string _influxBucket = "benchmarks";
+    private const string _tDengineUrl = "http://localhost:6041";
+    private const string _tDengineDb = "bench_aggregate";
+    private const string _tDengineTable = "sd_server001";
+    private const string _tDengineSubTable = _tDengineDb + "." + _tDengineTable;
 
     // ── 共享数据 ──────────────────────────────────────────────────────────
     private BenchmarkDataPoint[] _dataPoints = [];
@@ -51,7 +51,7 @@ public class AggregateBenchmark
     private Tsdb? _tsLiteDb;
     private ulong _tsLiteSeriesId;
     private TimeRange _tsLiteFullRange;
-    private static readonly IReadOnlyDictionary<string, string> TsLiteTags =
+    private static readonly IReadOnlyDictionary<string, string> _tsLiteTags =
         new Dictionary<string, string> { ["host"] = "server001" };
 
     // ─────────────────────────────────────────────────────────────────────
@@ -62,14 +62,14 @@ public class AggregateBenchmark
     [GlobalSetup]
     public async Task GlobalSetup()
     {
-        _dataPoints = DataGenerator.Generate(DataPointCount);
+        _dataPoints = DataGenerator.Generate(_dataPointCount);
 
         // ── TSLite：写入 100 万条并 Flush 到磁盘 ────────────────
         _tsLiteSeriesId = SeriesId.Compute(
             new SeriesKey("sensor_data", new Dictionary<string, string> { ["host"] = "server001" }));
         _tsLiteFullRange = new TimeRange(
             DataGenerator.StartTimestampMs,
-            DataGenerator.QueryToMs(DataPointCount));
+            DataGenerator.QueryToMs(_dataPointCount));
         _tsLiteRootDir = Path.Combine(Path.GetTempPath(), $"tslite_bench_aggregate_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tsLiteRootDir);
         _tsLiteDb = Tsdb.Open(new TsdbOptions
@@ -89,7 +89,7 @@ public class AggregateBenchmark
             _tsLiteDb.Write(Point.Create(
                 "sensor_data",
                 dp.Timestamp,
-                TsLiteTags,
+                _tsLiteTags,
                 new Dictionary<string, FieldValue> { ["value"] = FieldValue.FromDouble(dp.Value) }));
         _tsLiteDb.FlushNow();
 
@@ -106,7 +106,7 @@ public class AggregateBenchmark
         // ── InfluxDB ────────────────────────────────────────────────────
         try
         {
-            _influxClient = new InfluxDBClient(InfluxUrl, InfluxToken);
+            _influxClient = new InfluxDBClient(_influxUrl, _influxToken);
             _influxAvailable = await _influxClient.PingAsync().ConfigureAwait(false);
             if (_influxAvailable)
             {
@@ -124,16 +124,16 @@ public class AggregateBenchmark
         // ── TDengine ────────────────────────────────────────────────────
         try
         {
-            _tdengineClient = new TDengineRestClient(TDengineUrl);
+            _tdengineClient = new TDengineRestClient(_tDengineUrl);
             await _tdengineClient.ExecuteAsync(
-                $"CREATE DATABASE IF NOT EXISTS {TDengineDb} PRECISION 'ms'").ConfigureAwait(false);
+                $"CREATE DATABASE IF NOT EXISTS {_tDengineDb} PRECISION 'ms'").ConfigureAwait(false);
             await _tdengineClient.ExecuteAsync(
-                $"CREATE STABLE IF NOT EXISTS {TDengineDb}.sensor_data " +
+                $"CREATE STABLE IF NOT EXISTS {_tDengineDb}.sensor_data " +
                 "(ts TIMESTAMP, `value` DOUBLE) TAGS (`host` BINARY(64))").ConfigureAwait(false);
             await _tdengineClient.ExecuteAsync(
-                $"CREATE TABLE IF NOT EXISTS {TDengineSubTable} " +
-                $"USING {TDengineDb}.sensor_data TAGS ('server001')").ConfigureAwait(false);
-            await _tdengineClient.BulkInsertAsync(TDengineSubTable, _dataPoints).ConfigureAwait(false);
+                $"CREATE TABLE IF NOT EXISTS {_tDengineSubTable} " +
+                $"USING {_tDengineDb}.sensor_data TAGS ('server001')").ConfigureAwait(false);
+            await _tdengineClient.BulkInsertAsync(_tDengineSubTable, _dataPoints).ConfigureAwait(false);
             _tdengineAvailable = true;
         }
         catch
@@ -202,17 +202,17 @@ public class AggregateBenchmark
         var startRfc3339 = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
             .ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
         var stopRfc3339 = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
-            .AddSeconds(DataPointCount + 1).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+            .AddSeconds(_dataPointCount + 1).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
 
         var flux = $"""
-            from(bucket: "{InfluxBucket}")
+            from(bucket: "{_influxBucket}")
               |> range(start: {startRfc3339}, stop: {stopRfc3339})
               |> filter(fn: (r) => r["_measurement"] == "sensor_data")
               |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
             """;
 
         var tables = await _influxClient!.GetQueryApi()
-            .QueryAsync(flux, InfluxOrg).ConfigureAwait(false);
+            .QueryAsync(flux, _influxOrg).ConfigureAwait(false);
 
         return tables.Sum(t => t.Records.Count);
     }
@@ -229,7 +229,7 @@ public class AggregateBenchmark
 
         return await _tdengineClient!.ExecuteAsync(
             $"SELECT _wstart, AVG(`value`), MIN(`value`), MAX(`value`), COUNT(*) " +
-            $"FROM {TDengineSubTable} INTERVAL(1m)").ConfigureAwait(false);
+            $"FROM {_tDengineSubTable} INTERVAL(1m)").ConfigureAwait(false);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -250,8 +250,8 @@ public class AggregateBenchmark
             {
                 _influxClient!.GetDeleteApi().Delete(
                     new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                    new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(DataPointCount + 1),
-                    string.Empty, InfluxBucket, InfluxOrg).GetAwaiter().GetResult();
+                    new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(_dataPointCount + 1),
+                    string.Empty, _influxBucket, _influxOrg).GetAwaiter().GetResult();
             }
             catch { /* 清理失败不影响结果 */ }
 
@@ -262,7 +262,7 @@ public class AggregateBenchmark
         {
             try
             {
-                await _tdengineClient!.ExecuteAsync($"DROP DATABASE IF EXISTS {TDengineDb}")
+                await _tdengineClient!.ExecuteAsync($"DROP DATABASE IF EXISTS {_tDengineDb}")
                     .ConfigureAwait(false);
             }
             catch { /* 清理失败不影响结果 */ }
@@ -284,13 +284,13 @@ public class AggregateBenchmark
     private async Task EnsureInfluxBucketAsync()
     {
         var bucketsApi = _influxClient!.GetBucketsApi();
-        var existing = await bucketsApi.FindBucketByNameAsync(InfluxBucket).ConfigureAwait(false);
+        var existing = await bucketsApi.FindBucketByNameAsync(_influxBucket).ConfigureAwait(false);
         if (existing is not null) return;
         var orgs = await _influxClient.GetOrganizationsApi()
-            .FindOrganizationsAsync(org: InfluxOrg).ConfigureAwait(false);
+            .FindOrganizationsAsync(org: _influxOrg).ConfigureAwait(false);
         if (orgs is null || orgs.Count == 0)
-            throw new InvalidOperationException($"InfluxDB org '{InfluxOrg}' not found");
-        await bucketsApi.CreateBucketAsync(InfluxBucket, orgs[0].Id).ConfigureAwait(false);
+            throw new InvalidOperationException($"InfluxDB org '{_influxOrg}' not found");
+        await bucketsApi.CreateBucketAsync(_influxBucket, orgs[0].Id).ConfigureAwait(false);
     }
 
     private static SqliteConnection OpenSqlite(string path)
@@ -349,7 +349,7 @@ public class AggregateBenchmark
                     .Timestamp(dp.Timestamp, InfluxDB.Client.Api.Domain.WritePrecision.Ms);
             }
 
-            await writeApi.WritePointsAsync(batch, InfluxBucket, InfluxOrg).ConfigureAwait(false);
+            await writeApi.WritePointsAsync(batch, _influxBucket, _influxOrg).ConfigureAwait(false);
         }
     }
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Engines;
@@ -5,7 +6,6 @@ using BenchmarkDotNet.Jobs;
 using InfluxDB.Client;
 using InfluxDB.Client.Writes;
 using Microsoft.Data.Sqlite;
-using System.Globalization;
 using TSLite.Benchmarks.Helpers;
 using TSLite.Engine;
 using TSLite.Engine.Compaction;
@@ -25,19 +25,19 @@ namespace TSLite.Benchmarks.Benchmarks;
 public class InsertBenchmark
 {
     // ── 配置 ──────────────────────────────────────────────────────────────
-    private const int DataPointCount = 1_000_000;
-    private const string InfluxUrl = "http://localhost:8086";
-    private const string InfluxToken = "my-super-secret-auth-token";
-    private const string InfluxOrg = "tslite";
-    private const string InfluxBucket = "benchmarks";
-    private const string TDengineUrl = "http://localhost:6041";
-    private const string TDengineDb = "bench_insert";
-    private const string TDengineTable = "sd_server001";
-    private const string TDengineSubTable = TDengineDb + "." + TDengineTable;
+    private const int _dataPointCount = 1_000_000;
+    private const string _influxUrl = "http://localhost:8086";
+    private const string _influxToken = "my-super-secret-auth-token";
+    private const string _influxOrg = "tslite";
+    private const string _influxBucket = "benchmarks";
+    private const string _tDengineUrl = "http://localhost:6041";
+    private const string _tDengineDb = "bench_insert";
+    private const string _tDengineTable = "sd_server001";
+    private const string _tDengineSubTable = _tDengineDb + "." + _tDengineTable;
     // PR #49：TDengine schemaless LP 写入专用 DB，避免与显式 STable `sensor_data` 冲突。
-    private const string TDengineSchemalessDb = "bench_insert_schemaless";
+    private const string _tDengineSchemalessDb = "bench_insert_schemaless";
     // 每个 HTTP POST 的行数，避免 taosadapter 默认 16MB body 上限。
-    private const int TDengineSchemalessLpBatch = 100_000;
+    private const int _tDengineSchemalessLpBatch = 100_000;
 
     // ── 共享数据 ──────────────────────────────────────────────────────────
     private BenchmarkDataPoint[] _dataPoints = [];
@@ -59,7 +59,7 @@ public class InsertBenchmark
     private string _tsLiteRootDir = string.Empty;
     private Tsdb? _tsLiteDb;
     private Point[] _tsLitePoints = [];
-    private static readonly IReadOnlyDictionary<string, string> TsLiteTags =
+    private static readonly IReadOnlyDictionary<string, string> _tsLiteTags =
         new Dictionary<string, string> { ["host"] = "server001" };
 
     // ─────────────────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ public class InsertBenchmark
     [GlobalSetup]
     public async Task GlobalSetup()
     {
-        _dataPoints = DataGenerator.Generate(DataPointCount);
+        _dataPoints = DataGenerator.Generate(_dataPointCount);
 
         // ── SQLite ─────────────────────────────────────────────────────
         _sqliteDbPath = Path.Combine(Path.GetTempPath(), $"tslite_bench_insert_{Guid.NewGuid():N}.db");
@@ -81,7 +81,7 @@ public class InsertBenchmark
         // ── InfluxDB ────────────────────────────────────────────────────
         try
         {
-            _influxClient = new InfluxDBClient(InfluxUrl, InfluxToken);
+            _influxClient = new InfluxDBClient(_influxUrl, _influxToken);
             _influxAvailable = await _influxClient.PingAsync().ConfigureAwait(false);
             if (_influxAvailable)
                 await EnsureInfluxBucketAsync().ConfigureAwait(false);
@@ -96,21 +96,21 @@ public class InsertBenchmark
         // ── TDengine ────────────────────────────────────────────────────
         try
         {
-            _tdengineClient = new TDengineRestClient(TDengineUrl);
-            await _tdengineClient.ExecuteAsync($"CREATE DATABASE IF NOT EXISTS {TDengineDb} PRECISION 'ms'")
+            _tdengineClient = new TDengineRestClient(_tDengineUrl);
+            await _tdengineClient.ExecuteAsync($"CREATE DATABASE IF NOT EXISTS {_tDengineDb} PRECISION 'ms'")
                 .ConfigureAwait(false);
             await _tdengineClient.ExecuteAsync(
-                $"CREATE STABLE IF NOT EXISTS {TDengineDb}.sensor_data " +
+                $"CREATE STABLE IF NOT EXISTS {_tDengineDb}.sensor_data " +
                 "(ts TIMESTAMP, `value` DOUBLE) TAGS (`host` BINARY(64))").ConfigureAwait(false);
             await _tdengineClient.ExecuteAsync(
-                $"CREATE TABLE IF NOT EXISTS {TDengineSubTable} " +
-                $"USING {TDengineDb}.sensor_data TAGS ('server001')").ConfigureAwait(false);
+                $"CREATE TABLE IF NOT EXISTS {_tDengineSubTable} " +
+                $"USING {_tDengineDb}.sensor_data TAGS ('server001')").ConfigureAwait(false);
             // PR #49：schemaless 专用 DB（被 InfluxDB-compat /influxdb/v1/write 自动建 STable）
             await _tdengineClient.ExecuteAsync(
-                $"CREATE DATABASE IF NOT EXISTS {TDengineSchemalessDb} PRECISION 'ms'")
+                $"CREATE DATABASE IF NOT EXISTS {_tDengineSchemalessDb} PRECISION 'ms'")
                 .ConfigureAwait(false);
             // PR #49：预生成 LP 分片，避免迭代内字符串拼接
-            _tdengineLpChunks = BuildLineProtocolChunks(_dataPoints, TDengineSchemalessLpBatch);
+            _tdengineLpChunks = BuildLineProtocolChunks(_dataPoints, _tDengineSchemalessLpBatch);
             _tdengineAvailable = true;
         }
         catch
@@ -121,14 +121,14 @@ public class InsertBenchmark
         }
 
         // ── TSLite：预构建 Point 数组（共享 tags，避免每次迭代重新分配） ────
-        _tsLitePoints = new Point[DataPointCount];
-        for (int i = 0; i < DataPointCount; i++)
+        _tsLitePoints = new Point[_dataPointCount];
+        for (int i = 0; i < _dataPointCount; i++)
         {
             var dp = _dataPoints[i];
             _tsLitePoints[i] = Point.Create(
                 "sensor_data",
                 dp.Timestamp,
-                TsLiteTags,
+                _tsLiteTags,
                 new Dictionary<string, FieldValue> { ["value"] = FieldValue.FromDouble(dp.Value) });
         }
     }
@@ -150,19 +150,19 @@ public class InsertBenchmark
         {
             _influxClient!.GetDeleteApi().Delete(
                     new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                    new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(DataPointCount + 1),
-                    string.Empty, InfluxBucket, InfluxOrg)
+                    new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(_dataPointCount + 1),
+                    string.Empty, _influxBucket, _influxOrg)
                 .GetAwaiter().GetResult();
         }
 
         // TDengine
         if (_tdengineAvailable)
         {
-            _tdengineClient!.ExecuteAsync($"DELETE FROM {TDengineSubTable}").GetAwaiter().GetResult();
+            _tdengineClient!.ExecuteAsync($"DELETE FROM {_tDengineSubTable}").GetAwaiter().GetResult();
             // PR #49：清空 schemaless DB（drop + recreate；schemaless 的 STable 由首次写入自动建立）
-            _tdengineClient!.ExecuteAsync($"DROP DATABASE IF EXISTS {TDengineSchemalessDb}").GetAwaiter().GetResult();
+            _tdengineClient!.ExecuteAsync($"DROP DATABASE IF EXISTS {_tDengineSchemalessDb}").GetAwaiter().GetResult();
             _tdengineClient!.ExecuteAsync(
-                $"CREATE DATABASE IF NOT EXISTS {TDengineSchemalessDb} PRECISION 'ms'").GetAwaiter().GetResult();
+                $"CREATE DATABASE IF NOT EXISTS {_tDengineSchemalessDb} PRECISION 'ms'").GetAwaiter().GetResult();
         }
 
         // TSLite：关闭旧实例、清空目录、重新打开
@@ -253,7 +253,7 @@ public class InsertBenchmark
                     .Timestamp(dp.Timestamp, InfluxDB.Client.Api.Domain.WritePrecision.Ms);
             }
 
-            await writeApi.WritePointsAsync(batch, InfluxBucket, InfluxOrg).ConfigureAwait(false);
+            await writeApi.WritePointsAsync(batch, _influxBucket, _influxOrg).ConfigureAwait(false);
         }
     }
 
@@ -267,7 +267,7 @@ public class InsertBenchmark
             return;
         }
 
-        await _tdengineClient!.BulkInsertAsync(TDengineSubTable, _dataPoints).ConfigureAwait(false);
+        await _tdengineClient!.BulkInsertAsync(_tDengineSubTable, _dataPoints).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -286,7 +286,7 @@ public class InsertBenchmark
         for (int i = 0; i < _tdengineLpChunks.Length; i++)
         {
             await _tdengineClient!.WriteLineProtocolAsync(
-                TDengineSchemalessDb, _tdengineLpChunks[i], precision: "ms").ConfigureAwait(false);
+                _tDengineSchemalessDb, _tdengineLpChunks[i], precision: "ms").ConfigureAwait(false);
         }
     }
 
@@ -309,8 +309,8 @@ public class InsertBenchmark
             {
                 _influxClient!.GetDeleteApi().Delete(
                     new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                    new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(DataPointCount + 1),
-                    string.Empty, InfluxBucket, InfluxOrg).GetAwaiter().GetResult();
+                    new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(_dataPointCount + 1),
+                    string.Empty, _influxBucket, _influxOrg).GetAwaiter().GetResult();
             }
             catch { /* 清理失败不影响结果 */ }
 
@@ -322,10 +322,10 @@ public class InsertBenchmark
         {
             try
             {
-                await _tdengineClient!.ExecuteAsync($"DROP DATABASE IF EXISTS {TDengineDb}")
+                await _tdengineClient!.ExecuteAsync($"DROP DATABASE IF EXISTS {_tDengineDb}")
                     .ConfigureAwait(false);
                 // PR #49：清理 schemaless DB
-                await _tdengineClient!.ExecuteAsync($"DROP DATABASE IF EXISTS {TDengineSchemalessDb}")
+                await _tdengineClient!.ExecuteAsync($"DROP DATABASE IF EXISTS {_tDengineSchemalessDb}")
                     .ConfigureAwait(false);
             }
             catch { /* 清理失败不影响结果 */ }
@@ -347,13 +347,13 @@ public class InsertBenchmark
     private async Task EnsureInfluxBucketAsync()
     {
         var bucketsApi = _influxClient!.GetBucketsApi();
-        var existing = await bucketsApi.FindBucketByNameAsync(InfluxBucket).ConfigureAwait(false);
+        var existing = await bucketsApi.FindBucketByNameAsync(_influxBucket).ConfigureAwait(false);
         if (existing is not null) return;
         var orgs = await _influxClient.GetOrganizationsApi()
-            .FindOrganizationsAsync(org: InfluxOrg).ConfigureAwait(false);
+            .FindOrganizationsAsync(org: _influxOrg).ConfigureAwait(false);
         if (orgs is null || orgs.Count == 0)
-            throw new InvalidOperationException($"InfluxDB org '{InfluxOrg}' not found");
-        await bucketsApi.CreateBucketAsync(InfluxBucket, orgs[0].Id).ConfigureAwait(false);
+            throw new InvalidOperationException($"InfluxDB org '{_influxOrg}' not found");
+        await bucketsApi.CreateBucketAsync(_influxBucket, orgs[0].Id).ConfigureAwait(false);
     }
 
     private static SqliteConnection OpenSqlite(string path)

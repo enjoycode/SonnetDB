@@ -25,7 +25,7 @@ public sealed class SseEndToEndTests : IAsyncLifetime
     private WebApplication? _app;
     private string? _baseUrl;
     private string? _dataRoot;
-    private const string AdminToken = "admin-sse-token";
+    private const string _adminToken = "admin-sse-token";
 
     public async Task InitializeAsync()
     {
@@ -42,7 +42,7 @@ public sealed class SseEndToEndTests : IAsyncLifetime
             MetricsTickSeconds = 1,
             Tokens = new Dictionary<string, string>
             {
-                [AdminToken] = ServerRoles.Admin,
+                [_adminToken] = ServerRoles.Admin,
             },
         };
         _app = Program.BuildApp(["--Kestrel:Endpoints:Http:Url=http://127.0.0.1:0"], options);
@@ -77,7 +77,7 @@ public sealed class SseEndToEndTests : IAsyncLifetime
     {
         // 1) 打开 SSE 流（用 query token，模拟 EventSource）
         using var sseClient = new HttpClient { BaseAddress = new Uri(_baseUrl!) };
-        using var streamReq = new HttpRequestMessage(HttpMethod.Get, $"/v1/events?access_token={AdminToken}&stream=db,slow_query,metrics");
+        using var streamReq = new HttpRequestMessage(HttpMethod.Get, $"/v1/events?access_token={_adminToken}&stream=db,slow_query,metrics");
         var streamResp = await sseClient.SendAsync(streamReq, HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, streamResp.StatusCode);
         Assert.Equal("text/event-stream", streamResp.Content.Headers.ContentType?.MediaType);
@@ -92,7 +92,7 @@ public sealed class SseEndToEndTests : IAsyncLifetime
 
         // 2) 用另一个 client 触发 CREATE/DROP DATABASE
         using var apiClient = new HttpClient { BaseAddress = new Uri(_baseUrl!) };
-        apiClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", AdminToken);
+        apiClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _adminToken);
         var dbName = "ssetest_" + Guid.NewGuid().ToString("N")[..8];
         var create = await apiClient.PostAsync("/v1/db",
             JsonContent.Create(new CreateDatabaseRequest(dbName), ServerJsonContext.Default.CreateDatabaseRequest));

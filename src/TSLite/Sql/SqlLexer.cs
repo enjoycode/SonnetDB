@@ -9,7 +9,7 @@ namespace TSLite.Sql;
 /// </summary>
 public sealed class SqlLexer
 {
-    private static readonly Dictionary<string, TokenKind> Keywords = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, TokenKind> _keywords = new(StringComparer.OrdinalIgnoreCase)
     {
         ["create"] = TokenKind.KeywordCreate,
         ["measurement"] = TokenKind.KeywordMeasurement,
@@ -162,7 +162,7 @@ public sealed class SqlLexer
             _position++;
 
         var text = _source.Substring(start, _position - start);
-        return Keywords.TryGetValue(text, out var keyword)
+        return _keywords.TryGetValue(text, out var keyword)
             ? new Token(keyword, text, start)
             : new Token(TokenKind.IdentifierLiteral, text, start);
     }
