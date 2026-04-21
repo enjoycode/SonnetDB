@@ -33,10 +33,37 @@ public sealed class FunctionRegistryTests
         Assert.Equal(aggregator, function.LegacyAggregator);
     }
 
+    [Theory]
+    [InlineData("abs")]
+    [InlineData("round")]
+    [InlineData("sqrt")]
+    [InlineData("log")]
+    [InlineData("coalesce")]
+    public void TryGetScalar_ResolvesBuiltIns(string name)
+    {
+        Assert.True(FunctionRegistry.TryGetScalar(name.ToUpperInvariant(), out var function));
+        Assert.Equal(name, function.Name);
+    }
+
+    [Theory]
+    [InlineData("count", FunctionKind.Aggregate)]
+    [InlineData("sqrt", FunctionKind.Scalar)]
+    [InlineData("stddev", FunctionKind.Unknown)]
+    public void GetFunctionKind_ReturnsRegisteredKind(string name, FunctionKind kind)
+    {
+        Assert.Equal(kind, FunctionRegistry.GetFunctionKind(name));
+    }
+
     [Fact]
     public void TryGetAggregate_UnknownFunction_ReturnsFalse()
     {
         Assert.False(FunctionRegistry.TryGetAggregate("stddev", out _));
+    }
+
+    [Fact]
+    public void TryGetScalar_UnknownFunction_ReturnsFalse()
+    {
+        Assert.False(FunctionRegistry.TryGetScalar("stddev", out _));
     }
 
     [Fact]
@@ -97,5 +124,28 @@ public sealed class FunctionRegistryTests
             new FunctionCallExpression("avg", new[] { new IdentifierExpression("usage") }),
             _schema);
         Assert.Equal("usage", fieldName);
+    }
+
+    [Fact]
+    public void ScalarFunction_EvaluateRoundAndCoalesce_ReturnExpectedResults()
+    {
+        var round = Assert.IsAssignableFrom<IScalarFunction>(GetScalar("round"));
+        var coalesce = Assert.IsAssignableFrom<IScalarFunction>(GetScalar("coalesce"));
+
+        Assert.Equal(1.23, round.Evaluate(new object?[] { 1.234, 2 }));
+        Assert.Equal("fallback", coalesce.Evaluate(new object?[] { null, "fallback" }));
+    }
+
+    [Fact]
+    public void ScalarFunction_InvalidArgumentCount_Throws()
+    {
+        var abs = GetScalar("abs");
+        Assert.Throws<InvalidOperationException>(() => abs.Evaluate([]));
+    }
+
+    private static IScalarFunction GetScalar(string name)
+    {
+        Assert.True(FunctionRegistry.TryGetScalar(name, out var scalar));
+        return scalar;
     }
 }

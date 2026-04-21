@@ -9,11 +9,9 @@ namespace TSLite.Query.Functions;
 /// 真正可合并的聚合状态抽象（<c>Add</c> / <c>Merge</c> / <c>Finalize</c>）将随
 /// Milestone 12 PR #52（Tier 2 扩展聚合）一起引入。</para>
 /// </summary>
-public interface IAggregateFunction
+public interface IAggregateFunction : ISqlFunction
 {
     /// <summary>规范函数名（小写）。</summary>
-    string Name { get; }
-
     /// <summary>
     /// 桥接到现有高性能执行路径的 legacy 聚合枚举。
     /// <para>过渡期字段：内置 7 个聚合（count/sum/min/max/avg/first/last）通过该值复用

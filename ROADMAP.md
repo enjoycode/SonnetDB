@@ -154,9 +154,12 @@
 | #37a | 文档完善（已落地部分）：重写 `README.md` / `README.en.md`，补齐 `docs/getting-started.md` / `docs/data-model.md` / `docs/sql-reference.md` / `docs/file-format.md` 及发布文档，使用 JekyllNet 构建内置 `/help` 帮助站点，核对路线图与当前代码/功能，清理过时说明。 | ✅ |
 | #37b | 文档发布：将 JekyllNet 文档站点接入 GitHub Pages 自动构建与发布流水线，支持从同一套 `docs/` 源码同时产出服务端 `/help` 站点与 Pages 静态站点，避免文档仅内置在 `TSLite.Server` 镜像中。 | ✅ |
 | #38 | 发布 NuGet 包 `TSLite 0.1.0` + `.github/workflows/publish.yml`，打包生成一套包含 `TSLite`、`TSLite.Data`、`TSLite.Cli` 的 SDK Bundle，并附带使用说明；发布 Windows 和 Linux 版本；再打包 `TSLite.Server` 完整 Bundle，包含前端、`TSLite.Cli`、`TSLite.Data` 等，能够一键启动；同时生成 Windows `msi` 与 Linux `deb` / `rpm` 安装包。 | ✅ |
-| #39 |  docker 服务端模式的镜像到 maikebing iotsharp组织， 编写ci 等能自动发布| 📋 |
+| #39 | Docker 服务端模式镜像自动发布：新增 GitHub Actions 工作流，自动构建并推送 `TSLite.Server` 镜像到 `iotsharp/tslite-server` 与 `ghcr.io/<owner>/tslite-server`，补齐标签策略、运行说明与 Secrets 要求。 | ✅ |
 ---
 ## Milestone 10 — 扩展和第三方
+
+| PR | 主题 | 状态 |
+|----|------|------|
 | #40 |  实现cil的能力， 能够操作和打开本地文件， 可以连接tslite.server ， 评估是否考虑使用 TSLite.Data 来实现，或者是直接调用接口实现。 | 📋 |
 | #41 |  TSLite.Server 支持 订阅MQTT消息，通过后台管理来添加订阅。   | 📋 |
 | #42 | 批量入库快路径核心库 `TSLite.Ingest`：协议嗅探（Detector）+ 三协议 reader（LineProtocol / JSON / Bulk INSERT VALUES）+ `BulkIngestor` 统一消费入口（ArrayPool 8192 批 → `Tsdb.WriteMany`，支持 FailFast/Skip 与可选 FlushOnComplete）。绕开每条 INSERT 的 SQL Lexer→Parser→Planner 开销，为大批量写入提供基础；`src/TSLite` 仍保持零第三方运行时依赖。 | ✅ |
@@ -279,12 +282,12 @@ db.Functions.RegisterAggregate(new KalmanAggregate()); // 实现 IAggregateFunct
 | 6 | SQL 前端 + Tag 倒排索引 | #22 ~ #28 | ✅ |
 | 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | ✅ |
 | 8 | 服务器模式（HTTP + 远端 ADO + 控制面 + Vue3 后台 + SSE） | #32 ~ #34c | ✅ |
-| 9 | 性能基准与发布 | #35 ~ #39（含 #36、#37a、#37b） | 🚧（#35 / #36 / #37a / #37b / #38 ✅，#39 📋） |
+| 9 | 性能基准与发布 | #35 ~ #39（含 #36、#37a、#37b） | ✅ |
 | 10 | 扩展和第三方 | #40, #41 + #42~#45 批量入库专题 | 🚧（#42~#45 ✅） |
 | 11 | 写入快路径（PR #45 瓶颈收尾） | #46 ~ #49 | ✅ |
 | 12 | 函数与算子扩展（PID / Forecast / UDF） | #50 ~ #57 | 📋 |
 
-**当前推进顺序**：PR #39（Milestone 9 剩余发布工作） → PR #50（Milestone 12 函数注册表基础设施）。
+**当前推进顺序**：PR #50（Milestone 12 函数注册表基础设施）。
 
 ---
 

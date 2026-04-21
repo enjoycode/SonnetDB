@@ -147,6 +147,71 @@ public class SqlExecutorSelectTests : IDisposable
         Assert.Equal(["u"], r.Columns);
     }
 
+    [Fact]
+    public void Select_ScalarFunctions_ReturnComputedValues()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var r = Select(db, "SELECT abs(-usage), round(usage / 3, 2), sqrt(count), log(count, 10), coalesce(label, 'n/a') FROM cpu WHERE host = 'h1'");
+
+        Assert.Equal(["abs", "round", "sqrt(count)", "log", "coalesce"], r.Columns);
+        Assert.Equal(3, r.Rows.Count);
+        Assert.Equal(1.0, r.Rows[0][0]);
+        Assert.Equal(Math.Round(1.0 / 3.0, 2), r.Rows[0][1]);
+        Assert.Equal(Math.Sqrt(10.0), r.Rows[0][2]);
+        Assert.Equal(Math.Log(10.0, 10.0), r.Rows[0][3]);
+        Assert.Equal("n/a", r.Rows[0][4]);
+    }
+
+    [Fact]
+    public void Select_Coalesce_UsesFirstNonNullFieldValue()
+    {
+        using var db = OpenWithSchema(Options());
+        SqlExecutor.Execute(db,
+            "INSERT INTO cpu (time, host, usage) VALUES (1000, 'h1', 1.0), (2000, 'h1', 2.0)");
+        SqlExecutor.Execute(db,
+            "INSERT INTO cpu (time, host, label) VALUES (2000, 'h1', 'ok'), (3000, 'h1', 'late')");
+
+        var r = Select(db, "SELECT time, coalesce(label, 'missing') FROM cpu WHERE host = 'h1'");
+
+        Assert.Equal([2000L, 3000L], r.Rows.Select(row => (long)row[0]!));
+        Assert.Equal("ok", r.Rows[0][1]);
+        Assert.Equal("late", r.Rows[1][1]);
+    }
+
+    [Fact]
+    public void Select_ScalarFunctionAlias_RenamesColumn()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var r = Select(db, "SELECT round(usage, 1) AS rounded FROM cpu WHERE host = 'h1'");
+
+        Assert.Equal(["rounded"], r.Columns);
+        Assert.Equal(1.0, r.Rows[0][0]);
+    }
+
+    [Fact]
+    public void Select_UnknownScalarFunction_Throws()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            SqlExecutor.Execute(db, "SELECT mystery(usage) FROM cpu WHERE host = 'h1'"));
+    }
+
+    [Fact]
+    public void Select_ScalarFunction_InvalidArgumentCount_Throws()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            SqlExecutor.Execute(db, "SELECT abs() FROM cpu WHERE host = 'h1'"));
+    }
+
     // ── 聚合模式 ───────────────────────────────────────────────────────────
 
     [Fact]

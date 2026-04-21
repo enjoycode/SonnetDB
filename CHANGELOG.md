@@ -6,9 +6,26 @@
 ## [Unreleased]
 
 ### Added
+- **PR #39：Docker 镜像自动发布**
+  - 新增 `.github/workflows/docker-publish.yml`：在 `main` 分支相关文件变更、`v*` 标签或手动触发时，自动构建 `src/TSLite.Server/Dockerfile` 并推送镜像。
+  - 目标镜像仓库：
+    - Docker Hub：`iotsharp/tslite-server`
+    - GHCR：`ghcr.io/<owner>/tslite-server`
+  - 标签策略覆盖 `latest`、`edge`、`vX.Y.Z`、`X.Y` 与 `sha-<commit>`，并写入 OCI labels。
+  - 工作流接入 `docker/setup-buildx-action`、`docker/metadata-action`、`docker/login-action`、`docker/build-push-action`，并启用 GitHub Actions Docker layer cache。
+- 新增 `docs/releases/docker-image.md`，补齐 Docker 镜像的启动方式、标签策略、自动发布触发条件和仓库 Secrets 要求。
+
 - **PR #37b：GitHub Pages 文档自动发布**
   - 新增 `.github/workflows/docs-pages.yml`：在 `main` 分支文档变更或手动触发时，自动执行 `dotnet tool restore` + `jekyllnet build`，并通过 GitHub Pages 官方 Actions 上传和部署静态文档站点。
   - Pages 构建阶段会基于仓库名动态注入文档基址（例如 `/TSLite`），因此无需维护第二套独立文档源码。
+
+- **Milestone 12 — PR #51：Tier 1 标量函数 + SQL 函数调用扩展**
+  - 新增公共类型 `ISqlFunction` / `IScalarFunction` / `FunctionKind`，并扩展 `FunctionRegistry` 的 `TryGetScalar(name, out function)` / `ScalarFunctions` / `GetFunctionKind(name)` API；`IAggregateFunction` 改为继承 `ISqlFunction` 共享 `Name` 契约。
+  - 落地内置标量函数：`abs` / `round(value[, digits])` / `sqrt` / `log(value[, base])` / `coalesce(...)`；统一在 `BuiltInScalarFunction` 中做参数个数校验，并通过 `RequireDouble` 兼容 byte/int/long/float/double/decimal。
+  - `SelectExecutor` 新增 `ProjectionKind.Scalar` 投影路径，支持在 SELECT 投影中嵌套调用、与算术表达式混用，并自动汇总标量函数引用的字段名加入 `QueryFieldValues` 的字段集；为 `Window` / `TableValued` 类别预留诊断分支，便于 PR #53 / #55 接入。
+  - **AST 重构（破坏性内部 API）**：`SelectStatement.GroupByTime: TimeBucketSpec?` 替换为 `SelectStatement.GroupBy: IReadOnlyList<SqlExpression>`，由 `SelectExecutor.ResolveGroupByTime` 在执行阶段把 `time(duration)` 形式归约为 `TimeBucketSpec`；`SqlParser.ParseGroupByList` / `ParseGroupByExpression` 取代原 `ParseGroupByTime`，仍在 parser 阶段拒绝 `time(0)` 之类的非法 duration。无 GROUP BY 时 `GroupBy` 为空集合（不再为 `null`）。
+  - 新增/扩展测试：`tests/TSLite.Tests/Sql/SqlExecutorSelectTests.cs` 覆盖标量函数投影、`coalesce` 跨字段时间轴、别名、未知函数与参数个数错误；`SqlParserTests` 覆盖 `GROUP BY time(...)` 解析为 `FunctionCallExpression` 与标量函数调用解析；`FunctionRegistryTests` 增加 `TryGetScalar` / `GetFunctionKind` 与标量函数求值校验。
+  - `docs/sql-reference.md` 补充 SELECT 投影中标量函数的支持范围、嵌套规则与 `coalesce` 时间轴说明。
 
 - **Milestone 12 — 函数注册表基础设施（`FunctionRegistry`）**：新增 `src/TSLite/Query/Functions/` 目录，承载 Tier 1~3 函数扩展（PR #51~#57）所需的注册与解析骨架，零第三方依赖。
   - 新增公共类型 `FunctionRegistry`（静态注册表）+ `IAggregateFunction`（命名 / SQL 调用语法校验 / `LegacyAggregator` 桥接），通过 `TryGetAggregate(name, out function)` 与 `GetAggregate(Aggregator)` 双向查找内置 7 个聚合（count/sum/min/max/avg/first/last）。
@@ -25,6 +42,9 @@
   - 新增 `tests/TSLite.Tests/Query/Functions/Control/PidParameterEstimatorTests.cs`：20 项单元测试，覆盖三种整定方法的数值精度验证、非零基线、DataPoint 重载、Int64 字段值、边界/错误校验、负向阶跃及三种方法正参数一致性。
 
 ### Changed
+- `README.md` 与发布文档新增预编译 Docker 镜像入口，支持直接通过 `docker run iotsharp/tslite-server:latest` 启动服务端。
+- `ROADMAP.md` 中 `PR #39` 状态更新为已完成，Milestone 9 随之闭环。
+
 - 文档站点模板与交叉链接支持双部署模式：
   - `docs/_config.yml` 新增 `docs_baseurl`、`app_link_url`、`app_link_text`、`home_primary_url`、`home_primary_text` 配置项。
   - `docs/_layouts/default.html` 与多篇文档内的站内链接改为基于配置拼接，默认继续服务于 `TSLite.Server` 的 `/help/`，同时兼容 GitHub Pages 的仓库子路径。

@@ -33,17 +33,17 @@ public sealed record InsertStatement(
     IReadOnlyList<IReadOnlyList<SqlExpression>> Rows) : SqlStatement;
 
 /// <summary>
-/// <c>SELECT projections FROM measurement [WHERE expr] [GROUP BY time(duration)]</c>。
+/// <c>SELECT projections FROM measurement [WHERE expr] [GROUP BY expr, ...]</c>。
 /// </summary>
 /// <param name="Projections">投影列表，可包含 <c>*</c> / 函数 / 列引用。</param>
 /// <param name="Measurement">目标 measurement 名称。</param>
 /// <param name="Where">可选 WHERE 表达式。</param>
-/// <param name="GroupByTime">可选 GROUP BY time(...) 桶大小（毫秒）。</param>
+/// <param name="GroupBy">GROUP BY 表达式列表；当未指定 GROUP BY 时为空集合（不为 <c>null</c>）。</param>
 public sealed record SelectStatement(
     IReadOnlyList<SelectItem> Projections,
     string Measurement,
     SqlExpression? Where,
-    TimeBucketSpec? GroupByTime) : SqlStatement;
+    IReadOnlyList<SqlExpression> GroupBy) : SqlStatement;
 
 /// <summary>SELECT 投影项。</summary>
 /// <param name="Expression">投影表达式（可能为 <see cref="StarExpression"/>）。</param>

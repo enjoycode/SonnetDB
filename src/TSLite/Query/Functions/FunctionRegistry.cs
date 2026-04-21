@@ -6,14 +6,18 @@ using TSLite.Storage.Format;
 namespace TSLite.Query.Functions;
 
 /// <summary>
-/// 内置函数注册表；当前仅承载聚合函数。
+/// 内置函数注册表；当前承载聚合函数与标量函数。
 /// </summary>
 public static class FunctionRegistry
 {
     private static readonly IAggregateFunction[] _aggregateFunctionList = CreateAggregateFunctionList();
+    private static readonly IScalarFunction[] _scalarFunctionList = CreateScalarFunctionList();
 
     private static readonly IReadOnlyDictionary<string, IAggregateFunction> _aggregateFunctions =
-        CreateAggregateFunctionsByName(_aggregateFunctionList);
+        CreateFunctionsByName(_aggregateFunctionList);
+
+    private static readonly IReadOnlyDictionary<string, IScalarFunction> _scalarFunctions =
+        CreateFunctionsByName(_scalarFunctionList);
 
     private static readonly IReadOnlyDictionary<Aggregator, IAggregateFunction> _aggregateFunctionsByLegacy =
         CreateAggregateFunctionsByLegacy(_aggregateFunctionList);
@@ -21,14 +25,30 @@ public static class FunctionRegistry
     /// <summary>返回所有已注册内置聚合函数。</summary>
     public static IReadOnlyCollection<IAggregateFunction> AggregateFunctions => _aggregateFunctionList;
 
+    /// <summary>返回所有已注册内置标量函数。</summary>
+    public static IReadOnlyCollection<IScalarFunction> ScalarFunctions => _scalarFunctionList;
+
     /// <summary>按函数名查找聚合函数（大小写不敏感）。</summary>
-    /// <param name="name">SQL 函数名。</param>
-    /// <param name="function">命中时返回的内置聚合函数；未命中时为 <c>null</c>。</param>
-    /// <returns>是否命中。</returns>
     public static bool TryGetAggregate(string name, [MaybeNullWhen(false)] out IAggregateFunction function)
     {
         ArgumentNullException.ThrowIfNull(name);
         return _aggregateFunctions.TryGetValue(name, out function);
+    }
+
+    /// <summary>按函数名查找标量函数（大小写不敏感）。</summary>
+    public static bool TryGetScalar(string name, [MaybeNullWhen(false)] out IScalarFunction function)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return _scalarFunctions.TryGetValue(name, out function);
+    }
+
+    /// <summary>判断函数名属于哪一类内置函数。</summary>
+    public static FunctionKind GetFunctionKind(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        if (_aggregateFunctions.ContainsKey(name)) return FunctionKind.Aggregate;
+        if (_scalarFunctions.ContainsKey(name)) return FunctionKind.Scalar;
+        return FunctionKind.Unknown;
     }
 
     /// <summary>按 legacy 聚合枚举查找内置聚合函数。</summary>
@@ -48,10 +68,19 @@ public static class FunctionRegistry
         new BuiltInAggregateFunction("last", Aggregator.Last),
     ];
 
-    private static IReadOnlyDictionary<string, IAggregateFunction> CreateAggregateFunctionsByName(
-        IAggregateFunction[] functions)
+    private static IScalarFunction[] CreateScalarFunctionList() =>
+    [
+        new BuiltInScalarFunction("abs", 1, 1, static args => Math.Abs(RequireDouble(args[0], "abs"))),
+        new BuiltInScalarFunction("round", 1, 2, EvaluateRound),
+        new BuiltInScalarFunction("sqrt", 1, 1, static args => Math.Sqrt(RequireDouble(args[0], "sqrt"))),
+        new BuiltInScalarFunction("log", 1, 2, EvaluateLog),
+        new BuiltInScalarFunction("coalesce", 1, int.MaxValue, EvaluateCoalesce),
+    ];
+
+    private static IReadOnlyDictionary<string, TFunction> CreateFunctionsByName<TFunction>(TFunction[] functions)
+        where TFunction : class, ISqlFunction
     {
-        var dict = new Dictionary<string, IAggregateFunction>(functions.Length, StringComparer.OrdinalIgnoreCase);
+        var dict = new Dictionary<string, TFunction>(functions.Length, StringComparer.OrdinalIgnoreCase);
         foreach (var function in functions)
             dict.Add(function.Name, function);
         return dict;
@@ -68,6 +97,57 @@ public static class FunctionRegistry
         }
 
         return dict;
+    }
+
+    private static object? EvaluateRound(IReadOnlyList<object?> args)
+    {
+        double value = RequireDouble(args[0], "round");
+        if (args.Count == 1)
+            return Math.Round(value);
+
+        int digits = checked((int)RequireDouble(args[1], "round"));
+        return Math.Round(value, digits);
+    }
+
+    private static object? EvaluateLog(IReadOnlyList<object?> args)
+    {
+        double value = RequireDouble(args[0], "log");
+        if (args.Count == 1)
+            return Math.Log(value);
+
+        double newBase = RequireDouble(args[1], "log");
+        return Math.Log(value, newBase);
+    }
+
+    private static object? EvaluateCoalesce(IReadOnlyList<object?> args)
+    {
+        foreach (var arg in args)
+        {
+            if (arg is not null)
+                return arg;
+        }
+
+        return null;
+    }
+
+    private static double RequireDouble(object? value, string functionName)
+    {
+        return value switch
+        {
+            byte b => b,
+            sbyte sb => sb,
+            short s => s,
+            ushort us => us,
+            int i => i,
+            uint ui => ui,
+            long l => l,
+            ulong ul => ul,
+            float f => f,
+            double d => d,
+            decimal m => (double)m,
+            null => throw new InvalidOperationException($"函数 {functionName} 不接受 NULL 参数。"),
+            _ => throw new InvalidOperationException($"函数 {functionName} 需要数值参数。"),
+        };
     }
 
     private sealed class BuiltInAggregateFunction : IAggregateFunction
@@ -112,6 +192,41 @@ public static class FunctionRegistry
                 throw new InvalidOperationException(
                     $"聚合函数 {call.Name} 不支持 String 类型字段 '{id.Name}'。");
             return col.Name;
+        }
+    }
+
+    private sealed class BuiltInScalarFunction : IScalarFunction
+    {
+        private readonly Func<IReadOnlyList<object?>, object?> _evaluator;
+
+        public BuiltInScalarFunction(string name, int minArgumentCount, int maxArgumentCount,
+            Func<IReadOnlyList<object?>, object?> evaluator)
+        {
+            Name = name;
+            MinArgumentCount = minArgumentCount;
+            MaxArgumentCount = maxArgumentCount;
+            _evaluator = evaluator;
+        }
+
+        public string Name { get; }
+
+        public int MinArgumentCount { get; }
+
+        public int MaxArgumentCount { get; }
+
+        public object? Evaluate(IReadOnlyList<object?> args)
+        {
+            ArgumentNullException.ThrowIfNull(args);
+            if (args.Count < MinArgumentCount || args.Count > MaxArgumentCount)
+            {
+                string expected = MinArgumentCount == MaxArgumentCount
+                    ? MinArgumentCount.ToString()
+                    : $"{MinArgumentCount}~{MaxArgumentCount}";
+                throw new InvalidOperationException(
+                    $"函数 {Name} 需要 {expected} 个参数，实际为 {args.Count}。");
+            }
+
+            return _evaluator(args);
         }
     }
 }

@@ -63,10 +63,21 @@ FROM cpu
 WHERE host = 'server-01' AND time >= 1713676800000 AND time < 1713677400000
 ```
 
+标量函数投影：
+
+```sql
+SELECT abs(-usage), round(usage / 3, 2), sqrt(count), log(count, 10), coalesce(label, 'n/a')
+FROM cpu
+WHERE host = 'server-01'
+```
+
 当前行为：
 
 - `SELECT *` 会展开为 `time + 所有 tag 列 + 所有 field 列`。
 - 当某个时间点缺少某个 field 时，结果列会返回 `NULL`。
+- 标量函数当前支持 `abs`、`round`、`sqrt`、`log`、`coalesce`。
+- 标量函数当前仅支持出现在 `SELECT` 投影中，可嵌套，也可接收算术表达式参数。
+- `coalesce(...)` 只会在当前结果行存在时参与求值；它不会额外扩展原始查询的时间轴。
 - 结果按时间升序返回。
 
 ### 聚合查询

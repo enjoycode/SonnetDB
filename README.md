@@ -75,6 +75,12 @@ docker build -f src/TSLite.Server/Dockerfile -t tslite-server .
 docker run --rm -p 5080:5080 -v ./tslite-data:/data tslite-server
 ```
 
+仓库的 Docker 发布工作流会额外构建并推送预编译镜像 `iotsharp/tslite-server` 与 `ghcr.io/<owner>/tslite-server`。当仓库 Secrets 配置完成后，也可以直接拉取：
+
+```bash
+docker run --rm -p 5080:5080 -v ./tslite-data:/data iotsharp/tslite-server:latest
+```
+
 启动后访问：
 
 - `http://127.0.0.1:5080/admin/`

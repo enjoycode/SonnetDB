@@ -90,7 +90,7 @@ public class SqlParserTests
         Assert.IsType<StarExpression>(stmt.Projections[0].Expression);
         Assert.Null(stmt.Projections[0].Alias);
         Assert.Null(stmt.Where);
-        Assert.Null(stmt.GroupByTime);
+        Assert.Empty(stmt.GroupBy);
     }
 
     [Fact]
@@ -114,7 +114,35 @@ public class SqlParserTests
     }
 
     [Fact]
-    public void Parse_Select_WhereClause_PrecedenceAndOrAndComparison()
+    public void Parse_Select_ScalarFunctionCall_ParsesArguments()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse(
+            "SELECT abs(value), round(value, 2), sqrt(value), log(value), coalesce(label, 'n/a') FROM cpu");
+
+        Assert.Equal(5, stmt.Projections.Count);
+        Assert.Equal("abs", Assert.IsType<FunctionCallExpression>(stmt.Projections[0].Expression).Name);
+        Assert.Equal("round", Assert.IsType<FunctionCallExpression>(stmt.Projections[1].Expression).Name);
+        Assert.Equal("sqrt", Assert.IsType<FunctionCallExpression>(stmt.Projections[2].Expression).Name);
+        Assert.Equal("log", Assert.IsType<FunctionCallExpression>(stmt.Projections[3].Expression).Name);
+        var coalesce = Assert.IsType<FunctionCallExpression>(stmt.Projections[4].Expression);
+        Assert.Equal("coalesce", coalesce.Name);
+        Assert.Equal(LiteralExpression.String("n/a"), coalesce.Arguments[1]);
+    }
+
+    [Fact]
+    public void Parse_Select_GroupByGenericExpression_PreservesAst()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse(
+            "SELECT avg(value) FROM cpu GROUP BY time(1m)");
+
+        Assert.Single(stmt.GroupBy);
+        var fn = Assert.IsType<FunctionCallExpression>(stmt.GroupBy[0]);
+        Assert.Equal("time", fn.Name);
+        Assert.Equal(new DurationLiteralExpression(60_000L), fn.Arguments[0]);
+    }
+
+    [Fact]
+    public void Parse_Select_WherePrecedence_AndBeforeOr()
     {
         var stmt = (SelectStatement)SqlParser.Parse(
             "SELECT * FROM cpu WHERE host = 'a' AND value > 10 OR ok = TRUE");
@@ -163,8 +191,11 @@ public class SqlParserTests
     {
         var stmt = (SelectStatement)SqlParser.Parse(
             "SELECT avg(v) FROM cpu WHERE time >= 1000 AND time < 2000 GROUP BY time(1m)");
-        Assert.NotNull(stmt.GroupByTime);
-        Assert.Equal(60_000L, stmt.GroupByTime!.BucketSizeMs);
+        Assert.NotEmpty(stmt.GroupBy);
+        var groupBy = Assert.IsType<FunctionCallExpression>(stmt.GroupBy[0]);
+        Assert.Equal("time", groupBy.Name);
+        Assert.Single(groupBy.Arguments);
+        Assert.Equal(new DurationLiteralExpression(60_000L), groupBy.Arguments[0]);
     }
 
     [Fact]

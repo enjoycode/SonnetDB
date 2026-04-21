@@ -227,15 +227,15 @@ public sealed class SqlParser
             where = ParseExpression();
         }
 
-        TimeBucketSpec? groupByTime = null;
+        var groupBy = Array.Empty<SqlExpression>();
         if (Current.Kind == TokenKind.KeywordGroup)
         {
             Advance();
             Expect(TokenKind.KeywordBy);
-            groupByTime = ParseGroupByTime();
+            groupBy = ParseGroupByList();
         }
 
-        return new SelectStatement(projections, measurement, where, groupByTime);
+        return new SelectStatement(projections, measurement, where, groupBy);
     }
 
     private IReadOnlyList<SelectItem> ParseSelectList()
@@ -279,19 +279,34 @@ public sealed class SqlParser
         return new SelectItem(expression, alias);
     }
 
-    private TimeBucketSpec ParseGroupByTime()
+    private SqlExpression[] ParseGroupByList()
     {
-        var position = Current.Position;
-        Expect(TokenKind.KeywordTime);
-        Expect(TokenKind.LeftParen);
-        if (Current.Kind != TokenKind.DurationLiteral)
-            throw Error("GROUP BY time(...) 内必须是 duration 字面量，例如 1m / 30s");
-        var duration = Current.IntegerValue;
-        if (duration <= 0)
-            throw new SqlParseException("GROUP BY time(...) 桶大小必须 > 0", position);
-        Advance();
-        Expect(TokenKind.RightParen);
-        return new TimeBucketSpec(duration);
+        var items = new List<SqlExpression> { ParseGroupByExpression() };
+        while (Current.Kind == TokenKind.Comma)
+        {
+            Advance();
+            items.Add(ParseGroupByExpression());
+        }
+
+        return items.ToArray();
+    }
+
+    private SqlExpression ParseGroupByExpression()
+    {
+        var expression = ParseExpression();
+
+        if (expression is FunctionCallExpression
+            {
+                Name: var name,
+                IsStar: false,
+                Arguments: [DurationLiteralExpression { Milliseconds: <= 0 }]
+            }
+            && string.Equals(name, "time", StringComparison.OrdinalIgnoreCase))
+        {
+            throw Error("GROUP BY time(...) 桶大小必须 > 0");
+        }
+
+        return expression;
     }
 
     // ── DELETE ─────────────────────────────────────────────────────────────
