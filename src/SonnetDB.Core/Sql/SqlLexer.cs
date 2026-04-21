@@ -65,6 +65,12 @@ public sealed class SqlLexer
         ["tokens"] = TokenKind.KeywordTokens,
         ["token"] = TokenKind.KeywordToken,
         ["issue"] = TokenKind.KeywordIssue,
+
+        // 元数据查询：SHOW MEASUREMENTS / SHOW TABLES / DESCRIBE [MEASUREMENT] <name>
+        ["measurements"] = TokenKind.KeywordMeasurements,
+        ["tables"] = TokenKind.KeywordTables,
+        ["describe"] = TokenKind.KeywordDescribe,
+        ["desc"] = TokenKind.KeywordDesc,
     };
 
     private readonly string _source;

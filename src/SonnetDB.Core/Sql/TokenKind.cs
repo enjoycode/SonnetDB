@@ -90,4 +90,10 @@ public enum TokenKind
     KeywordTokens,
     KeywordToken,
     KeywordIssue,
+
+    // 元数据查询：SHOW MEASUREMENTS / SHOW TABLES / DESCRIBE [MEASUREMENT] <name>
+    KeywordMeasurements,
+    KeywordTables,
+    KeywordDescribe,
+    KeywordDesc,
 }

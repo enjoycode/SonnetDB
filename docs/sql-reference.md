@@ -162,6 +162,49 @@ DELETE FROM cpu WHERE time >= 1713676800000 AND time <= 1713677400000
 
 这些写法中的不少在当前版本会直接报错。
 
+## 元数据查询
+
+### `SHOW MEASUREMENTS` / `SHOW TABLES`
+
+列出当前数据库中所有 measurement，按字典序升序返回单列 `name`。
+`SHOW TABLES` 是 `SHOW MEASUREMENTS` 的兼容别名，便于 DBeaver、DataGrip
+等通用 SQL 工具直接探测表清单。
+
+```sql
+SHOW MEASUREMENTS;
+SHOW TABLES;        -- 等价
+```
+
+| name |
+|------|
+| cpu  |
+| mem  |
+
+### `DESCRIBE [MEASUREMENT] <name>` / `DESC <name>`
+
+描述指定 measurement 的列结构，按 `CREATE MEASUREMENT` 声明顺序返回三列：
+
+| 列 | 类型 | 说明 |
+|----|------|------|
+| `column_name` | string | 列名 |
+| `column_type` | string | `tag` 或 `field` |
+| `data_type`   | string | `float64` / `int64` / `boolean` / `string` |
+
+关键字 `MEASUREMENT` 可省略，`DESC` 是 `DESCRIBE` 的兼容别名。
+
+```sql
+DESCRIBE MEASUREMENT cpu;
+DESCRIBE cpu;       -- 等价
+DESC cpu;           -- 等价
+```
+
+| column_name | column_type | data_type |
+|-------------|-------------|-----------|
+| host        | tag         | string    |
+| usage       | field       | float64   |
+
+若指定 measurement 不存在，会抛出 `InvalidOperationException`。
+
 ## 控制面 SQL
 
 控制面 SQL 仅在服务端模式可用。

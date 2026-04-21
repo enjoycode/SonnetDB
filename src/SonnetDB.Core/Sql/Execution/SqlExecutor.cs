@@ -68,6 +68,8 @@ public static class SqlExecutor
             InsertStatement insert => ExecuteInsert(tsdb, insert),
             SelectStatement select => ExecuteSelect(tsdb, select),
             DeleteStatement delete => ExecuteDelete(tsdb, delete),
+            ShowMeasurementsStatement => ShowMeasurements(tsdb),
+            DescribeMeasurementStatement describe => DescribeMeasurement(tsdb, describe.Name),
             CreateUserStatement createUser => ExecuteControlPlane(controlPlane,
                 cp => { cp.CreateUser(createUser.UserName, createUser.Password, createUser.IsSuperuser); return (object)1; }),
             AlterUserPasswordStatement alterUser => ExecuteControlPlane(controlPlane,
@@ -93,6 +95,43 @@ public static class SqlExecutor
                 $"SQL 语句类型 '{statement.GetType().Name}' 尚未实现。"),
         };
     }
+
+    private static SelectExecutionResult ShowMeasurements(Tsdb tsdb)
+    {
+        var snapshot = tsdb.Measurements.Snapshot();
+        var rows = new List<IReadOnlyList<object?>>(snapshot.Count);
+        foreach (var schema in snapshot)
+            rows.Add(new object?[] { schema.Name });
+        return new SelectExecutionResult(new[] { "name" }, rows);
+    }
+
+    private static SelectExecutionResult DescribeMeasurement(Tsdb tsdb, string name)
+    {
+        var schema = tsdb.Measurements.TryGet(name)
+            ?? throw new InvalidOperationException($"measurement '{name}' 不存在。");
+        var rows = new List<IReadOnlyList<object?>>(schema.Columns.Count);
+        foreach (var col in schema.Columns)
+        {
+            rows.Add(new object?[]
+            {
+                col.Name,
+                col.Role == MeasurementColumnRole.Tag ? "tag" : "field",
+                FormatFieldType(col.DataType),
+            });
+        }
+        return new SelectExecutionResult(
+            new[] { "column_name", "column_type", "data_type" },
+            rows);
+    }
+
+    private static string FormatFieldType(FieldType type) => type switch
+    {
+        FieldType.Float64 => "float64",
+        FieldType.Int64 => "int64",
+        FieldType.Boolean => "boolean",
+        FieldType.String => "string",
+        _ => type.ToString().ToLowerInvariant(),
+    };
 
     private static object ShowUsers(IControlPlane cp)
     {

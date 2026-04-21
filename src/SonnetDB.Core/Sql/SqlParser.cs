@@ -73,7 +73,9 @@ public sealed class SqlParser
             TokenKind.KeywordRevoke => ParseRevoke(),
             TokenKind.KeywordShow => ParseShow(),
             TokenKind.KeywordIssue => ParseIssue(),
-            _ => throw Error("期望 CREATE / INSERT / SELECT / DELETE / DROP / ALTER / GRANT / REVOKE / SHOW / ISSUE 关键字"),
+            TokenKind.KeywordDescribe => ParseDescribe(),
+            TokenKind.KeywordDesc => ParseDescribe(),
+            _ => throw Error("期望 CREATE / INSERT / SELECT / DELETE / DROP / ALTER / GRANT / REVOKE / SHOW / ISSUE / DESCRIBE 关键字"),
         };
     }
 
@@ -729,9 +731,26 @@ public sealed class SqlParser
                     return new ShowTokensStatement(tu);
                 }
                 return new ShowTokensStatement(null);
+            case TokenKind.KeywordMeasurements:
+            case TokenKind.KeywordTables:
+                Advance();
+                return new ShowMeasurementsStatement();
             default:
-                throw Error("SHOW 后面期望 USERS / GRANTS / DATABASES / TOKENS");
+                throw Error("SHOW 后面期望 USERS / GRANTS / DATABASES / TOKENS / MEASUREMENTS / TABLES");
         }
+    }
+
+    /// <summary>
+    /// <c>DESCRIBE [MEASUREMENT] &lt;name&gt;</c> / <c>DESC [MEASUREMENT] &lt;name&gt;</c>。
+    /// </summary>
+    private DescribeMeasurementStatement ParseDescribe()
+    {
+        // 当前 token 是 DESCRIBE 或 DESC
+        Advance();
+        if (Current.Kind == TokenKind.KeywordMeasurement)
+            Advance();
+        var name = ExpectIdentifierName();
+        return new DescribeMeasurementStatement(name);
     }
 
     private string ExpectStringLiteral()

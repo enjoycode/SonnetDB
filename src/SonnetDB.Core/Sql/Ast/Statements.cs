@@ -66,3 +66,16 @@ public sealed record TimeBucketSpec(long BucketSizeMs);
 public sealed record DeleteStatement(
     string Measurement,
     SqlExpression Where) : SqlStatement;
+
+/// <summary>
+/// <c>SHOW MEASUREMENTS</c>（兼容别名 <c>SHOW TABLES</c>）：列出当前数据库中所有 measurement。
+/// 返回单列 <c>name</c>(string)，按字典序升序排列。
+/// </summary>
+public sealed record ShowMeasurementsStatement : SqlStatement;
+
+/// <summary>
+/// <c>DESCRIBE [MEASUREMENT] &lt;name&gt;</c>（兼容别名 <c>DESC</c>）：描述指定 measurement 的列结构。
+/// 返回三列 <c>column_name</c>(string)、<c>column_type</c>(string，取值 <c>tag</c> / <c>field</c>)、<c>data_type</c>(string，例如 <c>float64</c> / <c>int64</c> / <c>boolean</c> / <c>string</c>)。
+/// </summary>
+/// <param name="Name">目标 measurement 名称。</param>
+public sealed record DescribeMeasurementStatement(string Name) : SqlStatement;
