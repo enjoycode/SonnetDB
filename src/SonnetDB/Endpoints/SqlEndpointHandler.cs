@@ -1,10 +1,12 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using SonnetDB.Engine;
+using SonnetDB.Auth;
 using SonnetDB.Configuration;
 using SonnetDB.Contracts;
+using SonnetDB.Engine;
+using SonnetDB.Exceptions;
 using SonnetDB.Hosting;
 using SonnetDB.Json;
 using SonnetDB.Sql;
@@ -62,12 +64,13 @@ internal static class SqlEndpointHandler
     /// <summary>
     /// 处理 <c>POST /v1/sql</c> 单条控制面 SQL 请求（无 db 路径）。
     /// 仅支持控制面语句（CREATE USER / GRANT / CREATE DATABASE / SHOW USERS 等）以及 <c>SHOW DATABASES</c>。
-    /// 调用方必须先确认请求者是 admin。
+    /// 调用方需先确认请求者属于 admin 或动态用户 token，具体语句级权限由本方法继续细分。
     /// </summary>
     public static async Task HandleControlPlaneAsync(
         HttpContext context,
         SqlRequest request,
         ServerMetrics metrics,
+        bool isAdmin,
         IControlPlane controlPlane)
     {
         ArgumentNullException.ThrowIfNull(controlPlane);
@@ -102,10 +105,25 @@ internal static class SqlEndpointHandler
             return;
         }
 
+        if (!TryAuthorizeControlPlaneStatement(context, parsed, isAdmin, out var authorizationError))
+        {
+            metrics.RecordSqlError();
+            MaybePublishSlow(broadcaster, options, _controlPlaneDatabaseLabel, request.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+            await WriteErrorAsync(context, "forbidden", authorizationError).ConfigureAwait(false);
+            return;
+        }
+
         object result;
         try
         {
             result = SqlExecutor.ExecuteControlPlaneStatement(parsed, controlPlane);
+        }
+        catch (ControlPlaneAccessDeniedException ex)
+        {
+            metrics.RecordSqlError();
+            MaybePublishSlow(broadcaster, options, _controlPlaneDatabaseLabel, request.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+            await WriteErrorAsync(context, "forbidden", ex.Message).ConfigureAwait(false);
+            return;
         }
         catch (Exception ex)
         {
@@ -166,11 +184,19 @@ internal static class SqlEndpointHandler
                 return;
             }
 
-            if (IsControlPlaneStatement(parsed) && !isAdmin)
+            if (!TryAuthorizeControlPlaneStatement(context, parsed, isAdmin, out var authorizationError))
             {
                 metrics.RecordSqlError();
                 MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
-                await WriteErrorAsync(context, "forbidden", "控制面 SQL（CREATE USER / GRANT / CREATE DATABASE / SHOW USERS 等）仅 admin 可执行。").ConfigureAwait(false);
+                await WriteErrorAsync(context, "forbidden", authorizationError).ConfigureAwait(false);
+                return;
+            }
+
+            if (!IsControlPlaneStatement(parsed) && RequiresWritePermission(parsed) && !canWrite)
+            {
+                metrics.RecordSqlError();
+                MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+                await WriteErrorAsync(context, "forbidden", "当前凭据对该数据库没有写权限。").ConfigureAwait(false);
                 return;
             }
 
@@ -178,6 +204,13 @@ internal static class SqlEndpointHandler
             try
             {
                 result = SqlExecutor.ExecuteStatement(tsdb, parsed, controlPlane);
+            }
+            catch (ControlPlaneAccessDeniedException ex)
+            {
+                metrics.RecordSqlError();
+                MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+                await WriteErrorAsync(context, "forbidden", ex.Message).ConfigureAwait(false);
+                return;
             }
             catch (Exception ex)
             {
@@ -229,8 +262,8 @@ internal static class SqlEndpointHandler
                     }
                 default:
                     {
-                        // CREATE MEASUREMENT 、CREATE USER 等 DDL：返回受影响行数 0
-                        // 控制面 DDL 已在上面单独鉴权 isAdmin，这里仅校验需 canWrite 的普通 DDL。
+                        // CREATE MEASUREMENT、CREATE USER 等 DDL：返回受影响行数 0。
+                        // 控制面语句已在上面按 admin-only / self-service 细分鉴权，这里仅校验需 canWrite 的普通 DDL。
                         if (!IsControlPlaneStatement(parsed) && !canWrite)
                         {
                             metrics.RecordSqlError();
@@ -314,8 +347,37 @@ internal static class SqlEndpointHandler
         await body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
     }
 
-    /// <summary>判别是否为控制面 DDL（需要超级用户权限）。SHOW DATABASES 不在此列，普通认证用户可调用。</summary>
-    private static bool IsControlPlaneStatement(SqlStatement statement) => statement is
+    private static bool TryAuthorizeControlPlaneStatement(
+        HttpContext context,
+        SqlStatement statement,
+        bool isAdmin,
+        out string errorMessage)
+    {
+        if (IsAdminOnlyControlPlaneStatement(statement) && !isAdmin)
+        {
+            errorMessage = "控制面 SQL（CREATE USER / GRANT / CREATE DATABASE / SHOW USERS 等）仅 admin 可执行。";
+            return false;
+        }
+
+        if (IsSelfServiceControlPlaneStatement(statement) && !(isAdmin || HasSelfServiceControlPlaneAccess(context)))
+        {
+            errorMessage = "SHOW GRANTS / SHOW TOKENS / ISSUE TOKEN / REVOKE TOKEN 仅动态用户本人可执行，admin 除外。";
+            return false;
+        }
+
+        errorMessage = string.Empty;
+        return true;
+    }
+
+    private static bool HasSelfServiceControlPlaneAccess(HttpContext context)
+        => BearerAuthMiddleware.GetUser(context) is AuthenticatedUser { IsSuperuser: false };
+
+    /// <summary>判别是否为需要通过服务端控制面执行的 SQL。</summary>
+    private static bool IsControlPlaneStatement(SqlStatement statement)
+        => IsAdminOnlyControlPlaneStatement(statement) || IsSelfServiceControlPlaneStatement(statement);
+
+    /// <summary>判别是否为仅 admin 可执行的控制面语句。</summary>
+    private static bool IsAdminOnlyControlPlaneStatement(SqlStatement statement) => statement is
         CreateUserStatement or
         AlterUserPasswordStatement or
         DropUserStatement or
@@ -323,11 +385,23 @@ internal static class SqlEndpointHandler
         RevokeStatement or
         CreateDatabaseStatement or
         DropDatabaseStatement or
-        ShowUsersStatement or
+        ShowUsersStatement;
+
+    /// <summary>判别是否为普通动态用户可按“仅自己”执行的控制面语句。</summary>
+    private static bool IsSelfServiceControlPlaneStatement(SqlStatement statement) => statement is
         ShowGrantsStatement or
         ShowTokensStatement or
         IssueTokenStatement or
         RevokeTokenStatement;
+
+    /// <summary>
+    /// 判别是否为需要数据库写权限的数据面语句。
+    /// </summary>
+    private static bool RequiresWritePermission(SqlStatement statement) => statement is not
+        (SelectStatement or
+        ShowMeasurementsStatement or
+        DescribeMeasurementStatement or
+        ShowDatabasesStatement);
 
     private static void MaybePublishSlow(
         EventBroadcaster? broadcaster,

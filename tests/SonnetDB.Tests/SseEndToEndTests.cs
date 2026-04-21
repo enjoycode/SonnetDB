@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
+using SonnetDB.Auth;
 using SonnetDB.Configuration;
 using SonnetDB.Contracts;
 using SonnetDB.Hosting;
@@ -26,6 +27,8 @@ public sealed class SseEndToEndTests : IAsyncLifetime
     private string? _baseUrl;
     private string? _dataRoot;
     private const string _adminToken = "admin-sse-token";
+    private const string _visibleDb = "alpha";
+    private const string _hiddenDb = "beta";
 
     public async Task InitializeAsync()
     {
@@ -133,6 +136,123 @@ public sealed class SseEndToEndTests : IAsyncLifetime
             Assert.Equal(dbName, doc.RootElement.GetProperty("database").GetString());
             Assert.Equal("dropped", doc.RootElement.GetProperty("action").GetString());
         }
+    }
+
+    [Fact]
+    public async Task Events_WithDynamicUser_FiltersDbAndSlowQueryByGrant()
+    {
+        using var admin = CreateClient(_adminToken);
+        await CreateDatabaseAsync(admin, _visibleDb);
+        await CreateDatabaseAsync(admin, _hiddenDb);
+        await ExecuteSqlAsync(admin, _visibleDb, "CREATE USER watcher WITH PASSWORD 'p'");
+        await ExecuteSqlAsync(admin, _visibleDb, $"GRANT READ ON DATABASE {_visibleDb} TO watcher");
+        var watcherToken = await LoginAsync("watcher", "p");
+
+        using var sseClient = new HttpClient { BaseAddress = new Uri(_baseUrl!) };
+        using var streamReq = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/v1/events?access_token={watcherToken}&stream=db,slow_query");
+        var streamResp = await sseClient.SendAsync(streamReq, HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, streamResp.StatusCode);
+
+        using var stream = await streamResp.Content.ReadAsStreamAsync();
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        var buffer = new StringBuilder();
+
+        var hello = await ReadOneEventAsync(reader, buffer, TimeSpan.FromSeconds(5));
+        Assert.Equal("hello", hello.Event);
+
+        await ExecuteSqlAsync(admin, _hiddenDb, "CREATE MEASUREMENT hidden_cpu (host TAG, v FIELD FLOAT)");
+        await ExecuteSqlAsync(admin, _visibleDb, "CREATE MEASUREMENT visible_cpu (host TAG, v FIELD FLOAT)");
+
+        var slow = await ReadEventOfTypeAsync(reader, buffer, ServerEvent.ChannelSlowQuery, TimeSpan.FromSeconds(5));
+        using (var doc = JsonDocument.Parse(slow.Data))
+        {
+            Assert.Equal(_visibleDb, doc.RootElement.GetProperty("database").GetString());
+            Assert.Contains("visible_cpu", doc.RootElement.GetProperty("sql").GetString());
+        }
+
+        await CreateDatabaseAsync(admin, "gamma");
+        var drop = await admin.DeleteAsync($"/v1/db/{_visibleDb}");
+        Assert.Equal(HttpStatusCode.OK, drop.StatusCode);
+
+        var dbEvt = await ReadEventOfTypeAsync(reader, buffer, ServerEvent.ChannelDatabase, TimeSpan.FromSeconds(5));
+        using (var doc = JsonDocument.Parse(dbEvt.Data))
+        {
+            Assert.Equal(_visibleDb, doc.RootElement.GetProperty("database").GetString());
+            Assert.Equal(DatabaseEvent.ActionDropped, doc.RootElement.GetProperty("action").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task Events_WithDynamicUser_FiltersMetricsPerDatabaseSegments()
+    {
+        using var admin = CreateClient(_adminToken);
+        await CreateDatabaseAsync(admin, _visibleDb);
+        await CreateDatabaseAsync(admin, _hiddenDb);
+        await ExecuteSqlAsync(admin, _visibleDb, "CREATE USER metrics_reader WITH PASSWORD 'p'");
+        await ExecuteSqlAsync(admin, _visibleDb, $"GRANT READ ON DATABASE {_visibleDb} TO metrics_reader");
+        var readerToken = await LoginAsync("metrics_reader", "p");
+
+        using var sseClient = new HttpClient { BaseAddress = new Uri(_baseUrl!) };
+        using var streamReq = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/v1/events?access_token={readerToken}&stream=metrics");
+        var streamResp = await sseClient.SendAsync(streamReq, HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, streamResp.StatusCode);
+
+        using var stream = await streamResp.Content.ReadAsStreamAsync();
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        var buffer = new StringBuilder();
+
+        var hello = await ReadOneEventAsync(reader, buffer, TimeSpan.FromSeconds(5));
+        Assert.Equal("hello", hello.Event);
+
+        var metrics = await ReadEventOfTypeAsync(reader, buffer, ServerEvent.ChannelMetrics, TimeSpan.FromSeconds(4));
+        using var doc = JsonDocument.Parse(metrics.Data);
+        Assert.Equal(1, doc.RootElement.GetProperty("databases").GetInt32());
+        var perDatabase = doc.RootElement.GetProperty("perDatabaseSegments");
+        Assert.True(perDatabase.TryGetProperty(_visibleDb, out _));
+        Assert.False(perDatabase.TryGetProperty(_hiddenDb, out _));
+    }
+
+    private HttpClient CreateClient(string token)
+    {
+        var client = new HttpClient { BaseAddress = new Uri(_baseUrl!) };
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
+    private async Task<string> LoginAsync(string username, string password)
+    {
+        using var client = new HttpClient { BaseAddress = new Uri(_baseUrl!) };
+        var response = await client.PostAsync(
+            "/v1/auth/login",
+            JsonContent.Create(new LoginRequest(username, password), ServerJsonContext.Default.LoginRequest));
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, $"登录失败：{(int)response.StatusCode} {body}");
+
+        var login = JsonSerializer.Deserialize(body, ServerJsonContext.Default.LoginResponse);
+        Assert.NotNull(login);
+        return login!.Token;
+    }
+
+    private static async Task CreateDatabaseAsync(HttpClient client, string databaseName)
+    {
+        var response = await client.PostAsync(
+            "/v1/db",
+            JsonContent.Create(new CreateDatabaseRequest(databaseName), ServerJsonContext.Default.CreateDatabaseRequest));
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, $"创建数据库失败：{(int)response.StatusCode} {body}");
+    }
+
+    private static async Task ExecuteSqlAsync(HttpClient client, string db, string sql)
+    {
+        var response = await client.PostAsync(
+            $"/v1/db/{db}/sql",
+            JsonContent.Create(new SqlRequest(sql), ServerJsonContext.Default.SqlRequest));
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, $"执行 SQL 失败：{(int)response.StatusCode} {body}");
     }
 
     private static async Task<(string Event, string Data)> ReadEventOfTypeAsync(

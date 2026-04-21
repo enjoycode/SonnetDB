@@ -1,0 +1,186 @@
+using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
+using ModelContextProtocol.Protocol;
+using SonnetDB.Contracts;
+using SonnetDB.Sql.Ast;
+using SonnetDB.Sql.Execution;
+
+namespace SonnetDB.Mcp;
+
+/// <summary>
+/// MCP 端点返回的 measurement 列描述。
+/// </summary>
+internal sealed record McpMeasurementColumnResult(string Name, string ColumnType, string DataType);
+
+/// <summary>
+/// MCP tool <c>list_measurements</c> 的返回体。
+/// </summary>
+internal sealed record McpMeasurementListResult(string Database, IReadOnlyList<string> Measurements, bool Truncated);
+
+/// <summary>
+/// MCP tool/resource 的 measurement schema 返回体。
+/// </summary>
+internal sealed record McpMeasurementSchemaResult(
+    string Database,
+    string Measurement,
+    IReadOnlyList<McpMeasurementColumnResult> Columns);
+
+/// <summary>
+/// MCP tool <c>query_sql</c> 的返回体。
+/// </summary>
+internal sealed record McpSqlQueryResult(
+    string Database,
+    string StatementType,
+    IReadOnlyList<string> Columns,
+    IReadOnlyList<IReadOnlyList<JsonElementValue>> Rows,
+    int ReturnedRows,
+    bool Truncated);
+
+/// <summary>
+/// 数据库统计资源返回体。
+/// </summary>
+internal sealed record McpDatabaseStatsResult(
+    string Database,
+    int MeasurementCount,
+    int SegmentCount,
+    long MemTablePointCount,
+    long NextSegmentId,
+    long CheckpointLsn);
+
+/// <summary>
+/// MCP 工具/资源的辅助方法。
+/// </summary>
+internal static class SonnetDbMcpResults
+{
+    public const int DefaultToolRowLimit = 100;
+    public const int MaxToolRowLimit = 1000;
+    public const int ResourceRowLimit = 500;
+
+    /// <summary>
+    /// 校验并规范化工具的最大返回行数。
+    /// </summary>
+    public static int NormalizeToolRowLimit(int? requestedLimit)
+    {
+        var limit = requestedLimit ?? DefaultToolRowLimit;
+        if (limit <= 0)
+            throw new InvalidOperationException("maxRows 必须大于 0。");
+        if (limit > MaxToolRowLimit)
+            throw new InvalidOperationException($"maxRows 不能超过 {MaxToolRowLimit}。");
+        return limit;
+    }
+
+    /// <summary>
+    /// 在 AST 层对 SELECT 施加最大返回行数限制，并保留一行用于判断截断。
+    /// </summary>
+    public static SelectStatement ApplyToolRowLimit(SelectStatement statement, int maxRows, out bool canTruncate)
+    {
+        var probeFetch = checked(maxRows + 1);
+        if (statement.Pagination is null)
+        {
+            canTruncate = true;
+            return statement with { Pagination = new PaginationSpec(0, probeFetch) };
+        }
+
+        if (statement.Pagination.Fetch is null || statement.Pagination.Fetch.Value > maxRows)
+        {
+            canTruncate = true;
+            return statement with { Pagination = statement.Pagination with { Fetch = probeFetch } };
+        }
+
+        canTruncate = false;
+        return statement;
+    }
+
+    /// <summary>
+    /// 把查询结果裁剪到指定最大行数。
+    /// </summary>
+    public static (IReadOnlyList<IReadOnlyList<JsonElementValue>> Rows, bool Truncated) SliceRows(
+        SelectExecutionResult result,
+        int maxRows,
+        bool canTruncate)
+    {
+        var truncated = canTruncate && result.Rows.Count > maxRows;
+        var take = truncated ? maxRows : result.Rows.Count;
+        var rows = new List<IReadOnlyList<JsonElementValue>>(take);
+        for (int i = 0; i < take; i++)
+        {
+            var row = result.Rows[i];
+            var converted = new JsonElementValue[row.Count];
+            for (int c = 0; c < row.Count; c++)
+                converted[c] = ToJsonElementValue(row[c]);
+            rows.Add(converted);
+        }
+
+        return (rows, truncated);
+    }
+
+    /// <summary>
+    /// 生成成功的 MCP tool 返回值，同时附带文本和 structured content。
+    /// </summary>
+    public static CallToolResult Success<T>(T value, JsonTypeInfo<T> typeInfo)
+    {
+        var json = JsonSerializer.Serialize(value, typeInfo);
+        var structured = JsonSerializer.SerializeToElement(value, typeInfo);
+        return new CallToolResult
+        {
+            Content =
+            [
+                new TextContentBlock
+                {
+                    Text = json,
+                },
+            ],
+            StructuredContent = structured,
+            IsError = false,
+        };
+    }
+
+    /// <summary>
+    /// 生成失败的 MCP tool 返回值。
+    /// </summary>
+    public static CallToolResult Error(string message)
+        => new()
+        {
+            Content =
+            [
+                new TextContentBlock
+                {
+                    Text = message,
+                },
+            ],
+            IsError = true,
+        };
+
+    /// <summary>
+    /// 生成 JSON 文本资源。
+    /// </summary>
+    public static TextResourceContents Resource<T>(string uri, T value, JsonTypeInfo<T> typeInfo)
+        => new()
+        {
+            Uri = uri,
+            MimeType = "application/json",
+            Text = JsonSerializer.Serialize(value, typeInfo),
+        };
+
+    /// <summary>
+    /// 把执行结果中的标量值转换成 MCP 友好的 JSON 标量包装。
+    /// </summary>
+    public static JsonElementValue ToJsonElementValue(object? value) => value switch
+    {
+        null => new JsonElementValue(ScalarKind.Null),
+        string text => new JsonElementValue(ScalarKind.String, StringValue: text),
+        bool boolean => new JsonElementValue(ScalarKind.Boolean, BooleanValue: boolean),
+        byte number => new JsonElementValue(ScalarKind.Integer, IntegerValue: number),
+        sbyte number => new JsonElementValue(ScalarKind.Integer, IntegerValue: number),
+        short number => new JsonElementValue(ScalarKind.Integer, IntegerValue: number),
+        ushort number => new JsonElementValue(ScalarKind.Integer, IntegerValue: number),
+        int number => new JsonElementValue(ScalarKind.Integer, IntegerValue: number),
+        uint number => new JsonElementValue(ScalarKind.Integer, IntegerValue: number),
+        long number => new JsonElementValue(ScalarKind.Integer, IntegerValue: number),
+        ulong number when number <= long.MaxValue => new JsonElementValue(ScalarKind.Integer, IntegerValue: (long)number),
+        float number => new JsonElementValue(ScalarKind.Double, DoubleValue: number),
+        double number => new JsonElementValue(ScalarKind.Double, DoubleValue: number),
+        decimal number => new JsonElementValue(ScalarKind.Double, DoubleValue: (double)number),
+        _ => new JsonElementValue(ScalarKind.String, StringValue: value.ToString()),
+    };
+}

@@ -6,12 +6,14 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.AspNetCore;
 using SonnetDB.Auth;
 using SonnetDB.Configuration;
 using SonnetDB.Contracts;
 using SonnetDB.Endpoints;
 using SonnetDB.Hosting;
 using SonnetDB.Json;
+using SonnetDB.Mcp;
 
 namespace SonnetDB;
 
@@ -94,9 +96,11 @@ public static class Program
             o.SerializerOptions.TypeInfoResolverChain.Insert(0, ServerJsonContext.Default);
         });
 
+        builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton(serverOptions);
         builder.Services.AddSingleton<ServerMetrics>();
         builder.Services.AddSingleton<EventBroadcaster>();
+        builder.Services.AddSingleton<SonnetDbMcpContextAccessor>();
         builder.Services.AddSingleton(sp =>
         {
             var registry = new TsdbRegistry(serverOptions.DataRoot, sp.GetRequiredService<EventBroadcaster>());
@@ -114,11 +118,34 @@ public static class Program
         builder.Services.AddSingleton(_ => new UserStore(systemDirectory));
         builder.Services.AddSingleton(_ => new GrantsStore(systemDirectory));
         builder.Services.AddSingleton(_ => new InstallationStore(systemDirectory));
+        builder.Services.AddSingleton(_ => new AiConfigStore(systemDirectory));
+        builder.Services.AddHttpClient();
         builder.Services.AddSingleton<SonnetDB.Sql.Execution.IControlPlane>(sp =>
             new ControlPlane(
                 sp.GetRequiredService<UserStore>(),
                 sp.GetRequiredService<GrantsStore>(),
                 sp.GetRequiredService<TsdbRegistry>()));
+
+        builder.Services.AddMcpServer()
+            .WithHttpTransport(options =>
+            {
+                options.Stateless = true;
+                options.ConfigureSessionOptions = static (context, serverOptions, _) =>
+                {
+                    if (context.Items.TryGetValue(SonnetDbMcpContextAccessor.DatabaseNameItemKey, out var value)
+                        && value is string databaseName)
+                    {
+                        serverOptions.ServerInstructions =
+                            $"SonnetDB MCP endpoint for database '{databaseName}'. " +
+                            "Only read-only tools and resources are exposed. " +
+                            "Prefer bounded queries via SQL LIMIT / FETCH or the maxRows tool parameter.";
+                    }
+
+                    return Task.CompletedTask;
+                };
+            })
+            .WithTools<SonnetDbMcpTools>()
+            .WithResources<SonnetDbMcpResources>();
 
         // 在应用关闭时优雅释放所有 Tsdb 实例
         builder.Services.AddSingleton<IHostedService>(sp => new RegistryShutdownHook(sp.GetRequiredService<TsdbRegistry>()));
@@ -127,6 +154,8 @@ public static class Program
     private static void ConfigureMiddleware(WebApplication app, ServerOptions serverOptions)
     {
         var userStore = app.Services.GetRequiredService<UserStore>();
+        var grants = app.Services.GetRequiredService<GrantsStore>();
+        var registry = app.Services.GetRequiredService<TsdbRegistry>();
         // Bearer 认证（在所有 endpoint 之前）
         app.Use(async (context, next) =>
         {
@@ -142,13 +171,25 @@ public static class Program
             }
             await next(context).ConfigureAwait(false);
         });
+
+        app.Use(async (context, next) =>
+        {
+            if (await TryBindMcpDatabaseAsync(context, registry, grants).ConfigureAwait(false))
+                return;
+            await next(context).ConfigureAwait(false);
+        });
     }
 
     private static void MapEndpoints(WebApplication app, ServerOptions serverOptions)
     {
         var registry = app.Services.GetRequiredService<TsdbRegistry>();
+        var users = app.Services.GetRequiredService<UserStore>();
+        var grants = app.Services.GetRequiredService<GrantsStore>();
         var metrics = app.Services.GetRequiredService<ServerMetrics>();
         var installation = app.Services.GetRequiredService<InstallationStore>();
+
+        // ---- 产品官网首页（根路径 /）----
+        app.MapHomePage();
 
         // ---- Admin SPA（嵌入式静态资源；匿名可读，所有管理动作都走 SQL 端点）----
         app.MapAdminUi();
@@ -236,7 +277,8 @@ public static class Program
         // ---- 数据库管理 ----
         app.MapGet("/v1/db", (HttpContext ctx) =>
         {
-            var resp = new DatabaseListResponse(registry.ListDatabases());
+            var visibleDatabases = DatabaseAccessEvaluator.GetVisibleDatabases(ctx, grants, registry.ListDatabases());
+            var resp = new DatabaseListResponse(visibleDatabases);
             return Results.Json(resp, ServerJsonContext.Default.DatabaseListResponse);
         });
 
@@ -275,20 +317,28 @@ public static class Program
         {
             if (!TryResolveDatabase(ctx, registry, db, out var tsdb))
                 return;
+            var databasePermission = DatabaseAccessEvaluator.GetEffectivePermission(ctx, grants, db);
+            if (!await TryRequireDatabasePermissionAsync(ctx, db, databasePermission, DatabasePermission.Read).ConfigureAwait(false))
+                return;
             var req = await ReadJsonAsync(ctx, ServerJsonContext.Default.SqlRequest).ConfigureAwait(false);
             if (req is null)
             {
                 await WriteSimpleErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体不可为空。").ConfigureAwait(false);
                 return;
             }
-            var role = BearerAuthMiddleware.GetRole(ctx);
+            var scopedControlPlane = CreateScopedControlPlane(ctx, controlPlane, users, grants, registry);
             await SqlEndpointHandler.HandleSingleAsync(ctx, tsdb, db, req, metrics,
-                BearerAuthMiddleware.CanWrite(role), BearerAuthMiddleware.IsAdmin(role), controlPlane).ConfigureAwait(false);
+                DatabaseAccessEvaluator.HasPermission(databasePermission, DatabasePermission.Write),
+                DatabaseAccessEvaluator.IsServerAdmin(ctx),
+                scopedControlPlane).ConfigureAwait(false);
         });
 
         app.MapPost("/v1/db/{db}/sql/batch", async (HttpContext ctx, string db) =>
         {
             if (!TryResolveDatabase(ctx, registry, db, out var tsdb))
+                return;
+            var databasePermission = DatabaseAccessEvaluator.GetEffectivePermission(ctx, grants, db);
+            if (!await TryRequireDatabasePermissionAsync(ctx, db, databasePermission, DatabasePermission.Read).ConfigureAwait(false))
                 return;
             var req = await ReadJsonAsync(ctx, ServerJsonContext.Default.SqlBatchRequest).ConfigureAwait(false);
             if (req is null || req.Statements.Count == 0)
@@ -296,31 +346,33 @@ public static class Program
                 await WriteSimpleErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体或 statements 不可为空。").ConfigureAwait(false);
                 return;
             }
-            var role = BearerAuthMiddleware.GetRole(ctx);
+            var scopedControlPlane = CreateScopedControlPlane(ctx, controlPlane, users, grants, registry);
             await SqlEndpointHandler.HandleBatchAsync(ctx, tsdb, db, req, metrics,
-                BearerAuthMiddleware.CanWrite(role), BearerAuthMiddleware.IsAdmin(role), controlPlane).ConfigureAwait(false);
+                DatabaseAccessEvaluator.HasPermission(databasePermission, DatabasePermission.Write),
+                DatabaseAccessEvaluator.IsServerAdmin(ctx),
+                scopedControlPlane).ConfigureAwait(false);
         });
 
         // ---- PR #44：批量入库快路径三端点（绕开 SQL parser）----
         // PR #47：批量端点 payload 可达数百 MB，移除 Kestrel 默认 30MB 上限。
         app.MapPost("/v1/db/{db}/measurements/{m}/lp", async (HttpContext ctx, string db, string m) =>
-            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.LineProtocol).ConfigureAwait(false))
+            await HandleBulkAsync(ctx, registry, grants, metrics, db, m, BulkIngestEndpointHandler.Format.LineProtocol).ConfigureAwait(false))
             .WithMetadata(new Microsoft.AspNetCore.Mvc.DisableRequestSizeLimitAttribute());
         app.MapPost("/v1/db/{db}/measurements/{m}/json", async (HttpContext ctx, string db, string m) =>
-            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.Json).ConfigureAwait(false))
+            await HandleBulkAsync(ctx, registry, grants, metrics, db, m, BulkIngestEndpointHandler.Format.Json).ConfigureAwait(false))
             .WithMetadata(new Microsoft.AspNetCore.Mvc.DisableRequestSizeLimitAttribute());
         app.MapPost("/v1/db/{db}/measurements/{m}/bulk", async (HttpContext ctx, string db, string m) =>
-            await HandleBulkAsync(ctx, registry, metrics, db, m, BulkIngestEndpointHandler.Format.BulkValues).ConfigureAwait(false))
+            await HandleBulkAsync(ctx, registry, grants, metrics, db, m, BulkIngestEndpointHandler.Format.BulkValues).ConfigureAwait(false))
             .WithMetadata(new Microsoft.AspNetCore.Mvc.DisableRequestSizeLimitAttribute());
 
-        // ---- 控制面 SQL（admin only，无 db 路径）----
+        // ---- 控制面 SQL（无 db 路径；admin 全量、动态用户仅自服务）----
         app.MapMethods("/v1/sql", new[] { "POST" }, (RequestDelegate)(async ctx =>
         {
-            var role = BearerAuthMiddleware.GetRole(ctx);
-            if (!BearerAuthMiddleware.IsAdmin(role))
+            var isAdmin = DatabaseAccessEvaluator.IsServerAdmin(ctx);
+            if (!isAdmin && BearerAuthMiddleware.GetUser(ctx) is null)
             {
                 await WriteSimpleErrorAsync(ctx, StatusCodes.Status403Forbidden, "forbidden",
-                    "/v1/sql 仅 admin 可调用。").ConfigureAwait(false);
+                    "/v1/sql 仅 admin 或动态用户 token 可调用。").ConfigureAwait(false);
                 return;
             }
             var req = await ReadJsonAsync(ctx, ServerJsonContext.Default.SqlRequest).ConfigureAwait(false);
@@ -329,11 +381,11 @@ public static class Program
                 await WriteSimpleErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体需包含 sql。").ConfigureAwait(false);
                 return;
             }
-            await SqlEndpointHandler.HandleControlPlaneAsync(ctx, req, metrics, controlPlane).ConfigureAwait(false);
+            var scopedControlPlane = CreateScopedControlPlane(ctx, controlPlane, users, grants, registry);
+            await SqlEndpointHandler.HandleControlPlaneAsync(ctx, req, metrics, isAdmin, scopedControlPlane).ConfigureAwait(false);
         }));
 
         // ---- 认证 ----
-        var users = app.Services.GetRequiredService<UserStore>();
         app.MapMethods("/v1/auth/login", new[] { "POST" }, (RequestDelegate)(async ctx =>
         {
             var req = await ReadJsonAsync(ctx, ServerJsonContext.Default.LoginRequest).ConfigureAwait(false);
@@ -358,26 +410,42 @@ public static class Program
         var broadcaster = app.Services.GetRequiredService<EventBroadcaster>();
         app.MapGet("/v1/events", async (HttpContext ctx) =>
         {
-            await SseEndpointHandler.HandleAsync(ctx, broadcaster).ConfigureAwait(false);
+            await SseEndpointHandler.HandleAsync(ctx, broadcaster, grants).ConfigureAwait(false);
         });
+
+        // ---- Schema API ----
+        app.MapGet("/v1/db/{db}/schema", async (HttpContext ctx, string db) =>
+        {
+            if (!TryResolveDatabase(ctx, registry, db, out var tsdb))
+                return;
+            var databasePermission = DatabaseAccessEvaluator.GetEffectivePermission(ctx, grants, db);
+            if (!await TryRequireDatabasePermissionAsync(ctx, db, databasePermission, DatabasePermission.Read).ConfigureAwait(false))
+                return;
+            await SchemaEndpointHandler.Handle(db, tsdb).ExecuteAsync(ctx).ConfigureAwait(false);
+        });
+
+        // ---- AI 助手 ----
+        var aiConfigStore = app.Services.GetRequiredService<AiConfigStore>();
+        var httpClientFactory = app.Services.GetRequiredService<IHttpClientFactory>();
+        AiEndpointHandler.Map(app, aiConfigStore, grants, registry, httpClientFactory);
+
+        // ---- MCP：按数据库绑定的 Streamable HTTP 端点 ----
+        app.MapMcp("/mcp/{db}");
     }
 
     private static async Task HandleBulkAsync(
         HttpContext ctx,
         TsdbRegistry registry,
+        GrantsStore grants,
         ServerMetrics metrics,
         string db,
         string measurement,
         BulkIngestEndpointHandler.Format format)
     {
-        var role = BearerAuthMiddleware.GetRole(ctx);
-        if (!BearerAuthMiddleware.CanWrite(role))
-        {
-            await WriteSimpleErrorAsync(ctx, StatusCodes.Status403Forbidden, "forbidden",
-                "批量入库需要 readwrite 或 admin 角色。").ConfigureAwait(false);
-            return;
-        }
         if (!TryResolveDatabase(ctx, registry, db, out var tsdb))
+            return;
+        var databasePermission = DatabaseAccessEvaluator.GetEffectivePermission(ctx, grants, db);
+        if (!await TryRequireDatabasePermissionAsync(ctx, db, databasePermission, DatabasePermission.Write).ConfigureAwait(false))
             return;
         if (string.IsNullOrWhiteSpace(measurement) || measurement.Length > 255)
         {
@@ -426,6 +494,72 @@ public static class Program
         {
             return null;
         }
+    }
+
+    private static async Task<bool> TryBindMcpDatabaseAsync(HttpContext ctx, TsdbRegistry registry, GrantsStore grants)
+    {
+        if (!ctx.Request.Path.StartsWithSegments("/mcp", out var remaining))
+            return false;
+
+        var tail = remaining.Value;
+        if (string.IsNullOrWhiteSpace(tail))
+            return false;
+
+        var segments = tail.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+            return false;
+
+        var databaseName = segments[0];
+        if (!TsdbRegistry.IsValidName(databaseName))
+        {
+            await WriteSimpleErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request",
+                $"非法数据库名 '{databaseName}'。").ConfigureAwait(false);
+            return true;
+        }
+
+        if (!registry.TryGet(databaseName, out var tsdb))
+        {
+            await WriteSimpleErrorAsync(ctx, StatusCodes.Status404NotFound, "db_not_found",
+                $"数据库 '{databaseName}' 不存在。").ConfigureAwait(false);
+            return true;
+        }
+
+        var databasePermission = DatabaseAccessEvaluator.GetEffectivePermission(ctx, grants, databaseName);
+        if (!await TryRequireDatabasePermissionAsync(ctx, databaseName, databasePermission, DatabasePermission.Read).ConfigureAwait(false))
+            return true;
+
+        ctx.Items[SonnetDbMcpContextAccessor.DatabaseNameItemKey] = databaseName;
+        ctx.Items[SonnetDbMcpContextAccessor.TsdbItemKey] = tsdb;
+        return false;
+    }
+
+    private static SonnetDB.Sql.Execution.IControlPlane CreateScopedControlPlane(
+        HttpContext ctx,
+        SonnetDB.Sql.Execution.IControlPlane controlPlane,
+        UserStore users,
+        GrantsStore grants,
+        TsdbRegistry registry)
+        => new ScopedDatabaseListControlPlane(
+            controlPlane,
+            users,
+            () => DatabaseAccessEvaluator.GetVisibleDatabases(ctx, grants, registry.ListDatabases()),
+            BearerAuthMiddleware.GetUser(ctx));
+
+    private static async Task<bool> TryRequireDatabasePermissionAsync(
+        HttpContext ctx,
+        string db,
+        DatabasePermission actualPermission,
+        DatabasePermission requiredPermission)
+    {
+        if (DatabaseAccessEvaluator.HasPermission(actualPermission, requiredPermission))
+            return true;
+
+        await WriteSimpleErrorAsync(
+            ctx,
+            StatusCodes.Status403Forbidden,
+            "forbidden",
+            $"当前凭据对数据库 '{db}' 没有 {requiredPermission.ToString().ToLowerInvariant()} 权限。").ConfigureAwait(false);
+        return false;
     }
 
     private static IResult ForbiddenResult(string message)

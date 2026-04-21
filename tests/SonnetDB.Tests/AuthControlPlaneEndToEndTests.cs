@@ -219,6 +219,94 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
         Assert.Contains("beta", body);
     }
 
+    [Fact]
+    public async Task DynamicUser_DatabaseList_AndShowDatabases_AreFilteredByGrant()
+    {
+        await CreateDatabaseAsync("alpha");
+        await CreateDatabaseAsync("beta");
+        await CreateDatabaseAsync("gamma");
+        await ExecuteSqlAsync("alpha", "CREATE USER viewer WITH PASSWORD 'p'", _adminStaticToken);
+        await ExecuteSqlAsync("alpha", "GRANT READ ON DATABASE alpha TO viewer", _adminStaticToken);
+        await ExecuteSqlAsync("alpha", "GRANT WRITE ON DATABASE gamma TO viewer", _adminStaticToken);
+
+        var token = await LoginAsync("viewer", "p");
+        using var viewer = CreateClient(token);
+
+        var listResp = await viewer.GetAsync("/v1/db");
+        Assert.Equal(HttpStatusCode.OK, listResp.StatusCode);
+        var list = await listResp.Content.ReadFromJsonAsync<DatabaseListResponse>(ServerJsonContext.Default.DatabaseListResponse);
+        Assert.NotNull(list);
+        Assert.Equal(new[] { "alpha", "gamma" }, list!.Databases);
+
+        var showResp = await viewer.PostAsync("/v1/db/alpha/sql",
+            JsonContent.Create(new SqlRequest("SHOW DATABASES"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, showResp.StatusCode);
+        var showBody = await showResp.Content.ReadAsStringAsync();
+        Assert.Equal(new[] { "alpha", "gamma" }, ParseSingleStringColumn(showBody));
+    }
+
+    [Fact]
+    public async Task DataPlaneSql_WithDynamicTokenWithoutGrant_IsForbidden()
+    {
+        await CreateDatabaseAsync("metrics");
+        await ExecuteSqlAsync("metrics", "CREATE MEASUREMENT cpu (host TAG, value FIELD FLOAT)", _adminStaticToken);
+        await ExecuteSqlAsync("metrics", "CREATE USER alice WITH PASSWORD 'p'", _adminStaticToken);
+
+        var token = await LoginAsync("alice", "p");
+        using var alice = CreateClient(token);
+        var resp = await alice.PostAsync("/v1/db/metrics/sql",
+            JsonContent.Create(new SqlRequest("SELECT count(*) FROM cpu"), ServerJsonContext.Default.SqlRequest));
+
+        Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task DataPlaneSql_WithReadGrant_CannotWrite_AndDoesNotMutateData()
+    {
+        await CreateDatabaseAsync("metrics");
+        await ExecuteSqlAsync("metrics", "CREATE MEASUREMENT cpu (host TAG, value FIELD FLOAT)", _adminStaticToken);
+        await ExecuteSqlAsync("metrics", "CREATE USER bob WITH PASSWORD 'p'", _adminStaticToken);
+        await ExecuteSqlAsync("metrics", "GRANT READ ON DATABASE metrics TO bob", _adminStaticToken);
+
+        var token = await LoginAsync("bob", "p");
+        using var bob = CreateClient(token);
+
+        var readResp = await bob.PostAsync("/v1/db/metrics/sql",
+            JsonContent.Create(new SqlRequest("SELECT count(*) FROM cpu"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, readResp.StatusCode);
+
+        var writeResp = await bob.PostAsync("/v1/db/metrics/sql",
+            JsonContent.Create(new SqlRequest("INSERT INTO cpu (time, host, value) VALUES (1, 'h1', 1.0)"),
+                ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.Forbidden, writeResp.StatusCode);
+
+        using var admin = CreateClient(_adminStaticToken);
+        var countResp = await admin.PostAsync("/v1/db/metrics/sql",
+            JsonContent.Create(new SqlRequest("SELECT time, host, value FROM cpu"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, countResp.StatusCode);
+        var countBody = await countResp.Content.ReadAsStringAsync();
+        Assert.Equal(0, CountDataRows(countBody));
+    }
+
+    [Fact]
+    public async Task DataPlaneSql_WithWriteGrant_CanWriteDatabaseData()
+    {
+        await CreateDatabaseAsync("metrics");
+        await ExecuteSqlAsync("metrics", "CREATE USER writer WITH PASSWORD 'p'", _adminStaticToken);
+        await ExecuteSqlAsync("metrics", "GRANT WRITE ON DATABASE metrics TO writer", _adminStaticToken);
+
+        var token = await LoginAsync("writer", "p");
+        await ExecuteSqlAsync("metrics", "CREATE MEASUREMENT cpu (host TAG, value FIELD FLOAT)", token);
+        await ExecuteSqlAsync("metrics", "INSERT INTO cpu (time, host, value) VALUES (1, 'h1', 1.0)", token);
+
+        using var admin = CreateClient(_adminStaticToken);
+        var countResp = await admin.PostAsync("/v1/db/metrics/sql",
+            JsonContent.Create(new SqlRequest("SELECT time, host, value FROM cpu"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, countResp.StatusCode);
+        var countBody = await countResp.Content.ReadAsStringAsync();
+        Assert.Equal(1, CountDataRows(countBody));
+    }
+
     // PR #34b-3：/v1/sql 控制面端点（无 db 路径）
 
     [Fact]
@@ -315,6 +403,146 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Unauthorized, dbList.StatusCode);
     }
 
+    [Fact]
+    public async Task DynamicUser_DbScopedShowGrants_OnlyReturnsOwnRows()
+    {
+        await CreateDatabaseAsync("alpha");
+        await CreateDatabaseAsync("beta");
+        await ExecuteSqlAsync("alpha", "CREATE USER alice WITH PASSWORD 'p'", _adminStaticToken);
+        await ExecuteSqlAsync("alpha", "CREATE USER bob WITH PASSWORD 'p'", _adminStaticToken);
+        await ExecuteSqlAsync("alpha", "GRANT READ ON DATABASE alpha TO alice", _adminStaticToken);
+        await ExecuteSqlAsync("alpha", "GRANT WRITE ON DATABASE beta TO alice", _adminStaticToken);
+        await ExecuteSqlAsync("alpha", "GRANT ADMIN ON DATABASE beta TO bob", _adminStaticToken);
+
+        var aliceToken = await LoginAsync("alice", "p");
+        using var alice = CreateClient(aliceToken);
+
+        var resp = await alice.PostAsync("/v1/db/alpha/sql",
+            JsonContent.Create(new SqlRequest("SHOW GRANTS"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+        var body = await resp.Content.ReadAsStringAsync();
+        var rows = ParseRows(body);
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, row => Assert.Equal("alice", row[0].GetString()));
+        Assert.Contains(rows, row => row[1].GetString() == "alpha" && row[2].GetString() == "Read");
+        Assert.Contains(rows, row => row[1].GetString() == "beta" && row[2].GetString() == "Write");
+    }
+
+    [Fact]
+    public async Task DynamicUser_DbScopedShowGrantsForOther_IsForbidden()
+    {
+        await CreateDatabaseAsync("alpha");
+        await ExecuteSqlAsync("alpha", "CREATE USER alice WITH PASSWORD 'p'", _adminStaticToken);
+        await ExecuteSqlAsync("alpha", "CREATE USER bob WITH PASSWORD 'p'", _adminStaticToken);
+        await ExecuteSqlAsync("alpha", "GRANT READ ON DATABASE alpha TO alice", _adminStaticToken);
+        await ExecuteSqlAsync("alpha", "GRANT READ ON DATABASE alpha TO bob", _adminStaticToken);
+
+        var aliceToken = await LoginAsync("alice", "p");
+        using var alice = CreateClient(aliceToken);
+
+        var resp = await alice.PostAsync("/v1/db/alpha/sql",
+            JsonContent.Create(new SqlRequest("SHOW GRANTS FOR bob"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task DynamicUser_ControlPlaneEndpoint_ShowTokens_OnlyReturnsOwnRows()
+    {
+        using var admin = CreateClient(_adminStaticToken);
+        await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("CREATE USER alice WITH PASSWORD 'p'"), ServerJsonContext.Default.SqlRequest));
+        await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("CREATE USER bob WITH PASSWORD 'p'"), ServerJsonContext.Default.SqlRequest));
+
+        var aliceToken = await LoginAsync("alice", "p");
+        var bobToken = await LoginAsync("bob", "p");
+        Assert.False(string.IsNullOrEmpty(bobToken));
+
+        using var alice = CreateClient(aliceToken);
+        var issueResp = await alice.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("ISSUE TOKEN FOR alice"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, issueResp.StatusCode);
+        var issueBody = await issueResp.Content.ReadAsStringAsync();
+        var (issuedTokenId, _) = ParseIssuedToken(issueBody);
+
+        var showResp = await alice.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("SHOW TOKENS"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, showResp.StatusCode);
+
+        var rows = ParseRows(await showResp.Content.ReadAsStringAsync());
+        Assert.True(rows.Count >= 2);
+        Assert.All(rows, row => Assert.Equal("alice", row[1].GetString()));
+        Assert.Contains(rows, row => row[0].GetString() == issuedTokenId);
+        Assert.DoesNotContain(rows, row => row[1].GetString() == "bob");
+    }
+
+    [Fact]
+    public async Task DynamicUser_ControlPlaneEndpoint_IssueAndRevokeOwnToken_WorksWithoutDatabaseGrant()
+    {
+        using var admin = CreateClient(_adminStaticToken);
+        await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("CREATE USER selfsvc WITH PASSWORD 'p'"), ServerJsonContext.Default.SqlRequest));
+
+        var primaryToken = await LoginAsync("selfsvc", "p");
+        using var selfsvc = CreateClient(primaryToken);
+
+        var issueResp = await selfsvc.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("ISSUE TOKEN FOR selfsvc"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, issueResp.StatusCode);
+        var issueBody = await issueResp.Content.ReadAsStringAsync();
+        var (tokenId, token) = ParseIssuedToken(issueBody);
+
+        using var issuedClient = CreateClient(token);
+        var listResp = await issuedClient.GetAsync("/v1/db");
+        Assert.Equal(HttpStatusCode.OK, listResp.StatusCode);
+        var list = await listResp.Content.ReadFromJsonAsync<DatabaseListResponse>(ServerJsonContext.Default.DatabaseListResponse);
+        Assert.NotNull(list);
+        Assert.Empty(list!.Databases);
+
+        var revokeResp = await selfsvc.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest($"REVOKE TOKEN '{tokenId}'"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, revokeResp.StatusCode);
+
+        using var revokedClient = CreateClient(token);
+        var revokedResp = await revokedClient.GetAsync("/v1/db");
+        Assert.Equal(HttpStatusCode.Unauthorized, revokedResp.StatusCode);
+    }
+
+    [Fact]
+    public async Task DynamicUser_ControlPlaneEndpoint_CannotTargetOtherUsers()
+    {
+        using var admin = CreateClient(_adminStaticToken);
+        await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("CREATE USER alice WITH PASSWORD 'p'"), ServerJsonContext.Default.SqlRequest));
+        await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("CREATE USER bob WITH PASSWORD 'p'"), ServerJsonContext.Default.SqlRequest));
+
+        var bobIssueResp = await admin.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("ISSUE TOKEN FOR bob"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.OK, bobIssueResp.StatusCode);
+        var (bobTokenId, _) = ParseIssuedToken(await bobIssueResp.Content.ReadAsStringAsync());
+
+        var aliceToken = await LoginAsync("alice", "p");
+        using var alice = CreateClient(aliceToken);
+
+        var showGrantsResp = await alice.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("SHOW GRANTS FOR bob"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.Forbidden, showGrantsResp.StatusCode);
+
+        var showTokensResp = await alice.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("SHOW TOKENS FOR bob"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.Forbidden, showTokensResp.StatusCode);
+
+        var issueResp = await alice.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest("ISSUE TOKEN FOR bob"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.Forbidden, issueResp.StatusCode);
+
+        var revokeResp = await alice.PostAsync("/v1/sql",
+            JsonContent.Create(new SqlRequest($"REVOKE TOKEN '{bobTokenId}'"), ServerJsonContext.Default.SqlRequest));
+        Assert.Equal(HttpStatusCode.Forbidden, revokeResp.StatusCode);
+    }
+
     private async Task CreateDatabaseAsync(string name)
     {
         using var admin = CreateClient(_adminStaticToken);
@@ -330,6 +558,19 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
         var resp = await client.PostAsync($"/v1/db/{db}/sql",
             JsonContent.Create(new SqlRequest(sql), ServerJsonContext.Default.SqlRequest));
         Assert.True(resp.IsSuccessStatusCode, $"SQL '{sql}' 失败：{resp.StatusCode} / {await resp.Content.ReadAsStringAsync()}");
+    }
+
+    private async Task<string> LoginAsync(string username, string password)
+    {
+        using var anon = CreateClient(token: null);
+        var response = await anon.PostAsync("/v1/auth/login",
+            JsonContent.Create(new LoginRequest(username, password), ServerJsonContext.Default.LoginRequest));
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, $"登录失败：{response.StatusCode} / {body}");
+
+        var login = JsonSerializer.Deserialize(body, ServerJsonContext.Default.LoginResponse);
+        Assert.NotNull(login);
+        return login!.Token;
     }
 
     private static (string TokenId, string Token) ParseIssuedToken(string ndjson)
@@ -349,5 +590,48 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
         }
 
         throw new InvalidOperationException("未在 ndjson 响应中找到已签发 token。");
+    }
+
+    private static int CountDataRows(string ndjson)
+    {
+        var count = 0;
+        foreach (var line in ndjson.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith("[", StringComparison.Ordinal))
+                continue;
+            count++;
+        }
+        return count;
+    }
+
+    private static List<JsonElement[]> ParseRows(string ndjson)
+    {
+        var rows = new List<JsonElement[]>();
+        foreach (var line in ndjson.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith("[", StringComparison.Ordinal))
+                continue;
+
+            var values = JsonSerializer.Deserialize<JsonElement[]>(line);
+            if (values is not null)
+                rows.Add(values);
+        }
+
+        return rows;
+    }
+
+    private static string[] ParseSingleStringColumn(string ndjson)
+    {
+        var rows = new List<string>();
+        foreach (var line in ndjson.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith("[", StringComparison.Ordinal))
+                continue;
+
+            var values = JsonSerializer.Deserialize<string[]>(line);
+            if (values is [var value])
+                rows.Add(value);
+        }
+        return rows.ToArray();
     }
 }

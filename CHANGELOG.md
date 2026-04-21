@@ -24,6 +24,26 @@
 - **版本升级**：`0.1.0` → `1.0.0`。
 
 ### Added
+- **服务端内建 MCP（Model Context Protocol）只读入口**
+  - `src/SonnetDB` 新增基于官方 `ModelContextProtocol.AspNetCore` 1.2.0 的 Streamable HTTP MCP 端点：`/mcp/{db}`。启用 `Stateless=true`，关闭 legacy SSE，`ConfigureSessionOptions` 会把当前数据库名写入 `ServerInstructions`，明确这是绑定到单个数据库的只读 SonnetDB MCP 会话。
+  - 新增 MCP 上下文解析与预校验：所有 `/mcp/{db}` 请求在进入 MCP SDK 前先复用现有 `TsdbRegistry` 校验数据库名与存在性；非法库名返回 `400 bad_request`，不存在数据库返回 `404 db_not_found`，并把当前 `db` 与 `Tsdb` 实例缓存到 `HttpContext.Items` 供 tools/resources 读取。
+  - 新增只读 MCP tools：
+    - `query_sql(sql, maxRows)`：仅允许 `SELECT` / `SHOW MEASUREMENTS` / `SHOW TABLES` / `DESCRIBE [MEASUREMENT]`；对 `SELECT` 在 AST 层自动补/收紧分页，并采用“多抓 1 行”检测 `truncated`。
+    - `list_measurements(maxRows)`：返回当前数据库 measurement 名列表。
+    - `describe_measurement(name)`：返回指定 measurement 的 tag/field schema。
+  - 新增 MCP resources：
+    - `sonnetdb://schema/measurements`
+    - `sonnetdb://schema/measurement/{name}`
+    - `sonnetdb://stats/database`
+    三个资源统一返回 `application/json` 文本，分别暴露 measurement 列表、单 measurement schema 与当前数据库统计（measurement 数、segment 数、memtable 点数、checkpoint LSN 等）。
+  - 新增 `src/SonnetDB/Mcp/` 实现层：结果 DTO、`JsonElementValue` 转换、只读 SQL 裁剪逻辑、`CallToolResult`/`TextResourceContents` 构造与基于 `IHttpContextAccessor` 的数据库绑定上下文解析。
+  - 测试：新增 `tests/SonnetDB.Tests/McpEndToEndTests.cs`，通过真实 Kestrel + `McpClient` 覆盖 `list_tools`、`query_sql` 自动截断、`list_measurements`、`describe_measurement`、`list_resources` / `list_resource_templates` / `read_resource` 的端到端路径。
+  - 权限模型补齐：`/mcp/{db}` 与其余数据库作用域 HTTP 入口现在会把“动态用户 token”映射到 `GrantsStore` 的数据库级 `Read/Write/Admin` 权限；静态 `ServerOptions.Tokens` 仍保持全局 role 语义。无 grant 的用户访问数据库作用域 MCP / SQL / schema / bulk 端点将返回 `403 forbidden`，superuser 保持全放行。
+  - 数据库可见性补齐：`GET /v1/db` 与数据面 SQL 中的 `SHOW DATABASES` 现在会按当前请求可见范围过滤数据库列表。普通动态用户只会看到自己有 `Read/Write/Admin`（含 `*` 通配）权限的数据库；静态全局 token 与 superuser 继续看到全部数据库。
+  - AI 权限补齐：`POST /v1/ai/chat` 在 `mode=sql_gen` 且携带 `db` 时，现在会先校验数据库名、数据库存在性与当前请求对该数据库的 `Read` 权限，再拼接 schema 系统提示词；未授权用户无法再借助 AI SQL 生成读取其他数据库的 measurement/column 元数据。
+  - SSE 权限补齐：`GET /v1/events` 对动态用户 token 的数据库相关事件现在按 grant 实时过滤。`db` 与 `slow_query` 只会下发当前用户对该数据库具备 `Read` 以上权限的事件，控制面慢查询（`__control`）对普通动态用户隐藏；`metrics` 事件中的 `databases` 与 `perDatabaseSegments` 也会裁剪为当前用户可见数据库集合，避免从实时事件流泄露未授权数据库名。
+  - 控制面自服务权限补齐：普通动态用户现在可以通过 `/v1/sql` 或有权访问的 `/v1/db/{db}/sql` 执行 `SHOW GRANTS` / `SHOW TOKENS` / `ISSUE TOKEN FOR <self>` / `REVOKE TOKEN '<self-token-id>'` 等“只操作自己”的控制面语句；对其他用户的授权或 token 执行查询、签发、吊销将返回 `403 forbidden`。`SHOW USERS`、用户管理、授权管理、数据库管理等仍保持 admin-only。
+
 - **元数据 SQL：`SHOW MEASUREMENTS` / `SHOW TABLES` / `DESCRIBE [MEASUREMENT] <name>`**
   - 新增 AST 节点 `ShowMeasurementsStatement` 与 `DescribeMeasurementStatement`；`SqlLexer` 增加关键字 `MEASUREMENTS` / `TABLES` / `DESCRIBE` / `DESC`；`SqlParser` 在 `SHOW` 分支识别 `MEASUREMENTS` 和兼容别名 `TABLES`，并新增顶层 `DESCRIBE` / `DESC` 入口（关键字 `MEASUREMENT` 可省略）。
   - `SqlExecutor` 新增 `ShowMeasurements(Tsdb)` 与 `DescribeMeasurement(Tsdb, name)` 执行路径，统一返回 `SelectExecutionResult`：`SHOW MEASUREMENTS` / `SHOW TABLES` 输出单列 `name`（按字典序升序）；`DESCRIBE` 输出三列 `column_name` / `column_type`（`tag` / `field`）/ `data_type`（`float64` / `int64` / `boolean` / `string`），按 schema 声明顺序返回。
