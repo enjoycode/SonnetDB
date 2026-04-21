@@ -30,6 +30,12 @@
   - 引入 `SHOW TABLES` / `DESC` 兼容别名以适配 DBeaver / DataGrip / 通用 ADO.NET schema 浏览器。
   - 测试：新增 `tests/SonnetDB.Core.Tests/Sql/SqlExecutorMetadataTests.cs`，11 个用例覆盖空库 / 字典序排序 / `SHOW TABLES` 等价 / `DESCRIBE`+`DESC` 等价 / 关键字 `MEASUREMENT` 可省略 / 不存在 measurement 抛 `InvalidOperationException` / Parser AST 形状校验。
 
+- **数据面分页：`OFFSET/FETCH` + `LIMIT` 兼容语法**
+  - `SELECT` 新增可选分页子句：支持 SQL 标准风格 `OFFSET <n> [ROW|ROWS] FETCH FIRST|NEXT <m> ROW|ROWS ONLY`，以及兼容风格 `LIMIT <m> [OFFSET <n>]`。
+  - AST `SelectStatement` 增加 `Pagination` 参数，执行层在最终结果集统一应用分页切片，覆盖 raw / aggregate / TVF 三条路径。
+  - 为避免与聚合函数 `first(...)` 冲突，`FIRST/NEXT/ROW/ROWS/ONLY` 按普通标识符词法处理，仅在 `FETCH` 子句按上下文识别。
+  - 测试：补充 parser / lexer / executor 用例，覆盖 `LIMIT`、`OFFSET`、`FETCH` 语义以及越界 offset 返回空集。
+
 - **Milestone 12 — PR #57：函数族基准 + README 函数支持矩阵**
   - 新增 `tests/SonnetDB.Benchmarks/Benchmarks/FunctionBenchmark.cs`：以 50,000 个数据点为样本，对 PR #50 ~ #56 引入的窗口 / 聚合 / TVF 函数族走完整 SqlParser → SqlExecutor 流水线的端到端基准。覆盖 SonnetDB 自身的 `derivative` / `moving_average` / `ewma` / `holt_winters` / `anomaly(zscore)` / `p99` / `distinct_count` / `forecast(linear)` / `forecast(holt_winters)` 9 项基线，以及 InfluxDB Flux（`derivative` / `movingAverage` / `holtWinters` / `quantile(method:"estimate_tdigest")`）与 TDengine REST（`DERIVATIVE` / `MAVG` / `PERCENTILE`）的等价语义对照；外部数据库不可用时按 `[SKIP]` 提示，不阻塞 SonnetDB 基线运行。
   - `README.md` 新增「支持的 SQL 函数」矩阵章节：按 PR 引入顺序枚举 PR #50 ~ #56 全部内置函数（聚合 / 标量 / 窗口 / TVF）共 50+ 项，并列出 InfluxDB / Timescale / TDengine / Prometheus 的对标函数与备注；同步在 `README.en.md` 增加「Built-in SQL functions」英文版矩阵。

@@ -206,6 +206,54 @@ public class SqlParserTests
     }
 
     [Fact]
+    public void Parse_Select_Limit_WithOptionalOffset_ParsesPagination()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse("SELECT * FROM cpu LIMIT 10 OFFSET 5");
+
+        Assert.NotNull(stmt.Pagination);
+        Assert.Equal(5, stmt.Pagination!.Offset);
+        Assert.Equal(10, stmt.Pagination.Fetch);
+    }
+
+    [Fact]
+    public void Parse_Select_OffsetFetch_ParsesPagination()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse(
+            "SELECT * FROM cpu OFFSET 7 ROWS FETCH NEXT 3 ROWS ONLY");
+
+        Assert.NotNull(stmt.Pagination);
+        Assert.Equal(7, stmt.Pagination!.Offset);
+        Assert.Equal(3, stmt.Pagination.Fetch);
+    }
+
+    [Fact]
+    public void Parse_Select_OffsetOnly_ParsesPaginationWithoutFetch()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse("SELECT * FROM cpu OFFSET 4");
+
+        Assert.NotNull(stmt.Pagination);
+        Assert.Equal(4, stmt.Pagination!.Offset);
+        Assert.Null(stmt.Pagination.Fetch);
+    }
+
+    [Fact]
+    public void Parse_Select_FetchWithoutOffset_UsesZeroOffset()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse("SELECT * FROM cpu FETCH FIRST 2 ROWS ONLY");
+
+        Assert.NotNull(stmt.Pagination);
+        Assert.Equal(0, stmt.Pagination!.Offset);
+        Assert.Equal(2, stmt.Pagination.Fetch);
+    }
+
+    [Fact]
+    public void Parse_Select_FetchMissingOnly_Throws()
+    {
+        Assert.Throws<SqlParseException>(() =>
+            SqlParser.Parse("SELECT * FROM cpu OFFSET 1 ROW FETCH NEXT 2 ROWS"));
+    }
+
+    [Fact]
     public void Parse_Select_NegativeNumberInWhere()
     {
         var stmt = (SelectStatement)SqlParser.Parse("SELECT * FROM cpu WHERE value > -1.5");

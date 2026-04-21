@@ -261,7 +261,57 @@ public sealed class SqlParser
             groupBy = ParseGroupByList();
         }
 
-        return new SelectStatement(projections, measurement, where, groupBy, tvf);
+        var pagination = ParseOptionalPagination();
+
+        return new SelectStatement(projections, measurement, where, groupBy, tvf, pagination);
+    }
+
+    private PaginationSpec? ParseOptionalPagination()
+    {
+        // 兼容 MySQL/PostgreSQL 风格：LIMIT <n> [OFFSET <m>]
+        if (Current.Kind == TokenKind.KeywordLimit)
+        {
+            Advance();
+            var fetch = ExpectNonNegativeInt("LIMIT 后面期望非负整数");
+            var offset = 0;
+            if (Current.Kind == TokenKind.KeywordOffset)
+            {
+                Advance();
+                offset = ExpectNonNegativeInt("OFFSET 后面期望非负整数");
+            }
+            return new PaginationSpec(offset, fetch);
+        }
+
+        int offsetValue = 0;
+        bool hasOffset = false;
+        if (Current.Kind == TokenKind.KeywordOffset)
+        {
+            Advance();
+            offsetValue = ExpectNonNegativeInt("OFFSET 后面期望非负整数");
+            hasOffset = true;
+            if (IsIdentifier("row") || IsIdentifier("rows"))
+                Advance();
+        }
+
+        if (Current.Kind == TokenKind.KeywordFetch)
+        {
+            Advance();
+            if (IsIdentifier("first") || IsIdentifier("next"))
+                Advance();
+
+            var fetch = ExpectNonNegativeInt("FETCH 后面期望非负整数");
+
+            if (!(IsIdentifier("row") || IsIdentifier("rows")))
+                throw Error("FETCH 子句期望 ROW 或 ROWS");
+            Advance();
+
+            if (!IsIdentifier("only"))
+                throw Error("FETCH 子句期望 ONLY");
+            Advance();
+            return new PaginationSpec(offsetValue, fetch);
+        }
+
+        return hasOffset ? new PaginationSpec(offsetValue, null) : null;
     }
 
     private IReadOnlyList<SelectItem> ParseSelectList()
@@ -562,6 +612,26 @@ public sealed class SqlParser
         Advance();
         return name;
     }
+
+    private int ExpectNonNegativeInt(string errorMessage)
+    {
+        if (Current.Kind != TokenKind.IntegerLiteral)
+            throw Error(errorMessage);
+
+        var value = Current.IntegerValue;
+        Advance();
+
+        if (value < 0)
+            throw Error(errorMessage);
+        if (value > int.MaxValue)
+            throw Error("分页参数过大，必须 <= Int32.MaxValue");
+
+        return (int)value;
+    }
+
+    private bool IsIdentifier(string text)
+        => Current.Kind == TokenKind.IdentifierLiteral
+           && string.Equals(Current.Text, text, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// 期望一个列名 token：普通标识符；或者 <see cref="TokenKind.KeywordTime"/>（保留字 <c>time</c> 在列名上下文中

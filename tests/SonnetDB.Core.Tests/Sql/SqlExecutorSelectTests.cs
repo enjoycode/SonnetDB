@@ -106,6 +106,69 @@ public class SqlExecutorSelectTests : IDisposable
     }
 
     [Fact]
+    public void Select_WithLimit_ReturnsAtMostLimitRows()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var r = Select(db, "SELECT time, host FROM cpu LIMIT 3");
+
+        Assert.Equal(3, r.Rows.Count);
+    }
+
+    [Fact]
+    public void Select_WithOffsetFetch_ReturnsPagedRows()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var full = Select(db, "SELECT time, host, usage FROM cpu");
+        var paged = Select(db, "SELECT time, host, usage FROM cpu OFFSET 1 ROW FETCH NEXT 2 ROWS ONLY");
+
+        Assert.Equal(2, paged.Rows.Count);
+        Assert.Equal(full.Rows[1], paged.Rows[0]);
+        Assert.Equal(full.Rows[2], paged.Rows[1]);
+    }
+
+    [Fact]
+    public void Select_WithOffsetOnly_SkipsRowsAndReturnsRemaining()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var full = Select(db, "SELECT time, host, usage FROM cpu");
+        var paged = Select(db, "SELECT time, host, usage FROM cpu OFFSET 2");
+
+        Assert.Equal(full.Rows.Count - 2, paged.Rows.Count);
+        Assert.Equal(full.Rows[2], paged.Rows[0]);
+    }
+
+    [Fact]
+    public void Select_WithLimitOffset_Syntax_UsesMysqlStylePagination()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var full = Select(db, "SELECT time, host FROM cpu");
+        var paged = Select(db, "SELECT time, host FROM cpu LIMIT 2 OFFSET 1");
+
+        Assert.Equal(2, paged.Rows.Count);
+        Assert.Equal(full.Rows[1], paged.Rows[0]);
+        Assert.Equal(full.Rows[2], paged.Rows[1]);
+    }
+
+    [Fact]
+    public void Select_WithOffsetBeyondEnd_ReturnsEmpty()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var r = Select(db, "SELECT time, host FROM cpu OFFSET 100 ROWS");
+
+        Assert.Empty(r.Rows);
+    }
+
+    [Fact]
     public void Select_TimeRange_FiltersByTime()
     {
         using var db = OpenWithSchema(Options());

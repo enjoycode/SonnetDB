@@ -96,4 +96,9 @@ public enum TokenKind
     KeywordTables,
     KeywordDescribe,
     KeywordDesc,
+
+    // 分页子句：OFFSET / FETCH / LIMIT
+    KeywordOffset,
+    KeywordFetch,
+    KeywordLimit,
 }

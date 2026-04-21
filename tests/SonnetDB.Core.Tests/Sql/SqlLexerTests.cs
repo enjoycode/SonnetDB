@@ -187,4 +187,20 @@ public class SqlLexerTests
         Assert.Contains(TokenKind.KeywordWrite, kinds);
         Assert.Contains(TokenKind.KeywordAdmin, kinds);
     }
+
+    [Fact]
+    public void Tokenize_PaginationKeywords_AreRecognized()
+    {
+        var tokens = SqlLexer.Tokenize("SELECT * FROM cpu OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY LIMIT 3");
+        var kinds = System.Linq.Enumerable.Select(tokens, t => t.Kind).ToArray();
+        var texts = System.Linq.Enumerable.Select(tokens, t => t.Text).ToArray();
+
+        Assert.Contains(TokenKind.KeywordOffset, kinds);
+        Assert.Contains(TokenKind.KeywordFetch, kinds);
+        Assert.Contains(TokenKind.KeywordLimit, kinds);
+
+        Assert.Contains("NEXT", texts, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("ROWS", texts, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("ONLY", texts, StringComparer.OrdinalIgnoreCase);
+    }
 }

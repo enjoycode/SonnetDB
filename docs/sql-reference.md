@@ -80,6 +80,29 @@ WHERE host = 'server-01'
 - `coalesce(...)` 只会在当前结果行存在时参与求值；它不会额外扩展原始查询的时间轴。
 - 结果按时间升序返回。
 
+分页子句（兼容两种风格）：
+
+```sql
+-- SQL 标准风格
+SELECT time, host, usage
+FROM cpu
+WHERE host = 'server-01'
+OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY;
+
+-- MySQL/PostgreSQL 常见风格
+SELECT time, host, usage
+FROM cpu
+WHERE host = 'server-01'
+LIMIT 10 OFFSET 20;
+```
+
+说明：
+
+- 支持 `OFFSET n`（仅跳过，不限制返回行数）。
+- 支持 `FETCH FIRST|NEXT n ROW|ROWS ONLY`。
+- 支持 `LIMIT n [OFFSET m]` 兼容语法。
+- `OFFSET/FETCH/LIMIT` 作用在最终结果集（投影/聚合之后）。
+
 ### 聚合查询
 
 支持的聚合函数：

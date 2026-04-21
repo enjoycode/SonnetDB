@@ -71,6 +71,11 @@ public sealed class SqlLexer
         ["tables"] = TokenKind.KeywordTables,
         ["describe"] = TokenKind.KeywordDescribe,
         ["desc"] = TokenKind.KeywordDesc,
+
+        // 分页子句
+        ["offset"] = TokenKind.KeywordOffset,
+        ["fetch"] = TokenKind.KeywordFetch,
+        ["limit"] = TokenKind.KeywordLimit,
     };
 
     private readonly string _source;

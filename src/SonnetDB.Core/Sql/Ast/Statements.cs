@@ -40,12 +40,22 @@ public sealed record InsertStatement(
 /// <param name="Where">可选 WHERE 表达式。</param>
 /// <param name="GroupBy">GROUP BY 表达式列表；当未指定 GROUP BY 时为空集合（不为 <c>null</c>）。</param>
 /// <param name="TableValuedFunction">FROM 子句若为表值函数调用（PR #55 起的 forecast 等）则非 <c>null</c>，否则 <c>null</c>。</param>
+/// <param name="Pagination">可选分页子句；支持 <c>OFFSET/FETCH</c> 与兼容语法 <c>LIMIT</c>。</param>
 public sealed record SelectStatement(
     IReadOnlyList<SelectItem> Projections,
     string Measurement,
     SqlExpression? Where,
     IReadOnlyList<SqlExpression> GroupBy,
-    FunctionCallExpression? TableValuedFunction = null) : SqlStatement;
+    FunctionCallExpression? TableValuedFunction = null,
+    PaginationSpec? Pagination = null) : SqlStatement;
+
+/// <summary>
+/// 分页子句参数：<c>OFFSET</c> + 可选 <c>FETCH</c>。
+/// 当 <see cref="Fetch"/> 为 <c>null</c> 时表示“从偏移量开始返回全部剩余行”。
+/// </summary>
+/// <param name="Offset">跳过行数（&gt;= 0）。</param>
+/// <param name="Fetch">返回行数上限（&gt;= 0）；<c>null</c> 表示不限制。</param>
+public sealed record PaginationSpec(int Offset, int? Fetch);
 
 /// <summary>SELECT 投影项。</summary>
 /// <param name="Expression">投影表达式（可能为 <see cref="StarExpression"/>）。</param>

@@ -18,7 +18,7 @@ internal static class SelectExecutor
     public static SelectExecutionResult Execute(Tsdb tsdb, SelectStatement statement)
     {
         if (statement.TableValuedFunction is not null)
-            return TableValuedFunctionExecutor.Execute(tsdb, statement);
+            return ApplyPagination(TableValuedFunctionExecutor.Execute(tsdb, statement), statement.Pagination);
 
         var schema = tsdb.Measurements.TryGet(statement.Measurement)
             ?? throw new InvalidOperationException(
@@ -42,10 +42,29 @@ internal static class SelectExecutor
             throw new InvalidOperationException(
                 "GROUP BY time(...) 仅在聚合查询中有效。");
 
-        if (hasAggregate)
-            return ExecuteAggregate(tsdb, schema, classified, matchedSeries, where, groupByTime);
+        SelectExecutionResult result = hasAggregate
+            ? ExecuteAggregate(tsdb, schema, classified, matchedSeries, where, groupByTime)
+            : ExecuteRaw(tsdb, schema, classified, matchedSeries, where);
 
-        return ExecuteRaw(tsdb, schema, classified, matchedSeries, where);
+        return ApplyPagination(result, statement.Pagination);
+    }
+
+    private static SelectExecutionResult ApplyPagination(SelectExecutionResult result, PaginationSpec? pagination)
+    {
+        if (pagination is null)
+            return result;
+
+        var offset = pagination.Offset;
+        if (offset >= result.Rows.Count)
+            return new SelectExecutionResult(result.Columns, []);
+
+        int take = pagination.Fetch ?? (result.Rows.Count - offset);
+        if (take <= 0)
+            return new SelectExecutionResult(result.Columns, []);
+
+        int actualTake = Math.Min(take, result.Rows.Count - offset);
+        var slicedRows = result.Rows.Skip(offset).Take(actualTake).ToList();
+        return new SelectExecutionResult(result.Columns, slicedRows);
     }
 
     // ── 投影分类 ───────────────────────────────────────────────────────────
