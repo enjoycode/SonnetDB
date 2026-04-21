@@ -81,7 +81,7 @@ public sealed class PidParameterEstimatorTests
     }
 
     [Fact]
-    public void Estimate_Imc_CustomLambda_LargerLambdaYieldsSmalllerKp()
+    public void Estimate_Imc_CustomLambda_LargerLambdaYieldsSmallerKp()
     {
         // 更大的 λ 应产生更保守（更小）的 Kp
         var samples = GenerateFopdtResponse(K: 2.0, tau: 100.0, theta: 20.0,
