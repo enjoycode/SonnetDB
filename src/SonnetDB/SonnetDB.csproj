@@ -27,6 +27,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="SonnetDB.Tests" />
   </ItemGroup>
 
@@ -41,14 +45,14 @@
 
   <!--
     Admin UI 嵌入式静态资源。
-    - web/admin/dist/** 全部以 EmbeddedResource 嵌入，LogicalName 改写为 'sndb.admin/<相对路径>'，
+    - web/dist/** 全部以 EmbeddedResource 嵌入，LogicalName 改写为 'sndb.admin/<相对路径>'，
       与 AdminUiAssets.ResourcePrefix 对齐。
     - 不依赖 npm；如果 dist 不存在（前端未 build），EmbeddedResource 集合为空，
       运行时 /admin 端点返回 503 + 提示文案。
     - 可选：设置 -p:BuildAdminUi=true 由 MSBuild 自动跑 `npm install && npm run build`。
   -->
   <PropertyGroup>
-    <AdminUiSourceDir>$(MSBuildThisFileDirectory)..\..\web\admin</AdminUiSourceDir>
+    <AdminUiSourceDir>$(MSBuildThisFileDirectory)..\..\web</AdminUiSourceDir>
     <AdminUiDistDir>$(AdminUiSourceDir)\dist</AdminUiDistDir>
     <BuildAdminUi Condition="'$(BuildAdminUi)' == ''">false</BuildAdminUi>
   </PropertyGroup>

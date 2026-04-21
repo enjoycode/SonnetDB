@@ -84,6 +84,7 @@ const adminMenu: MenuOption[] = [
   { label: '用户', key: 'users' },
   { label: '权限', key: 'grants' },
   { label: 'Token', key: 'tokens' },
+  { label: 'SNDBCopilot', key: 'ai-settings' },
 ];
 
 const menuOptions = computed<MenuOption[]>(() => (
@@ -98,6 +99,7 @@ const titleByKey: Record<string, string> = {
   users: '用户',
   grants: '权限',
   tokens: 'Token',
+  'ai-settings': 'SNDBCopilot',
 };
 
 const activeKey = computed(() => (route.name as string | undefined) ?? 'dashboard');

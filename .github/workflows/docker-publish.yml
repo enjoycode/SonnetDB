@@ -9,7 +9,7 @@ on:
       - '.github/workflows/docker-publish.yml'
       - 'src/SonnetDB/**'
       - 'src/SonnetDB/**'
-      - 'web/admin/**'
+      - 'web/**'
       - 'docs/**'
       - '.config/dotnet-tools.json'
       - 'Directory.Build.props'

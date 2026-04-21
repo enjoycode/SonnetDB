@@ -7,9 +7,9 @@ namespace SonnetDB.Hosting;
 /// 加载并缓存嵌入式 Admin SPA 静态资源。
 /// </summary>
 /// <remarks>
-/// 资源命名约定：所有 <c>web/admin/dist/**</c> 文件以 <c>EmbeddedResource</c> 形式嵌入，
+/// 资源命名约定：所有 <c>web/dist/**</c> 文件以 <c>EmbeddedResource</c> 形式嵌入，
 /// 通过 csproj 的 <c>LogicalName</c> 改写后统一前缀为 <c>sndb.admin/</c>。
-/// 例如 <c>web/admin/dist/index.html</c> → manifest 名 <c>sndb.admin/index.html</c>。
+/// 例如 <c>web/dist/index.html</c> → manifest 名 <c>sndb.admin/index.html</c>。
 /// </remarks>
 internal static class AdminUiAssets
 {

@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import WelcomeView from '@/views/WelcomeView.vue';
 import SetupView from '@/views/SetupView.vue';
 import LoginView from '@/views/LoginView.vue';
 import AppShell from '@/views/AppShell.vue';
@@ -10,13 +9,14 @@ import EventsView from '@/views/EventsView.vue';
 import UsersView from '@/views/UsersView.vue';
 import GrantsView from '@/views/GrantsView.vue';
 import TokensView from '@/views/TokensView.vue';
+import AiSettingsView from '@/views/AiSettingsView.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useSetupStore } from '@/stores/setup';
 
 const router = createRouter({
   history: createWebHistory('/admin/'),
   routes: [
-    { path: '/', name: 'home', component: WelcomeView, meta: { anon: true } },
+    { path: '/', redirect: '/app/dashboard' },
     { path: '/setup', name: 'setup', component: SetupView, meta: { anon: true } },
     { path: '/login', name: 'login', component: LoginView, meta: { anon: true } },
     {
@@ -32,6 +32,7 @@ const router = createRouter({
         { path: 'users', name: 'users', component: UsersView, meta: { admin: true } },
         { path: 'grants', name: 'grants', component: GrantsView, meta: { admin: true } },
         { path: 'tokens', name: 'tokens', component: TokensView, meta: { admin: true } },
+        { path: 'ai-settings', name: 'ai-settings', component: AiSettingsView, meta: { admin: true } },
       ],
     },
   ],
@@ -45,14 +46,14 @@ router.beforeEach(async (to) => {
     await setup.ensureLoaded();
   } catch {
     if (to.meta.app) {
-      return { name: 'home' };
+      return { name: 'login' };
     }
     return true;
   }
 
   if (setup.needsSetup) {
     auth.apply(null);
-    if (to.name === 'home' || to.name === 'setup') {
+    if (to.name === 'setup') {
       return true;
     }
     return { name: 'setup' };

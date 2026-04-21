@@ -54,7 +54,7 @@ internal static class AdminUiEndpoints
             ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             ctx.Response.ContentType = "text/plain; charset=utf-8";
             await ctx.Response.WriteAsync(
-                "SonnetDB Admin UI 尚未构建：请先在 web/admin 目录执行 `npm install && npm run build`，再 `dotnet build src/SonnetDB`。"
+                "SonnetDB Admin UI 尚未构建：请先在 web 目录执行 `npm install && npm run build`，再 `dotnet build src/SonnetDB`。"
             ).ConfigureAwait(false);
             return;
         }

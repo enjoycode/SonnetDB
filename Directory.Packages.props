@@ -5,6 +5,8 @@
 
   <ItemGroup Label="Core">
     <PackageVersion Include="System.IO.Hashing" Version="10.0.6" />
+    <PackageVersion Include="ModelContextProtocol" Version="1.2.0" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.2.0" />
   </ItemGroup>
 
   <ItemGroup Label="Test">
