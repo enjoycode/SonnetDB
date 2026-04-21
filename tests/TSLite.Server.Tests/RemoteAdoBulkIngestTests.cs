@@ -19,9 +19,9 @@ public sealed class RemoteAdoBulkIngestTests : IAsyncLifetime
     private WebApplication? _app;
     private string _baseUrl = string.Empty;
     private string? _dataRoot;
-    private const string AdminToken = "remote-bulk-admin";
-    private const string ReadOnlyToken = "remote-bulk-ro";
-    private const string DbName = "remote_bulk_e2e";
+    private const string _adminToken = "remote-bulk-admin";
+    private const string _readOnlyToken = "remote-bulk-ro";
+    private const string _dbName = "remote_bulk_e2e";
 
     public async Task InitializeAsync()
     {
@@ -34,8 +34,8 @@ public sealed class RemoteAdoBulkIngestTests : IAsyncLifetime
             AllowAnonymousProbes = true,
             Tokens = new Dictionary<string, string>
             {
-                [AdminToken] = ServerRoles.Admin,
-                [ReadOnlyToken] = ServerRoles.ReadOnly,
+                [_adminToken] = ServerRoles.Admin,
+                [_readOnlyToken] = ServerRoles.ReadOnly,
             },
         };
         _app = Program.BuildApp(["--Kestrel:Endpoints:Http:Url=http://127.0.0.1:0"], options);
@@ -46,11 +46,11 @@ public sealed class RemoteAdoBulkIngestTests : IAsyncLifetime
 
         // 创建数据库 + measurement
         using var http = new HttpClient { BaseAddress = new Uri(_baseUrl) };
-        http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", AdminToken);
+        http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _adminToken);
         var resp = await http.PostAsync("/v1/db", new StringContent(
-            $"{{\"name\":\"{DbName}\"}}", System.Text.Encoding.UTF8, "application/json"));
+            $"{{\"name\":\"{_dbName}\"}}", System.Text.Encoding.UTF8, "application/json"));
         resp.EnsureSuccessStatusCode();
-        var ddl = await http.PostAsync($"/v1/db/{DbName}/sql", new StringContent(
+        var ddl = await http.PostAsync($"/v1/db/{_dbName}/sql", new StringContent(
             "{\"sql\":\"CREATE MEASUREMENT cpu (host TAG, value FIELD FLOAT)\"}",
             System.Text.Encoding.UTF8, "application/json"));
         ddl.EnsureSuccessStatusCode();
@@ -69,10 +69,10 @@ public sealed class RemoteAdoBulkIngestTests : IAsyncLifetime
         }
     }
 
-    private string ConnString(string token = AdminToken)
-        => $"Data Source=tslite+http://{new Uri(_baseUrl).Authority}/{DbName};Token={token};Timeout=30";
+    private string ConnString(string token = _adminToken)
+        => $"Data Source=tslite+http://{new Uri(_baseUrl).Authority}/{_dbName};Token={token};Timeout=30";
 
-    private TsdbConnection Open(string token = AdminToken)
+    private TsdbConnection Open(string token = _adminToken)
     {
         var c = new TsdbConnection(ConnString(token));
         c.Open();
@@ -146,7 +146,7 @@ public sealed class RemoteAdoBulkIngestTests : IAsyncLifetime
     [Fact]
     public void Remote_TableDirect_ReadOnlyToken_Throws403()
     {
-        using var c = Open(ReadOnlyToken);
+        using var c = Open(_readOnlyToken);
         using var cmd = c.CreateCommand();
         cmd.CommandType = CommandType.TableDirect;
         cmd.CommandText = "cpu\ncpu,host=a value=1 1";

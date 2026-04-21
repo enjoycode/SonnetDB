@@ -1,11 +1,11 @@
 using BenchmarkDotNet.Attributes;
+using TSLite.Benchmarks.Helpers;
 using TSLite.Engine;
 using TSLite.Engine.Compaction;
 using TSLite.Engine.Retention;
 using TSLite.Memory;
 using TSLite.Model;
 using TSLite.Storage.Segments;
-using TSLite.Benchmarks.Helpers;
 
 namespace TSLite.Benchmarks.Benchmarks;
 
@@ -17,8 +17,8 @@ namespace TSLite.Benchmarks.Benchmarks;
 [BenchmarkCategory("Compaction")]
 public class CompactionBenchmark
 {
-    private const int SegmentCount = 8;
-    private const int PointsPerSegment = 50_000;
+    private const int _segmentCount = 8;
+    private const int _pointsPerSegment = 50_000;
 
     private readonly IReadOnlyDictionary<string, string> _tags = new Dictionary<string, string>
     {
@@ -57,12 +57,12 @@ public class CompactionBenchmark
 
         using (var db = Tsdb.Open(options))
         {
-            var allPoints = DataGenerator.Generate(SegmentCount * PointsPerSegment);
+            var allPoints = DataGenerator.Generate(_segmentCount * _pointsPerSegment);
             int offset = 0;
 
-            for (int segmentIndex = 0; segmentIndex < SegmentCount; segmentIndex++)
+            for (int segmentIndex = 0; segmentIndex < _segmentCount; segmentIndex++)
             {
-                for (int i = 0; i < PointsPerSegment; i++)
+                for (int i = 0; i < _pointsPerSegment; i++)
                 {
                     var dp = allPoints[offset++];
                     var point = Point.Create(

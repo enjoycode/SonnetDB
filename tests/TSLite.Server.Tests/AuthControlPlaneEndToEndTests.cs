@@ -23,7 +23,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     private WebApplication? _app;
     private string? _baseUrl;
     private string? _dataRoot;
-    private const string AdminStaticToken = "static-admin-token";
+    private const string _adminStaticToken = "static-admin-token";
 
     public async Task InitializeAsync()
     {
@@ -37,7 +37,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
             AllowAnonymousProbes = true,
             Tokens = new Dictionary<string, string>
             {
-                [AdminStaticToken] = ServerRoles.Admin,
+                [_adminStaticToken] = ServerRoles.Admin,
             },
         };
 
@@ -110,8 +110,8 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     {
         // 1) 用静态 admin token 通过 SQL 端点创建用户 + 数据库 + 授权
         await CreateDatabaseAsync("metrics");
-        await ExecuteSqlAsync("metrics", "CREATE USER alice WITH PASSWORD 'pa$$'", AdminStaticToken);
-        await ExecuteSqlAsync("metrics", "GRANT WRITE ON DATABASE metrics TO alice", AdminStaticToken);
+        await ExecuteSqlAsync("metrics", "CREATE USER alice WITH PASSWORD 'pa$$'", _adminStaticToken);
+        await ExecuteSqlAsync("metrics", "GRANT WRITE ON DATABASE metrics TO alice", _adminStaticToken);
 
         // 2) alice 用密码登录获取 token
         using var anon = CreateClient(token: null);
@@ -140,7 +140,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     public async Task ControlPlaneDdl_WithNonAdminDynamicToken_IsForbidden()
     {
         await CreateDatabaseAsync("foo");
-        await ExecuteSqlAsync("foo", "CREATE USER carol WITH PASSWORD 'p'", AdminStaticToken);
+        await ExecuteSqlAsync("foo", "CREATE USER carol WITH PASSWORD 'p'", _adminStaticToken);
 
         using var anon = CreateClient(token: null);
         var loginResp = await anon.PostAsync("/v1/auth/login",
@@ -158,7 +158,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     public async Task RevokedToken_AfterAlterUserPassword_FailsAuth()
     {
         await CreateDatabaseAsync("m1");
-        await ExecuteSqlAsync("m1", "CREATE USER dave WITH PASSWORD 'old'", AdminStaticToken);
+        await ExecuteSqlAsync("m1", "CREATE USER dave WITH PASSWORD 'old'", _adminStaticToken);
 
         using var anon = CreateClient(token: null);
         var loginResp = await anon.PostAsync("/v1/auth/login",
@@ -167,7 +167,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
         Assert.NotNull(login);
 
         // admin 改密码 → dave 旧 token 失效
-        await ExecuteSqlAsync("m1", "ALTER USER dave WITH PASSWORD 'new'", AdminStaticToken);
+        await ExecuteSqlAsync("m1", "ALTER USER dave WITH PASSWORD 'new'", _adminStaticToken);
 
         using var dave = CreateClient(login!.Token);
         var hz = await dave.GetAsync("/v1/db");
@@ -178,9 +178,9 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     public async Task ShowUsers_AsAdmin_ReturnsRows()
     {
         await CreateDatabaseAsync("m");
-        await ExecuteSqlAsync("m", "CREATE USER eve WITH PASSWORD 'p'", AdminStaticToken);
+        await ExecuteSqlAsync("m", "CREATE USER eve WITH PASSWORD 'p'", _adminStaticToken);
 
-        using var admin = CreateClient(AdminStaticToken);
+        using var admin = CreateClient(_adminStaticToken);
         var resp = await admin.PostAsync("/v1/db/m/sql",
             JsonContent.Create(new SqlRequest("SHOW USERS"), ServerJsonContext.Default.SqlRequest));
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
@@ -192,7 +192,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     public async Task ShowUsers_AsRegularUser_Forbidden()
     {
         await CreateDatabaseAsync("m");
-        await ExecuteSqlAsync("m", "CREATE USER frank WITH PASSWORD 'p'", AdminStaticToken);
+        await ExecuteSqlAsync("m", "CREATE USER frank WITH PASSWORD 'p'", _adminStaticToken);
 
         using var anon = CreateClient(token: null);
         var loginResp = await anon.PostAsync("/v1/auth/login",
@@ -210,7 +210,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     {
         await CreateDatabaseAsync("alpha");
         await CreateDatabaseAsync("beta");
-        using var admin = CreateClient(AdminStaticToken);
+        using var admin = CreateClient(_adminStaticToken);
         var resp = await admin.PostAsync("/v1/db/alpha/sql",
             JsonContent.Create(new SqlRequest("SHOW DATABASES"), ServerJsonContext.Default.SqlRequest));
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
@@ -224,7 +224,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     [Fact]
     public async Task ControlPlaneEndpoint_AsAdmin_RunsCreateUserAndShowUsers()
     {
-        using var admin = CreateClient(AdminStaticToken);
+        using var admin = CreateClient(_adminStaticToken);
         var createResp = await admin.PostAsync("/v1/sql",
             JsonContent.Create(new SqlRequest("CREATE USER cpuser WITH PASSWORD 'p'"), ServerJsonContext.Default.SqlRequest));
         Assert.Equal(HttpStatusCode.OK, createResp.StatusCode);
@@ -239,7 +239,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     [Fact]
     public async Task ControlPlaneEndpoint_CreateSuperuser_FlagPersisted()
     {
-        using var admin = CreateClient(AdminStaticToken);
+        using var admin = CreateClient(_adminStaticToken);
         var resp = await admin.PostAsync("/v1/sql",
             JsonContent.Create(new SqlRequest("CREATE USER suid WITH PASSWORD 'p' SUPERUSER"),
                 ServerJsonContext.Default.SqlRequest));
@@ -256,7 +256,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     public async Task ControlPlaneEndpoint_AsRegularUser_Forbidden()
     {
         await CreateDatabaseAsync("rdb");
-        using var admin = CreateClient(AdminStaticToken);
+        using var admin = CreateClient(_adminStaticToken);
         await admin.PostAsync("/v1/sql",
             JsonContent.Create(new SqlRequest("CREATE USER ruser WITH PASSWORD 'p'"), ServerJsonContext.Default.SqlRequest));
 
@@ -274,7 +274,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     [Fact]
     public async Task ControlPlaneEndpoint_RejectsDataPlaneStatement()
     {
-        using var admin = CreateClient(AdminStaticToken);
+        using var admin = CreateClient(_adminStaticToken);
         var resp = await admin.PostAsync("/v1/sql",
             JsonContent.Create(new SqlRequest("SELECT a FROM m"), ServerJsonContext.Default.SqlRequest));
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
@@ -285,7 +285,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
     [Fact]
     public async Task ControlPlaneEndpoint_IssueAndRevokeToken_WorksEndToEnd()
     {
-        using var admin = CreateClient(AdminStaticToken);
+        using var admin = CreateClient(_adminStaticToken);
         var createResp = await admin.PostAsync("/v1/sql",
             JsonContent.Create(new SqlRequest("CREATE USER tokenuser WITH PASSWORD 'p'"), ServerJsonContext.Default.SqlRequest));
         Assert.Equal(HttpStatusCode.OK, createResp.StatusCode);
@@ -317,7 +317,7 @@ public sealed class AuthControlPlaneEndToEndTests : IAsyncLifetime
 
     private async Task CreateDatabaseAsync(string name)
     {
-        using var admin = CreateClient(AdminStaticToken);
+        using var admin = CreateClient(_adminStaticToken);
         var resp = await admin.PostAsync("/v1/db",
             JsonContent.Create(new CreateDatabaseRequest(name), ServerJsonContext.Default.CreateDatabaseRequest));
         Assert.True(resp.StatusCode is HttpStatusCode.Created or HttpStatusCode.OK,

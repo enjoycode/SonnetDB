@@ -35,13 +35,13 @@ internal sealed class ServerBatchRequest
 [BenchmarkCategory("Server")]
 public class ServerInsertBenchmark
 {
-    private const int DataPointCount = 1_000_000;
-    private const string ServerUrl = "http://localhost:5080";
+    private const int _dataPointCount = 1_000_000;
+    private const string _serverUrl = "http://localhost:5080";
     // PR #47：允许环境变量 TSLITE_BENCH_TOKEN 覆盖，便于本地手工启动的容器使用其他 token。
-    private static readonly string AdminToken =
+    private static readonly string _adminToken =
         Environment.GetEnvironmentVariable("TSLITE_BENCH_TOKEN") ?? "bench-admin-token";
-    private const string DbName = "bench_server_insert";
-    private const int BatchSize = 2_000;
+    private const string _dbName = "bench_server_insert";
+    private const int _batchSize = 2_000;
 
     private BenchmarkDataPoint[] _dataPoints = [];
     private string _lpPayload = string.Empty;
@@ -54,10 +54,10 @@ public class ServerInsertBenchmark
     [GlobalSetup]
     public async Task GlobalSetup()
     {
-        _dataPoints = DataGenerator.Generate(DataPointCount);
+        _dataPoints = DataGenerator.Generate(_dataPointCount);
 
         // ── 预先生成 LP / JSON / Bulk VALUES payload，避免迭代内计入字符串拼接耗时 ──
-        var lp = new StringBuilder(capacity: DataPointCount * 50);
+        var lp = new StringBuilder(capacity: _dataPointCount * 50);
         for (int i = 0; i < _dataPoints.Length; i++)
         {
             var dp = _dataPoints[i];
@@ -65,7 +65,7 @@ public class ServerInsertBenchmark
         }
         _lpPayload = lp.ToString();
 
-        var json = new StringBuilder(capacity: DataPointCount * 80);
+        var json = new StringBuilder(capacity: _dataPointCount * 80);
         json.Append("{\"m\":\"sensor_data\",\"points\":[");
         for (int i = 0; i < _dataPoints.Length; i++)
         {
@@ -77,7 +77,7 @@ public class ServerInsertBenchmark
         json.Append("]}");
         _jsonPayload = json.ToString();
 
-        var bulk = new StringBuilder(capacity: 64 + DataPointCount * 48);
+        var bulk = new StringBuilder(capacity: 64 + _dataPointCount * 48);
         bulk.Append("INSERT INTO sensor_data(host, value, time) VALUES ");
         for (int i = 0; i < _dataPoints.Length; i++)
         {
@@ -87,9 +87,9 @@ public class ServerInsertBenchmark
         }
         _bulkValuesPayload = bulk.ToString();
 
-        _http = new HttpClient { BaseAddress = new Uri(ServerUrl) };
+        _http = new HttpClient { BaseAddress = new Uri(_serverUrl) };
         _http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", AdminToken);
+            new AuthenticationHeaderValue("Bearer", _adminToken);
         _http.Timeout = TimeSpan.FromMinutes(10);
 
         try
@@ -103,10 +103,10 @@ public class ServerInsertBenchmark
             }
 
             // 创建数据库（幂等）
-            await PostJsonAsync("/v1/db", $"{{\"name\":\"{DbName}\"}}").ConfigureAwait(false);
+            await PostJsonAsync("/v1/db", $"{{\"name\":\"{_dbName}\"}}").ConfigureAwait(false);
 
             // 创建 Measurement（幂等）
-            await PostSqlAsync(DbName,
+            await PostSqlAsync(_dbName,
                 "CREATE MEASUREMENT sensor_data (host TAG, value FIELD FLOAT)")
                 .ConfigureAwait(false);
 
@@ -127,9 +127,9 @@ public class ServerInsertBenchmark
     {
         if (!_serverAvailable) return;
 
-        _http!.DeleteAsync($"/v1/db/{DbName}").GetAwaiter().GetResult();
-        PostJsonAsync("/v1/db", $"{{\"name\":\"{DbName}\"}}").GetAwaiter().GetResult();
-        PostSqlAsync(DbName,
+        _http!.DeleteAsync($"/v1/db/{_dbName}").GetAwaiter().GetResult();
+        PostJsonAsync("/v1/db", $"{{\"name\":\"{_dbName}\"}}").GetAwaiter().GetResult();
+        PostSqlAsync(_dbName,
             "CREATE MEASUREMENT sensor_data (host TAG, value FIELD FLOAT)")
             .GetAwaiter().GetResult();
     }
@@ -146,9 +146,9 @@ public class ServerInsertBenchmark
             return;
         }
 
-        for (int offset = 0; offset < _dataPoints.Length; offset += BatchSize)
+        for (int offset = 0; offset < _dataPoints.Length; offset += _batchSize)
         {
-            int end = Math.Min(offset + BatchSize, _dataPoints.Length);
+            int end = Math.Min(offset + _batchSize, _dataPoints.Length);
             var stmts = new List<ServerSqlRequest>(end - offset);
             for (int i = offset; i < end; i++)
             {
@@ -165,7 +165,7 @@ public class ServerInsertBenchmark
             var json = JsonSerializer.Serialize(batch);
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
             using var resp = await _http!.PostAsync(
-                $"/v1/db/{DbName}/sql/batch", content).ConfigureAwait(false);
+                $"/v1/db/{_dbName}/sql/batch", content).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
         }
     }
@@ -182,7 +182,7 @@ public class ServerInsertBenchmark
 
         using var content = new StringContent(_lpPayload, Encoding.UTF8, "text/plain");
         using var resp = await _http!.PostAsync(
-            $"/v1/db/{DbName}/measurements/sensor_data/lp?flush=true", content).ConfigureAwait(false);
+            $"/v1/db/{_dbName}/measurements/sensor_data/lp?flush=true", content).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
     }
 
@@ -198,7 +198,7 @@ public class ServerInsertBenchmark
 
         using var content = new StringContent(_jsonPayload, Encoding.UTF8, "application/json");
         using var resp = await _http!.PostAsync(
-            $"/v1/db/{DbName}/measurements/sensor_data/json?flush=true", content).ConfigureAwait(false);
+            $"/v1/db/{_dbName}/measurements/sensor_data/json?flush=true", content).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
     }
 
@@ -214,7 +214,7 @@ public class ServerInsertBenchmark
 
         using var content = new StringContent(_bulkValuesPayload, Encoding.UTF8, "text/plain");
         using var resp = await _http!.PostAsync(
-            $"/v1/db/{DbName}/measurements/sensor_data/bulk?flush=true", content).ConfigureAwait(false);
+            $"/v1/db/{_dbName}/measurements/sensor_data/bulk?flush=true", content).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
     }
 
@@ -226,7 +226,7 @@ public class ServerInsertBenchmark
         {
             try
             {
-                await _http!.DeleteAsync($"/v1/db/{DbName}").ConfigureAwait(false);
+                await _http!.DeleteAsync($"/v1/db/{_dbName}").ConfigureAwait(false);
             }
             catch (Exception ex) { Console.Error.WriteLine($"[WARN] 清理失败（不影响结果）: {ex.Message}"); }
         }
@@ -279,12 +279,12 @@ public class ServerInsertBenchmark
 [BenchmarkCategory("Server")]
 public class ServerQueryBenchmark
 {
-    private const int DataPointCount = 1_000_000;
-    private const string ServerUrl = "http://localhost:5080";
-    private static readonly string AdminToken =
+    private const int _dataPointCount = 1_000_000;
+    private const string _serverUrl = "http://localhost:5080";
+    private static readonly string _adminToken =
         Environment.GetEnvironmentVariable("TSLITE_BENCH_TOKEN") ?? "bench-admin-token";
-    private const string DbName = "bench_server_query";
-    private const int BatchSize = 2_000;
+    private const string _dbName = "bench_server_query";
+    private const int _batchSize = 2_000;
 
     private long _queryFromMs;
     private long _queryToMs;
@@ -295,13 +295,13 @@ public class ServerQueryBenchmark
     [GlobalSetup]
     public async Task GlobalSetup()
     {
-        var points = DataGenerator.Generate(DataPointCount);
-        _queryFromMs = DataGenerator.QueryFromMs(DataPointCount);
-        _queryToMs = DataGenerator.QueryToMs(DataPointCount);
+        var points = DataGenerator.Generate(_dataPointCount);
+        _queryFromMs = DataGenerator.QueryFromMs(_dataPointCount);
+        _queryToMs = DataGenerator.QueryToMs(_dataPointCount);
 
-        _http = new HttpClient { BaseAddress = new Uri(ServerUrl) };
+        _http = new HttpClient { BaseAddress = new Uri(_serverUrl) };
         _http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", AdminToken);
+            new AuthenticationHeaderValue("Bearer", _adminToken);
         _http.Timeout = TimeSpan.FromMinutes(20);
 
         try
@@ -314,15 +314,15 @@ public class ServerQueryBenchmark
                 return;
             }
 
-            await PostJsonAsync("/v1/db", $"{{\"name\":\"{DbName}\"}}").ConfigureAwait(false);
-            await PostSqlAsync(DbName,
+            await PostJsonAsync("/v1/db", $"{{\"name\":\"{_dbName}\"}}").ConfigureAwait(false);
+            await PostSqlAsync(_dbName,
                 "CREATE MEASUREMENT sensor_data (host TAG, value FIELD FLOAT)")
                 .ConfigureAwait(false);
 
             // 写入 100 万条数据
-            for (int offset = 0; offset < points.Length; offset += BatchSize)
+            for (int offset = 0; offset < points.Length; offset += _batchSize)
             {
-                int end = Math.Min(offset + BatchSize, points.Length);
+                int end = Math.Min(offset + _batchSize, points.Length);
                 var stmts = new List<ServerSqlRequest>(end - offset);
                 for (int i = offset; i < end; i++)
                 {
@@ -339,7 +339,7 @@ public class ServerQueryBenchmark
                 var json = JsonSerializer.Serialize(batch);
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
                 using var resp = await _http.PostAsync(
-                    $"/v1/db/{DbName}/sql/batch", content).ConfigureAwait(false);
+                    $"/v1/db/{_dbName}/sql/batch", content).ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();
             }
 
@@ -373,7 +373,7 @@ public class ServerQueryBenchmark
         var json = JsonSerializer.Serialize(req);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var resp = await _http!.PostAsync(
-            $"/v1/db/{DbName}/sql", content).ConfigureAwait(false);
+            $"/v1/db/{_dbName}/sql", content).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
 
         // 消费 ndjson 响应体（流式读取，统计行数）
@@ -397,7 +397,7 @@ public class ServerQueryBenchmark
         {
             try
             {
-                await _http!.DeleteAsync($"/v1/db/{DbName}").ConfigureAwait(false);
+                await _http!.DeleteAsync($"/v1/db/{_dbName}").ConfigureAwait(false);
             }
             catch (Exception ex) { Console.Error.WriteLine($"[WARN] 清理失败（不影响结果）: {ex.Message}"); }
         }
@@ -439,12 +439,12 @@ public class ServerQueryBenchmark
 [BenchmarkCategory("Server")]
 public class ServerAggregateBenchmark
 {
-    private const int DataPointCount = 1_000_000;
-    private const string ServerUrl = "http://localhost:5080";
-    private static readonly string AdminToken =
+    private const int _dataPointCount = 1_000_000;
+    private const string _serverUrl = "http://localhost:5080";
+    private static readonly string _adminToken =
         Environment.GetEnvironmentVariable("TSLITE_BENCH_TOKEN") ?? "bench-admin-token";
-    private const string DbName = "bench_server_aggregate";
-    private const int BatchSize = 2_000;
+    private const string _dbName = "bench_server_aggregate";
+    private const int _batchSize = 2_000;
 
     private HttpClient? _http;
     private bool _serverAvailable;
@@ -453,11 +453,11 @@ public class ServerAggregateBenchmark
     [GlobalSetup]
     public async Task GlobalSetup()
     {
-        var points = DataGenerator.Generate(DataPointCount);
+        var points = DataGenerator.Generate(_dataPointCount);
 
-        _http = new HttpClient { BaseAddress = new Uri(ServerUrl) };
+        _http = new HttpClient { BaseAddress = new Uri(_serverUrl) };
         _http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", AdminToken);
+            new AuthenticationHeaderValue("Bearer", _adminToken);
         _http.Timeout = TimeSpan.FromMinutes(20);
 
         try
@@ -470,14 +470,14 @@ public class ServerAggregateBenchmark
                 return;
             }
 
-            await PostJsonAsync("/v1/db", $"{{\"name\":\"{DbName}\"}}").ConfigureAwait(false);
-            await PostSqlAsync(DbName,
+            await PostJsonAsync("/v1/db", $"{{\"name\":\"{_dbName}\"}}").ConfigureAwait(false);
+            await PostSqlAsync(_dbName,
                 "CREATE MEASUREMENT sensor_data (host TAG, value FIELD FLOAT)")
                 .ConfigureAwait(false);
 
-            for (int offset = 0; offset < points.Length; offset += BatchSize)
+            for (int offset = 0; offset < points.Length; offset += _batchSize)
             {
-                int end = Math.Min(offset + BatchSize, points.Length);
+                int end = Math.Min(offset + _batchSize, points.Length);
                 var stmts = new List<ServerSqlRequest>(end - offset);
                 for (int i = offset; i < end; i++)
                 {
@@ -494,7 +494,7 @@ public class ServerAggregateBenchmark
                 var json = JsonSerializer.Serialize(batch);
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
                 using var resp = await _http.PostAsync(
-                    $"/v1/db/{DbName}/sql/batch", content).ConfigureAwait(false);
+                    $"/v1/db/{_dbName}/sql/batch", content).ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();
             }
 
@@ -520,7 +520,7 @@ public class ServerAggregateBenchmark
         }
 
         var startMs = DataGenerator.StartTimestampMs.ToString(CultureInfo.InvariantCulture);
-        var endMs = DataGenerator.QueryToMs(DataPointCount).ToString(CultureInfo.InvariantCulture);
+        var endMs = DataGenerator.QueryToMs(_dataPointCount).ToString(CultureInfo.InvariantCulture);
         var sql = $"SELECT avg(value) FROM sensor_data " +
                   $"WHERE time >= {startMs} AND time < {endMs} " +
                   $"GROUP BY time(1m)";
@@ -529,7 +529,7 @@ public class ServerAggregateBenchmark
         var json = JsonSerializer.Serialize(req);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var resp = await _http!.PostAsync(
-            $"/v1/db/{DbName}/sql", content).ConfigureAwait(false);
+            $"/v1/db/{_dbName}/sql", content).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
 
         await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
@@ -552,7 +552,7 @@ public class ServerAggregateBenchmark
         {
             try
             {
-                await _http!.DeleteAsync($"/v1/db/{DbName}").ConfigureAwait(false);
+                await _http!.DeleteAsync($"/v1/db/{_dbName}").ConfigureAwait(false);
             }
             catch (Exception ex) { Console.Error.WriteLine($"[WARN] 清理失败（不影响结果）: {ex.Message}"); }
         }

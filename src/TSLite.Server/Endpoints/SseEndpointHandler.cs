@@ -20,7 +20,7 @@ namespace TSLite.Server.Endpoints;
 /// </remarks>
 internal static class SseEndpointHandler
 {
-    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan _heartbeatInterval = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// 处理 <c>GET /v1/events</c>。在客户端断开或 host shutdown 时退出。
@@ -48,7 +48,7 @@ internal static class SseEndpointHandler
             {
                 // 等待事件或心跳超时
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
-                timeoutCts.CancelAfter(HeartbeatInterval);
+                timeoutCts.CancelAfter(_heartbeatInterval);
 
                 bool gotEvent;
                 try

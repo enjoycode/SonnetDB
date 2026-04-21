@@ -25,9 +25,9 @@ public sealed class ServerEndToEndTests : IAsyncLifetime
     private WebApplication? _app;
     private string? _baseUrl;
     private string? _dataRoot;
-    private const string AdminToken = "admin-test-token";
-    private const string ReadWriteToken = "rw-test-token";
-    private const string ReadOnlyToken = "ro-test-token";
+    private const string _adminToken = "admin-test-token";
+    private const string _readWriteToken = "rw-test-token";
+    private const string _readOnlyToken = "ro-test-token";
 
     public async Task InitializeAsync()
     {
@@ -41,9 +41,9 @@ public sealed class ServerEndToEndTests : IAsyncLifetime
             AllowAnonymousProbes = true,
             Tokens = new Dictionary<string, string>
             {
-                [AdminToken] = ServerRoles.Admin,
-                [ReadWriteToken] = ServerRoles.ReadWrite,
-                [ReadOnlyToken] = ServerRoles.ReadOnly,
+                [_adminToken] = ServerRoles.Admin,
+                [_readWriteToken] = ServerRoles.ReadWrite,
+                [_readOnlyToken] = ServerRoles.ReadOnly,
             },
         };
 
@@ -69,7 +69,7 @@ public sealed class ServerEndToEndTests : IAsyncLifetime
         }
     }
 
-    private HttpClient CreateClient(string? token = AdminToken)
+    private HttpClient CreateClient(string? token = _adminToken)
     {
         var client = new HttpClient { BaseAddress = new Uri(_baseUrl!) };
         if (token is not null)
@@ -109,7 +109,7 @@ public sealed class ServerEndToEndTests : IAsyncLifetime
     [Fact]
     public async Task CreateDatabase_RequiresAdmin()
     {
-        using var client = CreateClient(ReadWriteToken);
+        using var client = CreateClient(_readWriteToken);
         var resp = await client.PostAsync("/v1/db",
             JsonContent.Create(new CreateDatabaseRequest("denied"), ServerJsonContext.Default.CreateDatabaseRequest));
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
@@ -118,8 +118,8 @@ public sealed class ServerEndToEndTests : IAsyncLifetime
     [Fact]
     public async Task FullFlow_Create_Insert_Select_Drop()
     {
-        using var admin = CreateClient(AdminToken);
-        using var ro = CreateClient(ReadOnlyToken);
+        using var admin = CreateClient(_adminToken);
+        using var ro = CreateClient(_readOnlyToken);
 
         // 1) CREATE DATABASE
         var dbName = "flowtest";
@@ -149,7 +149,7 @@ public sealed class ServerEndToEndTests : IAsyncLifetime
     [Fact]
     public async Task UnknownDatabase_Returns404()
     {
-        using var client = CreateClient(AdminToken);
+        using var client = CreateClient(_adminToken);
         var resp = await client.PostAsync("/v1/db/nonexistent/sql",
             JsonContent.Create(new SqlRequest("SELECT 1"), ServerJsonContext.Default.SqlRequest));
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);

@@ -19,9 +19,9 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
     private WebApplication? _app;
     private string _baseUrl = string.Empty;
     private string? _dataRoot;
-    private const string AdminToken = "remote-admin";
-    private const string ReadOnlyToken = "remote-ro";
-    private const string DbName = "remote_e2e";
+    private const string _adminToken = "remote-admin";
+    private const string _readOnlyToken = "remote-ro";
+    private const string _dbName = "remote_e2e";
 
     public async Task InitializeAsync()
     {
@@ -35,8 +35,8 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
             AllowAnonymousProbes = true,
             Tokens = new Dictionary<string, string>
             {
-                [AdminToken] = ServerRoles.Admin,
-                [ReadOnlyToken] = ServerRoles.ReadOnly,
+                [_adminToken] = ServerRoles.Admin,
+                [_readOnlyToken] = ServerRoles.ReadOnly,
             },
         };
         _app = Program.BuildApp(["--Kestrel:Endpoints:Http:Url=http://127.0.0.1:0"], options);
@@ -47,9 +47,9 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
 
         // 创建数据库
         using var http = new HttpClient { BaseAddress = new Uri(_baseUrl) };
-        http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", AdminToken);
+        http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _adminToken);
         var resp = await http.PostAsync("/v1/db", new StringContent(
-            $"{{\"name\":\"{DbName}\"}}", System.Text.Encoding.UTF8, "application/json"));
+            $"{{\"name\":\"{_dbName}\"}}", System.Text.Encoding.UTF8, "application/json"));
         resp.EnsureSuccessStatusCode();
     }
 
@@ -66,10 +66,10 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
         }
     }
 
-    private string RemoteConnString(string token = AdminToken)
-        => $"Data Source=tslite+http://{new Uri(_baseUrl).Authority}/{DbName};Token={token};Timeout=30";
+    private string RemoteConnString(string token = _adminToken)
+        => $"Data Source=tslite+http://{new Uri(_baseUrl).Authority}/{_dbName};Token={token};Timeout=30";
 
-    private TsdbConnection OpenRemote(string token = AdminToken)
+    private TsdbConnection OpenRemote(string token = _adminToken)
     {
         var c = new TsdbConnection(RemoteConnString(token));
         c.Open();
@@ -83,7 +83,7 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
         Assert.Equal(TsdbProviderMode.Remote, c.ProviderMode);
         Assert.Equal(ConnectionState.Open, c.State);
         Assert.Null(c.UnderlyingTsdb); // 远程模式没有本地 Tsdb
-        Assert.Equal(DbName, c.Database);
+        Assert.Equal(_dbName, c.Database);
     }
 
     [Fact]
@@ -187,14 +187,14 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
     public void Remote_ReadOnlyToken_InsertForbidden()
     {
         // 先用 admin 建表
-        using (var admin = OpenRemote(AdminToken))
+        using (var admin = OpenRemote(_adminToken))
         using (var ddl = admin.CreateCommand())
         {
             ddl.CommandText = "CREATE MEASUREMENT m3 (host TAG, v FIELD FLOAT)";
             ddl.ExecuteNonQuery();
         }
 
-        using var c = OpenRemote(ReadOnlyToken);
+        using var c = OpenRemote(_readOnlyToken);
         using var ins = c.CreateCommand();
         ins.CommandText = "INSERT INTO m3 (time, host, v) VALUES (1, 'a', 1)";
         var ex = Assert.Throws<TsdbServerException>(() => ins.ExecuteNonQuery());
@@ -214,7 +214,7 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
     [Fact]
     public void Remote_MissingToken_Unauthorized()
     {
-        var cs = $"Data Source=tslite+http://{new Uri(_baseUrl).Authority}/{DbName}";
+        var cs = $"Data Source=tslite+http://{new Uri(_baseUrl).Authority}/{_dbName}";
         using var c = new TsdbConnection(cs);
         c.Open();
         using var cmd = c.CreateCommand();
@@ -226,7 +226,7 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
     [Fact]
     public void Remote_UnknownDatabase_NotFound()
     {
-        var cs = $"Data Source=tslite+http://{new Uri(_baseUrl).Authority}/no_such_db;Token={AdminToken}";
+        var cs = $"Data Source=tslite+http://{new Uri(_baseUrl).Authority}/no_such_db;Token={_adminToken}";
         using var c = new TsdbConnection(cs);
         c.Open();
         using var cmd = c.CreateCommand();
