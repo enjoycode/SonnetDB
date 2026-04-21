@@ -162,7 +162,10 @@ public sealed class SegmentReader : IDisposable
 
         if (!header.IsValid())
             throw new SegmentCorruptedException(path, 0,
-                $"SegmentHeader Magic 或 FormatVersion 不匹配（Magic={Encoding.ASCII.GetString(header.Magic.AsReadOnlySpan())}, Version={header.FormatVersion}）。");
+                $"SegmentHeader Magic 或 FormatVersion 不匹配（Magic={Encoding.ASCII.GetString(header.Magic.AsReadOnlySpan())}, " +
+                $"Version={header.FormatVersion}，期望 v{TsdbMagic.SegmentFormatVersion}）。" +
+                "TSLite v2（PR #50）将 BlockHeader.AggregateMin/Max 升级为 8 字节 double，BlockHeader 大小由 64B 增至 72B；" +
+                "旧 v1 段文件需通过重放 WAL（删除 .tslseg 后启动）重新生成。");
 
         if (header.HeaderSize != FormatSizes.SegmentHeaderSize)
             throw new SegmentCorruptedException(path, 0,
@@ -274,8 +277,8 @@ public sealed class SegmentReader : IDisposable
                 HasAggregateSumCount = (bh.AggregateFlags & BlockHeader.HasSumCount) != 0,
                 HasAggregateMinMax = (bh.AggregateFlags & BlockHeader.HasMinMax) != 0,
                 AggregateSum = bh.AggregateSum,
-                AggregateMin = DecodeAggregateBoundary(bh.FieldType, bh.AggregateMinBits),
-                AggregateMax = DecodeAggregateBoundary(bh.FieldType, bh.AggregateMaxBits),
+                AggregateMin = bh.AggregateMin,
+                AggregateMax = bh.AggregateMax,
                 FieldNameUtf8Length = bh.FieldNameUtf8Length,
                 TimestampPayloadLength = bh.TimestampPayloadLength,
                 ValuePayloadLength = bh.ValuePayloadLength,
@@ -428,17 +431,6 @@ public sealed class SegmentReader : IDisposable
     internal static byte[] LoadAll(string path) => File.ReadAllBytes(path);
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
-
-    private static double DecodeAggregateBoundary(FieldType fieldType, int bits)
-    {
-        return fieldType switch
-        {
-            FieldType.Float64 => BitConverter.Int32BitsToSingle(bits),
-            FieldType.Int64 => bits,
-            FieldType.Boolean => bits != 0 ? 1.0 : 0.0,
-            _ => 0.0,
-        };
-    }
 
     private void ThrowIfDisposed()
     {

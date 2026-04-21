@@ -16,6 +16,12 @@ public sealed class MemTableSeries
     private long _lastTimestamp = long.MinValue;
     private long _minTimestamp = long.MaxValue;
     private long _maxTimestamp = long.MinValue;
+    // 数值字段的运行期增量聚合（Float64/Int64/Boolean），用于范围全覆盖时的查询快路径。
+    // 非数值字段始终保持 _hasNumericAggregates = false。
+    private bool _hasNumericAggregates;
+    private double _numericSum;
+    private double _numericMin = double.PositiveInfinity;
+    private double _numericMax = double.NegativeInfinity;
 
     /// <summary>该桶的 (SeriesId, FieldName) 复合键。</summary>
     public SeriesFieldKey Key { get; }
@@ -78,6 +84,63 @@ public sealed class MemTableSeries
     {
         Key = key;
         FieldType = fieldType;
+        _hasNumericAggregates = fieldType is FieldType.Float64 or FieldType.Int64 or FieldType.Boolean;
+    }
+
+    /// <summary>
+    /// 是否为数值字段（Float64 / Int64 / Boolean），仅在该字段类型下维护运行期 sum/min/max。
+    /// </summary>
+    public bool HasNumericAggregates => _hasNumericAggregates;
+
+    /// <summary>
+    /// 数值字段累积 Sum 快照（仅当 <see cref="HasNumericAggregates"/> 且 <see cref="Count"/> &gt; 0 时有意义）。
+    /// </summary>
+    public double NumericSum
+    {
+        get { lock (_sync) return _numericSum; }
+    }
+
+    /// <summary>
+    /// 数值字段累积 Min 快照（仅当 <see cref="HasNumericAggregates"/> 且 <see cref="Count"/> &gt; 0 时有意义）。
+    /// </summary>
+    public double NumericMin
+    {
+        get { lock (_sync) return _numericMin; }
+    }
+
+    /// <summary>
+    /// 数值字段累积 Max 快照（仅当 <see cref="HasNumericAggregates"/> 且 <see cref="Count"/> &gt; 0 时有意义）。
+    /// </summary>
+    public double NumericMax
+    {
+        get { lock (_sync) return _numericMax; }
+    }
+
+    /// <summary>
+    /// 一次性原子读取范围全覆盖时所需的全部聚合状态：count / sum / min / max / 时间窗。
+    /// 仅当 <see cref="HasNumericAggregates"/> 为 true 且 <paramref name="count"/> &gt; 0 时返回的聚合值有意义。
+    /// </summary>
+    /// <param name="count">桶内数据点总数。</param>
+    /// <param name="minTs">桶内最小时间戳。</param>
+    /// <param name="maxTs">桶内最大时间戳。</param>
+    /// <param name="sum">数值累积 Sum。</param>
+    /// <param name="min">数值累积 Min。</param>
+    /// <param name="max">数值累积 Max。</param>
+    /// <returns>是否提供有效的 sum/min/max（true 表示数值字段且非空）。</returns>
+    public bool TryGetNumericAggregateSnapshot(
+        out int count, out long minTs, out long maxTs,
+        out double sum, out double min, out double max)
+    {
+        lock (_sync)
+        {
+            count = _points.Count;
+            minTs = _minTimestamp;
+            maxTs = _maxTimestamp;
+            sum = _numericSum;
+            min = _numericMin;
+            max = _numericMax;
+            return _hasNumericAggregates && count > 0;
+        }
     }
 
     /// <summary>
@@ -105,6 +168,20 @@ public sealed class MemTableSeries
                 _minTimestamp = timestamp;
             if (timestamp > _maxTimestamp)
                 _maxTimestamp = timestamp;
+
+            if (_hasNumericAggregates)
+            {
+                double v = FieldType switch
+                {
+                    FieldType.Float64 => value.AsDouble(),
+                    FieldType.Int64 => value.AsLong(),
+                    FieldType.Boolean => value.AsBool() ? 1.0 : 0.0,
+                    _ => 0.0,
+                };
+                _numericSum += v;
+                if (v < _numericMin) _numericMin = v;
+                if (v > _numericMax) _numericMax = v;
+            }
 
             _points.Add(new DataPoint(timestamp, value));
         }

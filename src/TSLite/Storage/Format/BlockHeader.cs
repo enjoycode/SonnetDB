@@ -4,12 +4,12 @@ using TSLite.Buffers;
 namespace TSLite.Storage.Format;
 
 /// <summary>
-/// TSLite 段文件中每个 Block 的头部（固定 64 字节）。
+/// TSLite 段文件中每个 Block 的头部（固定 72 字节，<see cref="TsdbMagic.SegmentFormatVersion"/> = 2）。
 /// <para>
 /// 一个 Block 由 BlockHeader + FieldNameUtf8 + TimestampPayload + ValuePayload 组成。
 /// </para>
 /// <para>
-/// 二进制布局（little-endian）：
+/// 二进制布局（little-endian, Pack=1）：
 /// <code>
 /// Offset  Size  Field
 /// 0       8     SeriesId                (序列唯一 ID)
@@ -22,12 +22,12 @@ namespace TSLite.Storage.Format;
 /// 40      1     Encoding                (<see cref="BlockEncoding"/>)
 /// 41      1     FieldType               (<see cref="Format.FieldType"/>)
 /// 42      2     AggregateFlags
-/// 44      8     AggregateSum
-/// 52      4     AggregateMinBits
-/// 56      4     AggregateMaxBits
-/// 60      4     Crc32
+/// 44      8     AggregateSum            (double, little-endian)
+/// 52      8     AggregateMin            (double, little-endian, 仅 HasMinMax 为真时有效)
+/// 60      8     AggregateMax            (double, little-endian, 仅 HasMinMax 为真时有效)
+/// 68      4     Crc32
 /// ─────────────────────────────────
-/// Total  64
+/// Total  72
 /// </code>
 /// </para>
 /// </summary>
@@ -65,9 +65,8 @@ public struct BlockHeader
     /// 聚合元数据标记（按位组合）。
     /// <list type="bullet">
     ///   <item><c>0x01</c> <see cref="HasSumCount"/>: <see cref="AggregateSum"/> 已写入且对 Sum/Count/Avg 精度足够。</item>
-    ///   <item><c>0x02</c> <see cref="HasMinMax"/>: <see cref="AggregateMinBits"/> / <see cref="AggregateMaxBits"/> 为无损值，可用于 Min/Max。</item>
+    ///   <item><c>0x02</c> <see cref="HasMinMax"/>: <see cref="AggregateMin"/> / <see cref="AggregateMax"/> 为无损值，可用于 Min/Max。</item>
     /// </list>
-    /// 老版本（仅 0/1）的 <c>1</c> 等同于 <see cref="HasSumCount"/>，min/max 精度被视为不可信。
     /// </summary>
     public short AggregateFlags;
 
@@ -75,14 +74,16 @@ public struct BlockHeader
     public double AggregateSum;
 
     /// <summary>
-    /// 数值聚合的 Min 位模式（仅当 <see cref="HasMinMax"/> 置位时有效）。
-    /// Float64 字段使用 <see cref="BitConverter.SingleToInt32Bits(float)"/>（写入侧已校验无精度损失），
-    /// Int64/Boolean 直接为 int32 数值。
+    /// 数值聚合的 Min（仅当 <see cref="HasMinMax"/> 置位时有效）。
+    /// <para>
+    /// v2 起统一为 8 字节 <see cref="double"/>，无损覆盖 Float64 / Int64 全部范围；
+    /// Boolean 字段保留 0/1。
+    /// </para>
     /// </summary>
-    public int AggregateMinBits;
+    public double AggregateMin;
 
-    /// <summary>数值聚合的 Max 位模式（编码方式同 <see cref="AggregateMinBits"/>）。</summary>
-    public int AggregateMaxBits;
+    /// <summary>数值聚合的 Max（编码方式同 <see cref="AggregateMin"/>）。</summary>
+    public double AggregateMax;
 
     /// <summary><see cref="AggregateFlags"/> 的标记位：sum/count 已写入。</summary>
     public const short HasSumCount = 0x01;

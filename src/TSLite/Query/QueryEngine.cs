@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using TSLite.Catalog;
@@ -277,18 +278,41 @@ public sealed class QueryEngine
     }
 
     private IReadOnlyList<AggregateBucket> ExecuteAggregateFast(AggregateQuery query)
+        => ExecuteAggregateFast(query, _segments.Index, BuildReaderMap(_segments.Readers));
+
+    private IReadOnlyList<AggregateBucket> ExecuteAggregateFast(
+        AggregateQuery query,
+        MultiSegmentIndex index,
+        Dictionary<long, SegmentReader> readers)
     {
         long from = query.Range.FromInclusive;
         long to = query.Range.ToInclusive;
 
         var key = new SeriesFieldKey(query.SeriesId, query.FieldName);
         var bucket = _memTable.TryGet(in key);
-        ReadOnlyMemory<DataPoint>? memSlice = bucket?.SnapshotRange(from, to);
         FieldType? memFieldType = bucket?.FieldType;
 
-        var candidates = _segments.Index.LookupCandidates(
+        // MemTable 快路径前置条件：bucket 存在 + 数值字段 + 完整落在查询范围内 + 不需要 First/Last 精确值。
+        // ShouldUsePointAggregatePath 已经把 First/Last 与有 tombstone 的场景排除掉了，这里走到的都是可元数据合并的聚合。
+        bool memUseAggregateOnly = false;
+        int memAggCount = 0;
+        long memAggMinTs = 0, memAggMaxTs = 0;
+        double memAggSum = 0, memAggMin = 0, memAggMax = 0;
+        if (bucket is not null
+            && bucket.TryGetNumericAggregateSnapshot(
+                out memAggCount, out memAggMinTs, out memAggMaxTs,
+                out memAggSum, out memAggMin, out memAggMax)
+            && memAggMinTs >= from && memAggMaxTs <= to)
+        {
+            memUseAggregateOnly = true;
+        }
+
+        ReadOnlyMemory<DataPoint>? memSlice = memUseAggregateOnly
+            ? null
+            : bucket?.SnapshotRange(from, to);
+
+        var candidates = index.LookupCandidates(
             query.SeriesId, query.FieldName, from, to);
-        var readers = BuildReaderMap(_segments.Readers);
 
         if (query.BucketSizeMs <= 0)
         {
@@ -301,7 +325,15 @@ public sealed class QueryEngine
             var state = new AggregateState(bucketStart, bucketEnd);
             bool useObservedStart = query.Range.FromInclusive == long.MinValue;
 
-            AddDecodedPointsToGlobal(memSlice, ref state, useObservedStart);
+            if (memUseAggregateOnly)
+            {
+                state.AddMemTableAggregate(
+                    memAggCount, memAggMinTs, memAggSum, memAggMin, memAggMax, useObservedStart);
+            }
+            else
+            {
+                AddDecodedPointsToGlobal(memSlice, ref state, useObservedStart);
+            }
             AddSegmentBlocksToGlobal(
                 candidates, readers, memFieldType, query.Range, query.Aggregator, ref state, useObservedStart);
 
@@ -312,7 +344,26 @@ public sealed class QueryEngine
         }
 
         var buckets = new Dictionary<long, AggregateState>();
-        AddDecodedPointsToBuckets(memSlice, query.BucketSizeMs, buckets);
+
+        // MemTable 桶聚合快路径：只有当 MemTable 切片整体落在同一个查询桶内才能合并。
+        if (memUseAggregateOnly
+            && TimeBucket.Floor(memAggMinTs, query.BucketSizeMs)
+                == TimeBucket.Floor(memAggMaxTs, query.BucketSizeMs))
+        {
+            long bStart = TimeBucket.Floor(memAggMinTs, query.BucketSizeMs);
+            ref var st = ref CollectionsMarshal.GetValueRefOrAddDefault(buckets, bStart, out bool exists);
+            if (!exists)
+                st = new AggregateState(bStart, bStart + query.BucketSizeMs);
+            st.AddMemTableAggregate(
+                memAggCount, memAggMinTs, memAggSum, memAggMin, memAggMax, useObservedStart: false);
+        }
+        else
+        {
+            // 跨桶或非数值字段：回退到逐点路径。
+            var slice = memSlice ?? bucket?.SnapshotRange(from, to);
+            AddDecodedPointsToBuckets(slice, query.BucketSizeMs, buckets);
+        }
+
         AddSegmentBlocksToBuckets(
             candidates, readers, memFieldType, query.Range, query.BucketSizeMs, query.Aggregator, buckets);
 
@@ -351,11 +402,20 @@ public sealed class QueryEngine
 
         var result = new Dictionary<ulong, IReadOnlyList<AggregateBucket>>(seriesIds.Count);
 
+        // 共享一份段索引快照与 reader 映射，避免每个 series 重复重建。
+        var index = _segments.Index;
+        var readers = BuildReaderMap(_segments.Readers);
+
         foreach (var seriesId in seriesIds)
         {
             var q = new AggregateQuery(seriesId, fieldName, range, aggregator, bucketSizeMs);
-            var buckets = Execute(q).ToList();
-            result[seriesId] = buckets.AsReadOnly();
+
+            // 仍走完整的快/慢路径分流；ShouldUsePointAggregatePath 依赖 tombstones，会按 series 单独决定。
+            IReadOnlyList<AggregateBucket> buckets = ShouldUsePointAggregatePath(q)
+                ? Execute(q).ToList().AsReadOnly()
+                : ExecuteAggregateFast(q, index, readers);
+
+            result[seriesId] = buckets;
         }
 
         return result;
@@ -521,6 +581,15 @@ public sealed class QueryEngine
             return;
         }
 
+        // 中间快路径：delta-of-delta 时间戳 + 原始数值（无 XOR/delta 压缩）。
+        // 仅解码 timestamps 一次到 ArrayPool 借出的 long[]，逐点内联读取原始 value，
+        // 避免 BlockDecoder.DecodeRange 分配 DataPoint[]。
+        if (CanFuseDeltaTimestampInline(descriptor))
+        {
+            FuseDeltaBlockToGlobal(descriptor, tsPayload, valPayload, range, ref state, useObservedStart);
+            return;
+        }
+
         var points = BlockDecoder.DecodeRange(
             descriptor,
             tsPayload,
@@ -555,6 +624,13 @@ public sealed class QueryEngine
             return;
         }
 
+        // 中间快路径（同 AddBlockToGlobal）：跨桶大 block 仍可避开 DataPoint[] 分配。
+        if (CanFuseDeltaTimestampInline(descriptor))
+        {
+            FuseDeltaBlockToBuckets(descriptor, tsPayload, valPayload, range, bucketSizeMs, buckets);
+            return;
+        }
+
         var points = BlockDecoder.DecodeRange(
             descriptor,
             tsPayload,
@@ -562,6 +638,113 @@ public sealed class QueryEngine
             range.FromInclusive,
             range.ToInclusive);
         AddDecodedPointsToBuckets(points.AsSpan(), bucketSizeMs, buckets);
+    }
+
+    /// <summary>
+    /// 判定是否可对 (delta-of-delta 时间戳 + 原始数值) 编码的数值 block 走融合内联路径。
+    /// </summary>
+    private static bool CanFuseDeltaTimestampInline(in BlockDescriptor descriptor)
+    {
+        // 时间戳必须是 delta-of-delta（否则 raw 路径已覆盖）。
+        if ((descriptor.TimestampEncoding & BlockEncoding.DeltaTimestamp) == 0)
+            return false;
+        // 值必须是原始（无 XOR / delta 压缩）。
+        if ((descriptor.ValueEncoding & BlockEncoding.DeltaValue) != 0)
+            return false;
+        // 仅支持数值字段。
+        return descriptor.FieldType is FieldType.Float64 or FieldType.Int64 or FieldType.Boolean;
+    }
+
+    private static void FuseDeltaBlockToGlobal(
+        in BlockDescriptor descriptor,
+        ReadOnlySpan<byte> tsPayload,
+        ReadOnlySpan<byte> valPayload,
+        TimeRange range,
+        ref AggregateState state,
+        bool useObservedStart)
+    {
+        int count = descriptor.Count;
+        if (count == 0) return;
+
+        long[] rented = ArrayPool<long>.Shared.Rent(count);
+        try
+        {
+            Span<long> timestamps = rented.AsSpan(0, count);
+            TimestampCodec.ReadDeltaOfDelta(tsPayload, timestamps);
+
+            int start = BinarySearchLowerBound(timestamps, range.FromInclusive);
+            int end = BinarySearchUpperBound(timestamps, range.ToInclusive);
+            if (start >= end) return;
+
+            FieldType fieldType = descriptor.FieldType;
+            for (int i = start; i < end; i++)
+            {
+                double value = ReadRawNumericValue(fieldType, valPayload, i);
+                state.Add(timestamps[i], value, useObservedStart);
+            }
+        }
+        finally
+        {
+            ArrayPool<long>.Shared.Return(rented);
+        }
+    }
+
+    private static void FuseDeltaBlockToBuckets(
+        in BlockDescriptor descriptor,
+        ReadOnlySpan<byte> tsPayload,
+        ReadOnlySpan<byte> valPayload,
+        TimeRange range,
+        long bucketSizeMs,
+        Dictionary<long, AggregateState> buckets)
+    {
+        int count = descriptor.Count;
+        if (count == 0) return;
+
+        long[] rented = ArrayPool<long>.Shared.Rent(count);
+        try
+        {
+            Span<long> timestamps = rented.AsSpan(0, count);
+            TimestampCodec.ReadDeltaOfDelta(tsPayload, timestamps);
+
+            int start = BinarySearchLowerBound(timestamps, range.FromInclusive);
+            int end = BinarySearchUpperBound(timestamps, range.ToInclusive);
+            if (start >= end) return;
+
+            FieldType fieldType = descriptor.FieldType;
+            for (int i = start; i < end; i++)
+            {
+                double value = ReadRawNumericValue(fieldType, valPayload, i);
+                AddValueToBucket(buckets, bucketSizeMs, timestamps[i], value);
+            }
+        }
+        finally
+        {
+            ArrayPool<long>.Shared.Return(rented);
+        }
+    }
+
+    private static int BinarySearchLowerBound(ReadOnlySpan<long> timestamps, long value)
+    {
+        int lo = 0, hi = timestamps.Length;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (timestamps[mid] < value) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+
+    private static int BinarySearchUpperBound(ReadOnlySpan<long> timestamps, long value)
+    {
+        int lo = 0, hi = timestamps.Length;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (timestamps[mid] <= value) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
     }
 
     private static bool CanUseAggregateMetadata(
@@ -755,6 +938,28 @@ public sealed class QueryEngine
                 if (descriptor.AggregateMin < Min) Min = descriptor.AggregateMin;
                 if (descriptor.AggregateMax > Max) Max = descriptor.AggregateMax;
             }
+        }
+
+        /// <summary>
+        /// 用 MemTable Series 的运行期聚合快照合并到当前桶，避免逐点扫描 <see cref="ReadOnlyMemory{DataPoint}"/>。
+        /// 调用方必须保证 MemTable 切片完整落入当前桶范围。
+        /// </summary>
+        public void AddMemTableAggregate(
+            int count, long minTs, double sum, double min, double max, bool useObservedStart)
+        {
+            if (count == 0) return;
+
+            if (useObservedStart && minTs < BucketStart)
+                BucketStart = minTs;
+
+            if (Count == 0)
+                FirstValue = min;
+            LastValue = max;
+
+            Count += count;
+            Sum += sum;
+            if (min < Min) Min = min;
+            if (max > Max) Max = max;
         }
 
         public readonly AggregateBucket ToBucket(Aggregator aggregator)

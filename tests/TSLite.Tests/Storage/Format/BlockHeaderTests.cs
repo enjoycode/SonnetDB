@@ -14,7 +14,7 @@ public sealed class BlockHeaderTests
     // ── Size ────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Size_Is64Bytes()
+    public void Size_Is72Bytes()
         => Assert.Equal(FormatSizes.BlockHeaderSize, Unsafe.SizeOf<BlockHeader>());
 
     // ── Default ─────────────────────────────────────────────────────────────
@@ -101,8 +101,9 @@ public sealed class BlockHeaderTests
         BlockHeader original = BlockHeader.CreateNew(1UL, 0L, 0L, 3, FieldType.Float64, 0, 0, 0);
         original.AggregateFlags = BlockHeader.HasSumCount | BlockHeader.HasMinMax;
         original.AggregateSum = 12.5;
-        original.AggregateMinBits = BitConverter.SingleToInt32Bits(1.25f);
-        original.AggregateMaxBits = BitConverter.SingleToInt32Bits(9.5f);
+        // v2：AggregateMin/Max 直接是 8 字节 double，无损覆盖 Float64 / Int64 全部范围。
+        original.AggregateMin = 1.234567890123456;
+        original.AggregateMax = double.MaxValue;
 
         Span<byte> buffer = stackalloc byte[FormatSizes.BlockHeaderSize];
         var writer = new SpanWriter(buffer);
@@ -113,17 +114,36 @@ public sealed class BlockHeaderTests
 
         Assert.Equal(original.AggregateFlags, read.AggregateFlags);
         Assert.Equal(original.AggregateSum, read.AggregateSum);
-        Assert.Equal(original.AggregateMinBits, read.AggregateMinBits);
-        Assert.Equal(original.AggregateMaxBits, read.AggregateMaxBits);
+        Assert.Equal(original.AggregateMin, read.AggregateMin);
+        Assert.Equal(original.AggregateMax, read.AggregateMax);
         Assert.True((read.AggregateFlags & BlockHeader.HasSumCount) != 0);
         Assert.True((read.AggregateFlags & BlockHeader.HasMinMax) != 0);
+    }
+
+    [Fact]
+    public void AggregateMin_PreservesInt64FullRange()
+    {
+        // 验证 v2 升级后 Int64 极值不再因窄类型截断丢失。
+        BlockHeader original = BlockHeader.CreateNew(1UL, 0L, 0L, 1, FieldType.Int64, 0, 0, 0);
+        original.AggregateFlags = BlockHeader.HasSumCount | BlockHeader.HasMinMax;
+        original.AggregateMin = (double)long.MinValue;
+        original.AggregateMax = (double)long.MaxValue;
+
+        Span<byte> buffer = stackalloc byte[FormatSizes.BlockHeaderSize];
+        var writer = new SpanWriter(buffer);
+        writer.WriteStruct(in original);
+
+        var reader = new SpanReader(buffer);
+        BlockHeader read = reader.ReadStruct<BlockHeader>();
+        Assert.Equal((double)long.MinValue, read.AggregateMin);
+        Assert.Equal((double)long.MaxValue, read.AggregateMax);
     }
 
     [Fact]
     public void AggregateFlags_LegacyValueOne_MapsToSumCountOnly()
     {
         // 兼容性：v1 写入侧曾把 flags 直接置 1（含义为“sum/min/max 都有”，但 min/max 实为有损）。
-        // 新读取侧应把 1 解读为仅 HasSumCount，从而避免使用不可信的 min/max。
+        // v2 段文件不会再出现这种 flags（写入侧总是同时置 HasMinMax），但常量映射仍保持向后定义清晰。
         const short legacyFlags = 1;
         Assert.Equal(BlockHeader.HasSumCount, legacyFlags);
         Assert.Equal(0, legacyFlags & BlockHeader.HasMinMax);

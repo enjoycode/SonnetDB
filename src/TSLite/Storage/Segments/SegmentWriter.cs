@@ -22,7 +22,7 @@ namespace TSLite.Storage.Segments;
 /// ┌─────────────────────────────────────────────────────────────────┐
 /// │  SegmentHeader  (固定 64 字节，offset = 0)                       │
 /// │    Magic = "TSLSEGv1"                                           │
-/// │    FormatVersion = 1                                            │
+/// │    FormatVersion = 2  (PR #50: BlockHeader.AggregateMin/Max → double) │
 /// │    SegmentId                                                    │
 /// │    CreatedAtUtcTicks                                            │
 /// │    BlockCount（回填）                                            │
@@ -334,8 +334,8 @@ public sealed class SegmentWriter
             {
                 bh.AggregateFlags = aggregateFlags;
                 bh.AggregateSum = aggregateSum;
-                bh.AggregateMinBits = aggregateMin;
-                bh.AggregateMaxBits = aggregateMax;
+                bh.AggregateMin = aggregateMin;
+                bh.AggregateMax = aggregateMax;
             }
 
             WriteStructToStream(bs, in bh);
@@ -366,20 +366,20 @@ public sealed class SegmentWriter
     /// 返回值是写入 <see cref="BlockHeader.AggregateFlags"/> 的位掩码（0 表示不写元数据）。
     /// </summary>
     /// <remarks>
-    /// 数值类型一律计算 <c>sum</c>（按 <see cref="double"/> 累加，与查询路径精度一致），并置 <see cref="BlockHeader.HasSumCount"/>。
-    /// 仅当 <c>min</c>/<c>max</c> 可被对应的窄类型（Float64→<see cref="float"/>，Int64→<see cref="int"/>）无损表示时才置 <see cref="BlockHeader.HasMinMax"/>，
-    /// 否则放弃 min/max 元数据以避免返回错误的查询结果。
+    /// v2 起 <see cref="BlockHeader.AggregateMin"/> / <see cref="BlockHeader.AggregateMax"/> 持久化为 8 字节 <see cref="double"/>，
+    /// 数值类型一律计算 <c>sum</c>（按 <see cref="double"/> 累加，与查询路径精度一致）并置 <see cref="BlockHeader.HasSumCount"/>，
+    /// 同时无损写入 <c>min</c>/<c>max</c> 并置 <see cref="BlockHeader.HasMinMax"/>。
     /// </remarks>
     private static short TryBuildAggregateMetadata(
         FieldType fieldType,
         ReadOnlySpan<DataPoint> points,
         out double sum,
-        out int minBits,
-        out int maxBits)
+        out double min,
+        out double max)
     {
         sum = 0;
-        minBits = 0;
-        maxBits = 0;
+        min = 0;
+        max = 0;
 
         if (points.IsEmpty)
             return 0;
@@ -388,67 +388,51 @@ public sealed class SegmentWriter
         {
             case FieldType.Float64:
             {
-                double min = double.PositiveInfinity;
-                double max = double.NegativeInfinity;
+                double mn = double.PositiveInfinity;
+                double mx = double.NegativeInfinity;
                 for (int i = 0; i < points.Length; i++)
                 {
                     double value = points[i].Value.AsDouble();
                     sum += value;
-                    if (value < min) min = value;
-                    if (value > max) max = value;
+                    if (value < mn) mn = value;
+                    if (value > mx) mx = value;
                 }
-
-                short flags = BlockHeader.HasSumCount;
-                float minF = (float)min;
-                float maxF = (float)max;
-                if ((double)minF == min && (double)maxF == max)
-                {
-                    minBits = BitConverter.SingleToInt32Bits(minF);
-                    maxBits = BitConverter.SingleToInt32Bits(maxF);
-                    flags |= BlockHeader.HasMinMax;
-                }
-
-                return flags;
+                min = mn;
+                max = mx;
+                return BlockHeader.HasSumCount | BlockHeader.HasMinMax;
             }
 
             case FieldType.Int64:
             {
-                long min = long.MaxValue;
-                long max = long.MinValue;
+                long mn = long.MaxValue;
+                long mx = long.MinValue;
                 for (int i = 0; i < points.Length; i++)
                 {
                     long value = points[i].Value.AsLong();
                     sum += value;
-                    if (value < min) min = value;
-                    if (value > max) max = value;
+                    if (value < mn) mn = value;
+                    if (value > mx) mx = value;
                 }
-
-                short flags = BlockHeader.HasSumCount;
-                if (min >= int.MinValue && min <= int.MaxValue
-                    && max >= int.MinValue && max <= int.MaxValue)
-                {
-                    minBits = (int)min;
-                    maxBits = (int)max;
-                    flags |= BlockHeader.HasMinMax;
-                }
-
-                return flags;
+                // Int64 → double：±2^53 之外可能损失精度，sum 已是 double，min/max 这里同样转 double。
+                // 写入路径之外（查询路径）始终把整数值视作 double 比较，因此 min/max 仍可信。
+                min = mn;
+                max = mx;
+                return BlockHeader.HasSumCount | BlockHeader.HasMinMax;
             }
 
             case FieldType.Boolean:
             {
-                int min = 1;
-                int max = 0;
+                int mn = 1;
+                int mx = 0;
                 for (int i = 0; i < points.Length; i++)
                 {
                     int value = points[i].Value.AsBool() ? 1 : 0;
                     sum += value;
-                    if (value < min) min = value;
-                    if (value > max) max = value;
+                    if (value < mn) mn = value;
+                    if (value > mx) mx = value;
                 }
-
-                minBits = min;
-                maxBits = max;
+                min = mn;
+                max = mx;
                 return BlockHeader.HasSumCount | BlockHeader.HasMinMax;
             }
 

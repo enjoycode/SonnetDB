@@ -43,7 +43,7 @@ public sealed class FormatSizesTests
     {
         Assert.Equal(64, FormatSizes.FileHeaderSize);
         Assert.Equal(64, FormatSizes.SegmentHeaderSize);
-        Assert.Equal(64, FormatSizes.BlockHeaderSize);
+        Assert.Equal(72, FormatSizes.BlockHeaderSize);
         Assert.Equal(48, FormatSizes.BlockIndexEntrySize);
         Assert.Equal(64, FormatSizes.SegmentFooterSize);
         Assert.Equal(32, FormatSizes.WalRecordHeaderSize);

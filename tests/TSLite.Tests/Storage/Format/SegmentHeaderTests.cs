@@ -38,7 +38,7 @@ public sealed class SegmentHeaderTests
     {
         SegmentHeader h = SegmentHeader.CreateNew(42L);
         Assert.True(h.Magic.AsReadOnlySpan().SequenceEqual(TsdbMagic.Segment));
-        Assert.Equal(TsdbMagic.FormatVersion, h.FormatVersion);
+        Assert.Equal(TsdbMagic.SegmentFormatVersion, h.FormatVersion);
         Assert.Equal(FormatSizes.SegmentHeaderSize, h.HeaderSize);
         Assert.Equal(42L, h.SegmentId);
         Assert.NotEqual(0L, h.CreatedAtUtcTicks);

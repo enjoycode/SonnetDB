@@ -30,7 +30,7 @@ public struct SegmentHeader
     /// <summary>段文件 magic（"TSLSEGv1"，8 字节）。</summary>
     public InlineBytes8 Magic;
 
-    /// <summary>文件格式版本号（当前 = <see cref="TsdbMagic.FormatVersion"/>）。</summary>
+    /// <summary>段文件格式版本号（当前 = <see cref="TsdbMagic.SegmentFormatVersion"/>）。</summary>
     public int FormatVersion;
 
     /// <summary>本头部的字节大小（= 64）。</summary>
@@ -63,7 +63,7 @@ public struct SegmentHeader
     {
         SegmentHeader h = default;
         TsdbMagic.Segment.CopyTo(h.Magic.AsSpan());
-        h.FormatVersion = TsdbMagic.FormatVersion;
+        h.FormatVersion = TsdbMagic.SegmentFormatVersion;
         h.HeaderSize = Unsafe.SizeOf<SegmentHeader>();
         h.SegmentId = segmentId;
         h.CreatedAtUtcTicks = DateTime.UtcNow.Ticks;
@@ -76,5 +76,5 @@ public struct SegmentHeader
     /// <returns>有效返回 <c>true</c>，否则返回 <c>false</c>。</returns>
     public readonly bool IsValid() =>
         Magic.AsReadOnlySpan().SequenceEqual(TsdbMagic.Segment) &&
-        FormatVersion == TsdbMagic.FormatVersion;
+        FormatVersion == TsdbMagic.SegmentFormatVersion;
 }

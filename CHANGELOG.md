@@ -6,6 +6,14 @@
 ## [Unreleased]
 
 ### Changed
+- **PR #50：查询元数据快路径 — Format v2 + 跨桶融合 + MemTable 增量聚合 + ExecuteMany 共享快照**（**Breaking 段文件格式变更**）
+  - **Format v2**（破坏性，不兼容旧 segment 文件）：`BlockHeader` 由 64 B 扩展到 72 B，将 `AggregateMinBits` / `AggregateMaxBits` 由 `int`（4 B）升级为 `AggregateMin` / `AggregateMax`（`double`，8 B），覆盖 Float64 任意值与 ±2^53 内的 Int64。新增 `TsdbMagic.SegmentFormatVersion = 2` 常量与 `TsdbMagic.FormatVersion = 1`（用于 FileHeader/WAL/Catalog）解耦；`SegmentHeader.IsValid` 与 `SegmentReader` 拒绝读取 v1 段文件并给出明确升级提示。`SegmentWriter.TryBuildAggregateMetadata` 不再因窄类型截断而放弃 `HasMinMax`，对所有数值字段一律写入 `HasSumCount | HasMinMax`。`SegmentReader` 删除 `DecodeAggregateBoundary` 私有桥接，直接读取 8 B `double`。**升级路径：删除 `*.tslseg` 后启动可由 WAL 重放重新生成 v2 段；混用旧版本数据将抛 `SegmentCorruptedException`。**
+  - **跨桶 block 元数据下推**：`QueryEngine` 新增 `CanFuseDeltaTimestampInline` + `FuseDeltaBlockToGlobal` / `FuseDeltaBlockToBuckets` 融合内联路径——对 `(delta-of-delta 时间戳 + 原始数值)` 的数值 block，仅租用一份 `ArrayPool<long>` 解码时间戳后内联走 `ReadRawNumericValue` + `AddValueToBucket`，避免 `BlockDecoder.DecodeRange` 物化 `DataPoint[]`。大 block 跨桶聚合分配显著下降。
+  - **MemTable 运行期 sum/min/max**：`MemTableSeries` 在 `Append` 阶段对 Float64/Int64/Boolean 增量维护 `_numericSum / _numericMin / _numericMax`，新增 `HasNumericAggregates` / `NumericSum` / `NumericMin` / `NumericMax` / `TryGetNumericAggregateSnapshot` 公共 API；`QueryEngine.ExecuteAggregateFast` 在范围全覆盖且单桶或全局聚合时直接合并 MemTable 元数据，跳过对 `ReadOnlyMemory<DataPoint>` 切片的逐点扫描。`AggregateState` 新增 `AddMemTableAggregate` 合并入口。
+  - **ExecuteMany 共享快照**：`QueryEngine.ExecuteMany` 不再每个 series 重建 `BuildReaderMap` 与重新读取 `_segments.Index`，改为外层一次构建并通过新的私有重载 `ExecuteAggregateFast(query, index, readers)` 透传；`ShouldUsePointAggregatePath` 仍按 series 分流到 `Execute` 慢路径以保证 First/Last 与墓碑场景行为不变。
+  - **测试**：新增 `MemTableSeriesAggregateTests` 5 项（数值字段增量聚合、String 字段不维护、空序列）+ `QueryEngineV2OptimizationTests` 7 项（Int64 极值/高精度 Float64 round-trip、跨桶大 block 聚合一致性、MemTable 全/部分覆盖路径、`ExecuteMany` 与单次 `Execute` 一致性）；同步更新 `BlockHeaderTests` / `FormatSizesTests` / `SegmentHeaderTests` / `SegmentFooterTests` 以反映 72 B BlockHeader 与 `SegmentFormatVersion = 2`。`TSLite.Tests` 1263/1263 + `TSLite.Server.Tests` 97/97 通过。
+
+### Changed
 - 完善 Block 聚合元数据语义并修复 Min/Max 精度漏洞，新增桶聚合元数据快路径：
   - `BlockHeader.AggregateFlags` 由「0/1 单值」语义改为按位组合：`HasSumCount = 0x01`（sum/count 可信）、`HasMinMax = 0x02`（min/max 无损）。旧 v1 segment 写入的 `1` 自动等价于「仅 HasSumCount」，min/max 不会被误用，无需 Format 版本号变更（仍为 1）。
   - `SegmentWriter` 在 Float64 时只在 `(float)min == min && (float)max == max` 时才置 `HasMinMax`，避免向 `Min`/`Max` 查询返回 float 截断后的错误值；Int64 在 min/max 落入 int32 范围时置 `HasMinMax`；sum/count 仍始终写入。

@@ -38,7 +38,7 @@ public sealed class SegmentFooterTests
     {
         SegmentFooter f = SegmentFooter.CreateNew(indexCount: 3, indexOffset: 1024L, fileLength: 1200L);
         Assert.True(f.Magic.AsReadOnlySpan().SequenceEqual(TsdbMagic.Segment));
-        Assert.Equal(TsdbMagic.FormatVersion, f.FormatVersion);
+        Assert.Equal(TsdbMagic.SegmentFormatVersion, f.FormatVersion);
         Assert.Equal(3, f.IndexCount);
         Assert.Equal(1024L, f.IndexOffset);
         Assert.Equal(1200L, f.FileLength);
