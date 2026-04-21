@@ -633,7 +633,7 @@ internal static class SelectExecutor
             if (_extended is null)
                 _legacy = _legacy.Update(timestamp, value);
             else
-                _extended.Add(value);
+                _extended.Add(timestamp, value);
         }
 
         public object? Finalize()

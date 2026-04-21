@@ -22,6 +22,14 @@ public interface IAggregateAccumulator
     /// <param name="value">数据点值；NaN 由实现决定是否丢弃。</param>
     void Add(double value);
 
+    /// <summary>
+    /// 携带时间戳的累加重载；多数累加器忽略时间戳，按 <see cref="Add(double)"/> 处理。
+    /// 时间相关的累加器（如 <c>pid</c>）需要重写以使用 <paramref name="timestampMs"/>。
+    /// </summary>
+    /// <param name="timestampMs">数据点时间戳（毫秒）。</param>
+    /// <param name="value">数据点值。</param>
+    void Add(long timestampMs, double value) => Add(value);
+
     /// <summary>合并另一个同类型累加器的状态。</summary>
     /// <param name="other">需要合并的另一份累加器。</param>
     /// <exception cref="ArgumentException">类型不匹配时抛出。</exception>

@@ -6,6 +6,15 @@
 ## [Unreleased]
 
 ### Added
+- **Milestone 12 — PR #54：Tier 4 PID 控制律内置函数 + 自动整定库 API**
+  - 新增公开类型 `TSLite.Query.Functions.Control.PidController`：纯 C# 离散 PID 状态机，提供 `Update(timestampMs, processVariable, setpoint)`、`Snapshot()` / `Restore(...)` 与 `Reset()`；首行只输出比例项（无 dt 参考），$\Delta t \le 0$ 时跳过 I/D 更新避免发散；状态结构 `PidControllerSnapshot { Integral, PrevError, PrevTimeMs, HasHistory }`。
+  - 新增 SQL 行级窗口函数 `pid_series(field, setpoint, kp, ki, kd)`（`IWindowFunction`）：与 PR #53 窗口算子框架共享 `Compute(long[] timestamps, FieldValue?[] values)` 协议，按 series 独立维护控制器实例；`null` 输入透传 `null` 输出且不推进状态。
+  - 新增 SQL 聚合函数 `pid(field, setpoint, kp, ki, kd)`（`IAggregateFunction` + `PidAccumulator`）：与 `GROUP BY time(...)` 组合时桶内逐行推进、桶尾输出最终 $u(t)$；`Merge` 取 `PrevTimeMs` 更晚的段以支持跨段拼接；拒绝 `pid(*)`、错误参数个数、非 FIELD 列、字符串字段。
+  - `IAggregateAccumulator` 增加默认接口方法 `Add(long timestampMs, double value) => Add(value);`；`SelectExecutor.AggSlot.Update` 改为通过该重载传递时间戳，对既有 Welford / TDigest / HLL / Histogram 累加器**零行为变化**。
+  - `FunctionRegistry` 注册 `pid` 为 `Aggregate`、`pid_series` 为 `Window`，纳入既有 `GetFunctionKind` / `TryGetAggregate` / `TryGetWindow` 路由。
+  - 既有 `PidParameterEstimator`（Sundaresan & Krishnaswamy 35%/85% 两点法识别 FOPDT 模型 + Ziegler-Nichols / Cohen-Coon / Skogestad IMC 三种整定规则）按 ROADMAP 要求保持纯库级 API，`docs/pid-control.md` 提供端到端工作流（采集 → 离线整定 → SQL 回测 → 控制回写 → 监控）与控制回写示例。
+  - 新增测试：`tests/TSLite.Tests/Query/Functions/Control/PidControllerTests.cs`（14 项控制器与累加器/求值器单元测试）+ `tests/TSLite.Tests/Sql/SqlExecutorPidFunctionTests.cs`（10 项 SQL 端到端：行级输出、桶级最终 u、与时间/字段投影混合、负增益字面量、参数校验、Tag/字符串列拒绝、控制回写两步流程）。
+
 - **Milestone 12 — PR #53：Tier 3 窗口算子框架（17 个窗口函数）**
   - 新增公共契约 `IWindowFunction` / `IWindowEvaluator`：window 函数为「行流→行流」的逐序列算子，由 `CreateEvaluator(call, schema)` 工厂在查询计划阶段完成参数解析与字段绑定，运行阶段调用 `Compute(long[] timestamps, FieldValue?[] values) → object?[]` 输出与输入等长的列结果。
   - 落地 17 个窗口函数（位于 `src/TSLite/Query/Functions/Window/`），按语义分为 5 组：

@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using TSLite.Catalog;
 using TSLite.Query.Functions.Aggregates;
+using TSLite.Query.Functions.Control;
 using TSLite.Query.Functions.Window;
 using TSLite.Sql.Ast;
 using TSLite.Storage.Format;
@@ -97,6 +98,8 @@ public static class FunctionRegistry
         new TDigestAggFunction(),
         new DistinctCountFunction(),
         new HistogramFunction(),
+        // Tier 4 — PID 控制律（PR #54）
+        new PidAggregateFunction(),
     ];
 
     private static IScalarFunction[] CreateScalarFunctionList() =>
@@ -132,6 +135,8 @@ public static class FunctionRegistry
         // Tier 3 — 状态分析
         new StateChangesFunction(),
         new StateDurationFunction(),
+        // Tier 4 — PID 行级控制律（PR #54）
+        new PidSeriesFunction(),
     ];
 
     private static IReadOnlyDictionary<string, TFunction> CreateFunctionsByName<TFunction>(TFunction[] functions)
