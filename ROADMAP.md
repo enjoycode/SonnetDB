@@ -226,7 +226,7 @@
 | #54 | **PID 内置函数 + 参数估算 + 控制回写示例**：聚合形态 `pid(value, setpoint, kp, ki, kd)` 在 `GROUP BY time(...)` 桶内输出最终 u(t)；行级窗口形态 `pid_series(...)` 输出每行 u(t) 用于回测；状态结构 `{ integral, prevError, prevTimeMs }`，跨段 `Merge` 按时间序拼接；**新增 `PidParameterEstimator.Estimate`（纯 C# 阶跃响应辨识）**：基于 Sundaresan & Krishnaswamy 35%/85% 两点法拟合 FOPDT 模型，支持 Ziegler-Nichols / Cohen-Coon / Skogestad IMC 三种整定规则，直接从历史时序数据推算 Kp / Ki / Kd；当前先以嵌入式/库级 API 交付，后续再接入 `FunctionRegistry` 暴露为 SQL 可查询函数；新增 `docs/pid-control.md` 端到端教程 + `INSERT … SELECT pid_series(...)` 控制回写示例 | ✅ |
 | #55 | **Forecast TVF + 异常 / 变点检测**：表值函数 `forecast(measurement, field, horizon, 'algo'[, season])` 内置 **线性外推 + Holt-Winters**（纯 C#，无外部依赖），返回 `(time, value, lower, upper, ...tags)`；`anomaly(x, 'zscore|mad|iqr', threshold)` `changepoint(x, 'cusum'[, drift])`；ARIMA / Prophet 留给 UDF；新增 `docs/forecast.md` | ✅ |
 | #56 | **UDF 注册 API**：`Tsdb.Functions.RegisterScalar(name, Func<...>)` / `RegisterAggregate(IAggregateFunction)` / `RegisterWindow(IWindowFunction)` / `RegisterTableValuedFunction(...)`；嵌入式默认启用，Server 端默认禁用 UDF（仅内置函数）以保证 AOT；新增 `docs/extending-functions.md` | ✅ |
-| #57 | **函数基准 + README 函数支持矩阵**：在 `tests/TSLite.Benchmarks` 扩展 `AggregateBenchmark`，对比 InfluxDB `derivative` / `holt_winters`、Timescale `time_weight`、TDengine `forecast`；README 新增「支持的 SQL 函数」矩阵表 | 📋 |
+| #57 | **函数基准 + README 函数支持矩阵**：在 `tests/TSLite.Benchmarks` 扩展 `AggregateBenchmark`，对比 InfluxDB `derivative` / `holt_winters`、Timescale `time_weight`、TDengine `forecast`；README 新增「支持的 SQL 函数」矩阵表 | ✅ |
 
 ### SQL 用法预览
 
@@ -285,9 +285,9 @@ db.Functions.RegisterAggregate(new KalmanAggregate()); // 实现 IAggregateFunct
 | 9 | 性能基准与发布 | #35 ~ #39（含 #36、#37a、#37b） | ✅ |
 | 10 | 扩展和第三方 | #40, #41 + #42~#45 批量入库专题 | 🚧（#42~#45 ✅） |
 | 11 | 写入快路径（PR #45 瓶颈收尾） | #46 ~ #49 | ✅ |
-| 12 | 函数与算子扩展（PID / Forecast / UDF） | #50 ~ #57 | 📋 |
+| 12 | 函数与算子扩展（PID / Forecast / UDF） | #50 ~ #57 | ✅ |
 
-**当前推进顺序**：PR #57（Milestone 12 函数基准 + README 函数支持矩阵）。
+**当前推进顺序**：Milestone 12 已完成（PR #50 ~ #57 全部合并），Milestone 13 待规划。
 
 ---
 

@@ -6,6 +6,11 @@
 ## [Unreleased]
 
 ### Added
+- **Milestone 12 — PR #57：函数族基准 + README 函数支持矩阵**
+  - 新增 `tests/TSLite.Benchmarks/Benchmarks/FunctionBenchmark.cs`：以 50,000 个数据点为样本，对 PR #50 ~ #56 引入的窗口 / 聚合 / TVF 函数族走完整 SqlParser → SqlExecutor 流水线的端到端基准。覆盖 TSLite 自身的 `derivative` / `moving_average` / `ewma` / `holt_winters` / `anomaly(zscore)` / `p99` / `distinct_count` / `forecast(linear)` / `forecast(holt_winters)` 9 项基线，以及 InfluxDB Flux（`derivative` / `movingAverage` / `holtWinters` / `quantile(method:"estimate_tdigest")`）与 TDengine REST（`DERIVATIVE` / `MAVG` / `PERCENTILE`）的等价语义对照；外部数据库不可用时按 `[SKIP]` 提示，不阻塞 TSLite 基线运行。
+  - `README.md` 新增「支持的 SQL 函数」矩阵章节：按 PR 引入顺序枚举 PR #50 ~ #56 全部内置函数（聚合 / 标量 / 窗口 / TVF）共 50+ 项，并列出 InfluxDB / Timescale / TDengine / Prometheus 的对标函数与备注；同步在 `README.en.md` 增加「Built-in SQL functions」英文版矩阵。
+  - 矩阵章节同时指向 `docs/extending-functions.md`（UDF 注册）与 `tests/TSLite.Benchmarks/Benchmarks/FunctionBenchmark.cs`（性能对照），使函数体系的「能做什么 / 怎么扩展 / 性能如何」三条线索从 README 一处可达。
+
 - **Milestone 12 — PR #56：Tier 5 用户自定义函数（UDF）注册 API**
   - 新增公开类型 `TSLite.Query.Functions.UserFunctionRegistry`：按 `Tsdb` 实例隔离的 UDF 注册表，挂在新增的 `Tsdb.Functions` 属性上。提供 `RegisterScalar(name, evaluator, min, max)` / `RegisterScalar(IScalarFunction)` / `RegisterAggregate(IAggregateFunction)` / `RegisterWindow(IWindowFunction)` / `RegisterTableValuedFunction(name, executor)` 五条注册路径，以及 `Unregister(name)` 与 `TryGet*` 查询。聚合 UDF 强制 `LegacyAggregator == null`（仅内置 7 个聚合可用 legacy fast-path）；TVF UDF 不允许使用保留名 `forecast`。
   - 通过 `AsyncLocal<UserFunctionRegistry?>` + `UserFunctionRegistry.AmbientScope` 提供查询作用域 ambient；`SqlExecutor.ExecuteSelect` 在执行前 `EnterScope(tsdb.Functions)`、退出时自动恢复，确保多 `Tsdb` 实例并发执行 SQL 时互不可见。

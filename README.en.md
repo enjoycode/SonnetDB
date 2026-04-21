@@ -129,6 +129,32 @@ Data-plane SQL currently supported:
 - `SELECT ... FROM ... [WHERE ...] [GROUP BY time(...)]`
 - `DELETE FROM ... WHERE ...`
 
+### Built-in SQL functions
+
+`SELECT` supports the following built-in functions (PR #50–#56). Custom aggregates / scalars / TVFs may be registered via [`Tsdb.Functions`](docs/extending-functions.md) in embedded mode (Server mode disables UDF by default).
+
+| Function | Kind | Introduced | Counterpart | Notes |
+| --- | --- | --- | --- | --- |
+| `count`, `sum`, `min`, `max`, `avg`, `first`, `last` | Aggregate (Tier 1) | PR #50 | InfluxDB / Timescale / TDengine | Basic aggregates with `GROUP BY time(...)` |
+| `stddev`, `variance`, `spread`, `mode`, `median` | Aggregate (Tier 2) | PR #52 | InfluxDB `stddev` / TDengine `STDDEV` | Population stats |
+| `percentile`, `p50/p90/p95/p99`, `tdigest_agg` | Aggregate (T-Digest) | PR #52 | InfluxDB `quantile(estimate_tdigest)`, TDengine `APERCENTILE` | Constant-space quantile estimation |
+| `distinct_count` | Aggregate (HyperLogLog) | PR #52 | TDengine `HYPERLOGLOG` | Cardinality estimation |
+| `histogram(x, n)` | Aggregate | PR #52 | Prometheus `histogram_quantile` source | Equal-width bucketing |
+| `pid`, `pid_estimate` | Aggregate (Control) | PR #54 | — | Incremental PID controller output |
+| `abs`, `round`, `sqrt`, `log`, `coalesce`, `time_bucket`, `date_trunc`, `extract`, `cast` | Scalar | PR #51 | TDengine scalars / Postgres `date_trunc` | Row-level expressions |
+| `difference`, `delta`, `increase` | Window | PR #53 | InfluxDB `difference` / TDengine `DIFF` | Adjacent diffs |
+| `derivative`, `non_negative_derivative`, `rate`, `irate` | Window | PR #53 | InfluxDB `derivative`, Prometheus `rate`, TDengine `DERIVATIVE` | Time-normalised rate |
+| `cumulative_sum`, `integral` | Window | PR #53 | InfluxDB `cumulativeSum` / Timescale `time_weight` | Cumulative / time-weighted integral |
+| `moving_average`, `ewma`, `holt_winters` | Window (smoothing) | PR #53 | InfluxDB `movingAverage` / `holtWinters`, TDengine `MAVG` | EMA / Holt double-exponential |
+| `fill`, `locf`, `interpolate` | Window (gap fill) | PR #53 | InfluxDB `fill()`, TDengine `INTERP` | Missing-value fill |
+| `state_changes`, `state_duration` | Window (state) | PR #53 | TDengine `STATECOUNT` / `STATEDURATION` | State machine transitions |
+| `pid_series` | Window (Control) | PR #54 | — | Streaming PID time series |
+| `anomaly(x, 'zscore'\|'iqr', k)`, `changepoint(x, 'cusum', k, drift)` | Window | PR #55 | TDengine `STATEDURATION` companion | Flag (0/1) / cumulative changepoint |
+| `forecast(measurement, field, n, model, [season])` | TVF | PR #55 | TDengine `FORECAST` (3.3.6+), Influx `holtWinters` | Table-valued forecast horizon |
+| user-defined | UDF | PR #56 | — | Embedded mode only; see `docs/extending-functions.md` |
+
+> Function-family benchmarks live in `tests/TSLite.Benchmarks/Benchmarks/FunctionBenchmark.cs` and compare against InfluxDB Flux and TDengine REST equivalents.
+
 Server control-plane SQL currently supported:
 
 - `CREATE USER`

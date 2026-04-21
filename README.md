@@ -173,6 +173,32 @@ TSLite 采用典型的时序数据建模方式：
 - `SELECT ... FROM ... [WHERE ...] [GROUP BY time(...)]`
 - `DELETE FROM ... WHERE ...`
 
+### 支持的 SQL 函数
+
+随 PR #50 ~ #56 落地，TSLite 在 `SELECT` 中支持以下内置函数；可通过 [`Tsdb.Functions`](docs/extending-functions.md) 注册自定义聚合 / 标量 / TVF（嵌入式模式）。Server 模式默认禁用 UDF。
+
+| 函数 | 类别 | 引入 | 对标 | 备注 |
+| --- | --- | --- | --- | --- |
+| `count`, `sum`, `min`, `max`, `avg`, `first`, `last` | 聚合 (Tier 1) | PR #50 | InfluxDB / Timescale / TDengine 全量 | 基础聚合，支持 `GROUP BY time(...)` |
+| `stddev`, `variance`, `spread`, `mode`, `median` | 聚合 (Tier 2) | PR #52 | InfluxDB `stddev` / TDengine `STDDEV` | 总体方差 / 标准差 |
+| `percentile(x, p)`, `p50`, `p90`, `p95`, `p99`, `tdigest_agg` | 聚合 (T-Digest) | PR #52 | InfluxDB `quantile(method:"estimate_tdigest")`, TDengine `APERCENTILE` | 分位估计，常数空间复杂度 |
+| `distinct_count` | 聚合 (HyperLogLog) | PR #52 | InfluxDB `distinct() \|> count()`, TDengine `HYPERLOGLOG` | 基数估计 |
+| `histogram(x, n)` | 聚合 | PR #52 | Prometheus `histogram_quantile` 数据源 | 等宽分桶 |
+| `pid(target, kp, ki, kd)`, `pid_estimate` | 聚合 (Control) | PR #54 | — | 增量式 PID 控制律输出 |
+| `abs`, `round`, `sqrt`, `log`, `coalesce`, `time_bucket`, `date_trunc`, `extract`, `cast` | 标量 (Tier 1) | PR #51 | TDengine 标量函数 / Postgres `date_trunc` | 行级表达式 |
+| `difference`, `delta`, `increase` | 窗口 | PR #53 | InfluxDB `difference` / TDengine `DIFF` | 相邻差分 |
+| `derivative`, `non_negative_derivative`, `rate`, `irate` | 窗口 | PR #53 | InfluxDB `derivative` / Prometheus `rate` / TDengine `DERIVATIVE` | 时间归一化变化率 |
+| `cumulative_sum`, `integral` | 窗口 | PR #53 | InfluxDB `cumulativeSum` / Timescale `time_weight` | 累积 / 时间加权积分 |
+| `moving_average`, `ewma`, `holt_winters` | 窗口 (平滑) | PR #53 | InfluxDB `movingAverage` / `holtWinters`, TDengine `MAVG` | EMA / Holt 双指数平滑 |
+| `fill`, `locf`, `interpolate` | 窗口 (插值) | PR #53 | InfluxDB `fill()`, TDengine `INTERP` | 缺失填充 |
+| `state_changes`, `state_duration` | 窗口 (状态) | PR #53 | TDengine `STATECOUNT` / `STATEDURATION` | 状态机变换计数 |
+| `pid_series` | 窗口 (Control) | PR #54 | — | 流式 PID 时序 |
+| `anomaly(x, 'zscore'\|'iqr', k)`, `changepoint(x, 'cusum', k, drift)` | 窗口 (异常 / 变点) | PR #55 | TDengine `STATEDURATION` 配套 | 标记型 0/1 / 累积变点统计 |
+| `forecast(measurement, field, n, 'linear'\|'holt_winters', [season])` | TVF | PR #55 | TDengine `FORECAST`(3.3.6+), Influx `holtWinters` | 表值函数：未来 N 步外推 |
+| 用户自定义 | UDF | PR #56 | — | 嵌入式模式可注册聚合 / 标量 / TVF；详见 `docs/extending-functions.md` |
+
+> 函数族基准：见 `tests/TSLite.Benchmarks/Benchmarks/FunctionBenchmark.cs`，对比 InfluxDB Flux 与 TDengine REST 的等价语义。
+
 当前真实支持的服务端控制面 SQL：
 
 - `CREATE USER`
