@@ -5,6 +5,14 @@
 
 ## [Unreleased]
 
+### Added
+- **Milestone 12 — PID 参数估算（`PidParameterEstimator`）**：新增 `src/TSLite/Query/Functions/Control/` 目录，提供从历史阶跃响应时序数据自动推算 PID 控制器参数的纯 C# 实现，零第三方依赖。
+  - `PidTuningMethod` 枚举：`ZieglerNichols`（Ziegler-Nichols 阶跃响应法）/ `CohenCoon`（Cohen-Coon 法）/ `Imc`（Skogestad SIMC/IMC 法）。
+  - `PidParameters` 记录类型：封装 `Kp`（比例增益）、`Ki`（积分增益）、`Kd`（微分增益）。
+  - `PidEstimationOptions`：可选配置项，包含整定方法、阶跃幅度 `StepMagnitude`、IMC 闭环时间常数 `ImcLambda`、初始/末尾稳态窗口比例。
+  - `PidParameterEstimator.Estimate`：接受 `IReadOnlyList<(long TimestampMs, double Value)>` 或 `IReadOnlyList<DataPoint>`，采用 **Sundaresan & Krishnaswamy 35%/85% 两点法** 辨识一阶纯滞后（FOPDT）模型（K、τ、θ），再按所选整定规则输出 Kp/Ki/Kd。
+  - 新增 `tests/TSLite.Tests/Query/Functions/Control/PidParameterEstimatorTests.cs`：20 项单元测试，覆盖三种整定方法的数值精度验证、非零基线、DataPoint 重载、Int64 字段值、边界/错误校验、负向阶跃及三种方法正参数一致性。
+
 ### Changed
 - **PR #50：查询元数据快路径 — Format v2 + 跨桶融合 + MemTable 增量聚合 + ExecuteMany 共享快照**（**Breaking 段文件格式变更**）
   - **Format v2**（破坏性，不兼容旧 segment 文件）：`BlockHeader` 由 64 B 扩展到 72 B，将 `AggregateMinBits` / `AggregateMaxBits` 由 `int`（4 B）升级为 `AggregateMin` / `AggregateMax`（`double`，8 B），覆盖 Float64 任意值与 ±2^53 内的 Int64。新增 `TsdbMagic.SegmentFormatVersion = 2` 常量与 `TsdbMagic.FormatVersion = 1`（用于 FileHeader/WAL/Catalog）解耦；`SegmentHeader.IsValid` 与 `SegmentReader` 拒绝读取 v1 段文件并给出明确升级提示。`SegmentWriter.TryBuildAggregateMetadata` 不再因窄类型截断而放弃 `HasMinMax`，对所有数值字段一律写入 `HasSumCount | HasMinMax`。`SegmentReader` 删除 `DecodeAggregateBoundary` 私有桥接，直接读取 8 B `double`。**升级路径：删除 `*.tslseg` 后启动可由 WAL 重放重新生成 v2 段；混用旧版本数据将抛 `SegmentCorruptedException`。**
