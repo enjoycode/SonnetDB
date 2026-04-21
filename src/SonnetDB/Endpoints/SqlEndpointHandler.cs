@@ -1,0 +1,354 @@
+﻿using System.Diagnostics;
+using System.Text.Json;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using SonnetDB.Engine;
+using SonnetDB.Configuration;
+using SonnetDB.Contracts;
+using SonnetDB.Hosting;
+using SonnetDB.Json;
+using SonnetDB.Sql;
+using SonnetDB.Sql.Ast;
+using SonnetDB.Sql.Execution;
+
+namespace SonnetDB.Endpoints;
+
+/// <summary>
+/// 提供 <c>POST /v1/db/{db}/sql</c> 与 <c>POST /v1/db/{db}/sql/batch</c> 两个端点的处理逻辑。
+/// 结果集以 <c>application/x-ndjson</c> 流式输出。
+/// </summary>
+internal static class SqlEndpointHandler
+{
+    /// <summary>慢查询上报时 SQL 文本的最大截断长度。</summary>
+    private const int _slowQuerySqlMaxLength = 1024;
+
+    /// <summary>控制面 SQL 作为事件数据库名的占位符。</summary>
+    private const string _controlPlaneDatabaseLabel = "__control";
+
+    private static readonly byte[] _newline = "\n"u8.ToArray();
+
+    /// <summary>
+    /// 处理单条 SQL 请求。
+    /// </summary>
+    public static async Task HandleSingleAsync(
+        HttpContext context,
+        Tsdb tsdb,
+        string databaseName,
+        SqlRequest request,
+        ServerMetrics metrics,
+        bool canWrite,
+        bool isAdmin,
+        IControlPlane? controlPlane)
+    {
+        await ExecuteAsync(context, tsdb, databaseName, [request], metrics, canWrite, isAdmin, controlPlane).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 处理批量 SQL 请求。所有语句串行执行。
+    /// </summary>
+    public static async Task HandleBatchAsync(
+        HttpContext context,
+        Tsdb tsdb,
+        string databaseName,
+        SqlBatchRequest request,
+        ServerMetrics metrics,
+        bool canWrite,
+        bool isAdmin,
+        IControlPlane? controlPlane)
+    {
+        await ExecuteAsync(context, tsdb, databaseName, request.Statements, metrics, canWrite, isAdmin, controlPlane).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 处理 <c>POST /v1/sql</c> 单条控制面 SQL 请求（无 db 路径）。
+    /// 仅支持控制面语句（CREATE USER / GRANT / CREATE DATABASE / SHOW USERS 等）以及 <c>SHOW DATABASES</c>。
+    /// 调用方必须先确认请求者是 admin。
+    /// </summary>
+    public static async Task HandleControlPlaneAsync(
+        HttpContext context,
+        SqlRequest request,
+        ServerMetrics metrics,
+        IControlPlane controlPlane)
+    {
+        ArgumentNullException.ThrowIfNull(controlPlane);
+        var broadcaster = context.RequestServices.GetService<EventBroadcaster>();
+        var options = context.RequestServices.GetService<ServerOptions>();
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/x-ndjson; charset=utf-8";
+        var writerOptions = new JsonWriterOptions { Indented = false, SkipValidation = false };
+
+        metrics.RecordSqlRequest();
+        var sw = Stopwatch.StartNew();
+
+        SqlStatement parsed;
+        try
+        {
+            parsed = SqlParser.Parse(request.Sql);
+        }
+        catch (Exception ex)
+        {
+            metrics.RecordSqlError();
+            MaybePublishSlow(broadcaster, options, _controlPlaneDatabaseLabel, request.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+            await WriteErrorAsync(context, "sql_error", ex.Message).ConfigureAwait(false);
+            return;
+        }
+
+        if (!IsControlPlaneStatement(parsed) && parsed is not ShowDatabasesStatement)
+        {
+            metrics.RecordSqlError();
+            MaybePublishSlow(broadcaster, options, _controlPlaneDatabaseLabel, request.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+            await WriteErrorAsync(context, "bad_request",
+                "/v1/sql 仅支持控制面 SQL（CREATE USER / GRANT / CREATE DATABASE / SHOW USERS / SHOW DATABASES 等），数据面 SQL 请走 /v1/db/{db}/sql。").ConfigureAwait(false);
+            return;
+        }
+
+        object result;
+        try
+        {
+            result = SqlExecutor.ExecuteControlPlaneStatement(parsed, controlPlane);
+        }
+        catch (Exception ex)
+        {
+            metrics.RecordSqlError();
+            MaybePublishSlow(broadcaster, options, _controlPlaneDatabaseLabel, request.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+            await WriteErrorAsync(context, "sql_error", ex.Message).ConfigureAwait(false);
+            return;
+        }
+
+        if (result is SelectExecutionResult sel)
+        {
+            long rowCount = await WriteSelectAsync(context, sel, writerOptions).ConfigureAwait(false);
+            metrics.AddReturnedRows(rowCount);
+            var elapsed = sw.Elapsed.TotalMilliseconds;
+            await WriteEndAsync(context, writerOptions, rowCount, recordsAffected: -1, elapsed).ConfigureAwait(false);
+            MaybePublishSlow(broadcaster, options, _controlPlaneDatabaseLabel, request.Sql, elapsed, rowCount, -1, failed: false);
+        }
+        else
+        {
+            var elapsed = sw.Elapsed.TotalMilliseconds;
+            await WriteEndAsync(context, writerOptions, rowCount: 0, recordsAffected: 0, elapsed).ConfigureAwait(false);
+            MaybePublishSlow(broadcaster, options, _controlPlaneDatabaseLabel, request.Sql, elapsed, 0, 0, failed: false);
+        }
+    }
+
+    private static async Task ExecuteAsync(
+        HttpContext context,
+        Tsdb tsdb,
+        string databaseName,
+        IReadOnlyList<SqlRequest> statements,
+        ServerMetrics metrics,
+        bool canWrite,
+        bool isAdmin,
+        IControlPlane? controlPlane)
+    {
+        var broadcaster = context.RequestServices.GetService<EventBroadcaster>();
+        var options = context.RequestServices.GetService<ServerOptions>();
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/x-ndjson; charset=utf-8";
+        var writerOptions = new JsonWriterOptions { Indented = false, SkipValidation = false };
+
+        for (int s = 0; s < statements.Count; s++)
+        {
+            var stmt = statements[s];
+            metrics.RecordSqlRequest();
+            var sw = Stopwatch.StartNew();
+
+            SqlStatement parsed;
+            try
+            {
+                parsed = SqlParser.Parse(stmt.Sql);
+            }
+            catch (Exception ex)
+            {
+                metrics.RecordSqlError();
+                MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+                await WriteErrorAsync(context, "sql_error", ex.Message).ConfigureAwait(false);
+                return;
+            }
+
+            if (IsControlPlaneStatement(parsed) && !isAdmin)
+            {
+                metrics.RecordSqlError();
+                MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+                await WriteErrorAsync(context, "forbidden", "控制面 SQL（CREATE USER / GRANT / CREATE DATABASE / SHOW USERS 等）仅 admin 可执行。").ConfigureAwait(false);
+                return;
+            }
+
+            object? result;
+            try
+            {
+                result = SqlExecutor.ExecuteStatement(tsdb, parsed, controlPlane);
+            }
+            catch (Exception ex)
+            {
+                metrics.RecordSqlError();
+                MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+                await WriteErrorAsync(context, "sql_error", ex.Message).ConfigureAwait(false);
+                return;
+            }
+
+            switch (result)
+            {
+                case SelectExecutionResult sel:
+                    {
+                        long rowCount = await WriteSelectAsync(context, sel, writerOptions).ConfigureAwait(false);
+                        metrics.AddReturnedRows(rowCount);
+                        var elapsed = sw.Elapsed.TotalMilliseconds;
+                        await WriteEndAsync(context, writerOptions, rowCount, recordsAffected: -1, elapsed).ConfigureAwait(false);
+                        MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, elapsed, rowCount, -1, failed: false);
+                        break;
+                    }
+                case InsertExecutionResult ins:
+                    {
+                        if (!canWrite)
+                        {
+                            metrics.RecordSqlError();
+                            MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+                            await WriteErrorAsync(context, "forbidden", "INSERT 需要 readwrite 或 admin 角色。").ConfigureAwait(false);
+                            return;
+                        }
+                        metrics.AddInsertedRows(ins.RowsInserted);
+                        var elapsed = sw.Elapsed.TotalMilliseconds;
+                        await WriteEndAsync(context, writerOptions, rowCount: 0, recordsAffected: ins.RowsInserted, elapsed).ConfigureAwait(false);
+                        MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, elapsed, 0, ins.RowsInserted, failed: false);
+                        break;
+                    }
+                case DeleteExecutionResult del:
+                    {
+                        if (!canWrite)
+                        {
+                            metrics.RecordSqlError();
+                            MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+                            await WriteErrorAsync(context, "forbidden", "DELETE 需要 readwrite 或 admin 角色。").ConfigureAwait(false);
+                            return;
+                        }
+                        var elapsed = sw.Elapsed.TotalMilliseconds;
+                        await WriteEndAsync(context, writerOptions, rowCount: 0, recordsAffected: del.TombstonesAdded, elapsed).ConfigureAwait(false);
+                        MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, elapsed, 0, del.TombstonesAdded, failed: false);
+                        break;
+                    }
+                default:
+                    {
+                        // CREATE MEASUREMENT 、CREATE USER 等 DDL：返回受影响行数 0
+                        // 控制面 DDL 已在上面单独鉴权 isAdmin，这里仅校验需 canWrite 的普通 DDL。
+                        if (!IsControlPlaneStatement(parsed) && !canWrite)
+                        {
+                            metrics.RecordSqlError();
+                            MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, sw.Elapsed.TotalMilliseconds, 0, 0, failed: true);
+                            await WriteErrorAsync(context, "forbidden", "DDL 需要 readwrite 或 admin 角色。").ConfigureAwait(false);
+                            return;
+                        }
+                        var elapsed = sw.Elapsed.TotalMilliseconds;
+                        await WriteEndAsync(context, writerOptions, rowCount: 0, recordsAffected: 0, elapsed).ConfigureAwait(false);
+                        MaybePublishSlow(broadcaster, options, databaseName, stmt.Sql, elapsed, 0, 0, failed: false);
+                        break;
+                    }
+            }
+        }
+    }
+
+    private static async Task<long> WriteSelectAsync(HttpContext context, SelectExecutionResult result, JsonWriterOptions options)
+    {
+        var body = context.Response.BodyWriter;
+
+        // 1) meta 行
+        var meta = new ResultMeta("meta", result.Columns);
+        await using (var metaWriter = new Utf8JsonWriter(body, options))
+        {
+            JsonSerializer.Serialize(metaWriter, meta, ServerJsonContext.Default.ResultMeta);
+        }
+        await body.WriteAsync(_newline, context.RequestAborted).ConfigureAwait(false);
+
+        // 2) 行数据：每行一条 ndjson
+        long count = 0;
+        for (int r = 0; r < result.Rows.Count; r++)
+        {
+            await using (var rowWriter = new Utf8JsonWriter(body, options))
+            {
+                NdjsonRowWriter.WriteRow(rowWriter, result.Rows[r]);
+            }
+            await body.WriteAsync(_newline, context.RequestAborted).ConfigureAwait(false);
+            count++;
+        }
+
+        return count;
+    }
+
+    private static async Task WriteEndAsync(HttpContext context, JsonWriterOptions options, long rowCount, int recordsAffected, double elapsedMs)
+    {
+        var body = context.Response.BodyWriter;
+        var end = new ResultEnd("end", rowCount, recordsAffected, elapsedMs);
+        await using (var w = new Utf8JsonWriter(body, options))
+        {
+            JsonSerializer.Serialize(w, end, ServerJsonContext.Default.ResultEnd);
+        }
+        await body.WriteAsync(_newline, context.RequestAborted).ConfigureAwait(false);
+        await body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
+    }
+
+    private static async Task WriteErrorAsync(HttpContext context, string code, string message)
+    {
+        // 若响应尚未开始：用 4xx 状态码
+        if (!context.Response.HasStarted)
+        {
+            context.Response.StatusCode = code switch
+            {
+                "forbidden" => StatusCodes.Status403Forbidden,
+                "db_not_found" => StatusCodes.Status404NotFound,
+                "unauthorized" => StatusCodes.Status401Unauthorized,
+                _ => StatusCodes.Status400BadRequest,
+            };
+            context.Response.ContentType = "application/json; charset=utf-8";
+            var err = new ErrorResponse(code, message);
+            await JsonSerializer.SerializeAsync(context.Response.Body, err, ServerJsonContext.Default.ErrorResponse, context.RequestAborted).ConfigureAwait(false);
+            return;
+        }
+
+        // 已经在 ndjson 流中：附加一条错误行（type=error）
+        var body = context.Response.BodyWriter;
+        await using (var w = new Utf8JsonWriter(body, new JsonWriterOptions { Indented = false }))
+        {
+            JsonSerializer.Serialize(w, new ErrorResponse(code, message), ServerJsonContext.Default.ErrorResponse);
+        }
+        await body.WriteAsync(_newline, context.RequestAborted).ConfigureAwait(false);
+        await body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
+    }
+
+    /// <summary>判别是否为控制面 DDL（需要超级用户权限）。SHOW DATABASES 不在此列，普通认证用户可调用。</summary>
+    private static bool IsControlPlaneStatement(SqlStatement statement) => statement is
+        CreateUserStatement or
+        AlterUserPasswordStatement or
+        DropUserStatement or
+        GrantStatement or
+        RevokeStatement or
+        CreateDatabaseStatement or
+        DropDatabaseStatement or
+        ShowUsersStatement or
+        ShowGrantsStatement or
+        ShowTokensStatement or
+        IssueTokenStatement or
+        RevokeTokenStatement;
+
+    private static void MaybePublishSlow(
+        EventBroadcaster? broadcaster,
+        ServerOptions? options,
+        string database,
+        string sql,
+        double elapsedMs,
+        long rowCount,
+        int recordsAffected,
+        bool failed)
+    {
+        if (broadcaster is null || options is null)
+            return;
+        if (broadcaster.SubscriberCount == 0)
+            return;
+        if (elapsedMs < options.SlowQueryThresholdMs)
+            return;
+        var truncated = sql.Length > _slowQuerySqlMaxLength
+            ? sql[.._slowQuerySqlMaxLength]
+            : sql;
+        var payload = new SlowQueryEvent(database, truncated, elapsedMs, rowCount, recordsAffected, failed);
+        broadcaster.Publish(ServerEventFactory.SlowQuery(payload));
+    }
+}

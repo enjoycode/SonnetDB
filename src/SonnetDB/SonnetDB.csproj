@@ -1,0 +1,69 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SonnetDB</RootNamespace>
+    <AssemblyName>SonnetDB</AssemblyName>
+    <Description>SonnetDB 服务器版，内置 HTTP API、管理前端与远程 ADO.NET 接入能力。</Description>
+
+    <!--
+      AOT 优先。Native AOT publish 需要在命令行/CI 里加 -p:PublishAot=true。
+      这里默认不打开 PublishAot，避免日常 `dotnet build` 触发完整 AOT 链路（速度慢且不必要）。
+      但通过 IsAotCompatible（继承自 Directory.Build.props）已经在 build 阶段开启了 IL/AOT 分析器，
+      所以违反 AOT 兼容性的代码会立刻在 build 时报错。
+    -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!--
+      ASP.NET Core 的 Request Delegate Generator（RDG）source generator：
+      AOT 模式下 MapGet/MapPost 等接受 Delegate 的扩展方法是 RequiresDynamicCode 的，
+      启用 RDG 后，编译期会为每个端点生成 trim/AOT 安全的具体类型 wrapper。
+    -->
+    <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SonnetDB.Core\SonnetDB.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SonnetDB.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="appsettings.Development.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
+    Admin UI 嵌入式静态资源。
+    - web/admin/dist/** 全部以 EmbeddedResource 嵌入，LogicalName 改写为 'sndb.admin/<相对路径>'，
+      与 AdminUiAssets.ResourcePrefix 对齐。
+    - 不依赖 npm；如果 dist 不存在（前端未 build），EmbeddedResource 集合为空，
+      运行时 /admin 端点返回 503 + 提示文案。
+    - 可选：设置 -p:BuildAdminUi=true 由 MSBuild 自动跑 `npm install && npm run build`。
+  -->
+  <PropertyGroup>
+    <AdminUiSourceDir>$(MSBuildThisFileDirectory)..\..\web\admin</AdminUiSourceDir>
+    <AdminUiDistDir>$(AdminUiSourceDir)\dist</AdminUiDistDir>
+    <BuildAdminUi Condition="'$(BuildAdminUi)' == ''">false</BuildAdminUi>
+  </PropertyGroup>
+
+  <Target Name="BuildAdminUi"
+          BeforeTargets="AssignTargetPaths"
+          Condition="'$(BuildAdminUi)' == 'true' AND Exists('$(AdminUiSourceDir)\package.json')">
+    <Exec Command="npm install --no-audit --no-fund" WorkingDirectory="$(AdminUiSourceDir)" />
+    <Exec Command="npm run build" WorkingDirectory="$(AdminUiSourceDir)" />
+  </Target>
+
+  <ItemGroup Condition="Exists('$(AdminUiDistDir)')">
+    <EmbeddedResource Include="$(AdminUiDistDir)\**\*.*">
+      <LogicalName>sndb.admin/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

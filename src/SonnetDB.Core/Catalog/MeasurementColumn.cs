@@ -1,0 +1,14 @@
+﻿using SonnetDB.Storage.Format;
+
+namespace SonnetDB.Catalog;
+
+/// <summary>
+/// Measurement schema 中的一列。Tag 列固定为 <see cref="FieldType.String"/>。
+/// </summary>
+/// <param name="Name">列名（区分大小写，非空、非空白）。</param>
+/// <param name="Role">列角色（Tag 或 Field）。</param>
+/// <param name="DataType">数据类型；Tag 列必须为 <see cref="FieldType.String"/>。</param>
+public sealed record MeasurementColumn(
+    string Name,
+    MeasurementColumnRole Role,
+    FieldType DataType);

@@ -1,0 +1,84 @@
+﻿namespace SonnetDB.Sql.Ast;
+
+/// <summary>SQL 表达式节点抽象基类。</summary>
+public abstract record SqlExpression;
+
+/// <summary>字面量类别。</summary>
+public enum SqlLiteralKind
+{
+    /// <summary>SQL <c>NULL</c>。</summary>
+    Null,
+    /// <summary>布尔字面量。</summary>
+    Boolean,
+    /// <summary>整数字面量（64 位有符号）。</summary>
+    Integer,
+    /// <summary>浮点字面量（64 位双精度）。</summary>
+    Float,
+    /// <summary>字符串字面量。</summary>
+    String,
+}
+
+/// <summary>字面量表达式：包装 NULL / Boolean / Integer / Float / String。</summary>
+/// <param name="Kind">字面量类别。</param>
+/// <param name="StringValue">字符串字面量内容（仅当 <see cref="Kind"/> 为 <see cref="SqlLiteralKind.String"/>）。</param>
+/// <param name="IntegerValue">整数值（仅当 <see cref="Kind"/> 为 <see cref="SqlLiteralKind.Integer"/>）。</param>
+/// <param name="FloatValue">浮点值（仅当 <see cref="Kind"/> 为 <see cref="SqlLiteralKind.Float"/>）。</param>
+/// <param name="BooleanValue">布尔值（仅当 <see cref="Kind"/> 为 <see cref="SqlLiteralKind.Boolean"/>）。</param>
+public sealed record LiteralExpression(
+    SqlLiteralKind Kind,
+    string? StringValue = null,
+    long IntegerValue = 0,
+    double FloatValue = 0,
+    bool BooleanValue = false) : SqlExpression
+{
+    /// <summary>构造 NULL 字面量。</summary>
+    public static LiteralExpression Null() => new(SqlLiteralKind.Null);
+    /// <summary>构造布尔字面量。</summary>
+    public static LiteralExpression Bool(bool value) => new(SqlLiteralKind.Boolean, BooleanValue: value);
+    /// <summary>构造整数字面量。</summary>
+    public static LiteralExpression Integer(long value) => new(SqlLiteralKind.Integer, IntegerValue: value);
+    /// <summary>构造浮点字面量。</summary>
+    public static LiteralExpression Float(double value) => new(SqlLiteralKind.Float, FloatValue: value);
+    /// <summary>构造字符串字面量。</summary>
+    public static LiteralExpression String(string value) => new(SqlLiteralKind.String, StringValue: value);
+}
+
+/// <summary>时间间隔字面量（单位毫秒），仅在 <c>time(...)</c> 与可能的时间运算上下文中出现。</summary>
+/// <param name="Milliseconds">已转换为毫秒的整数值。</param>
+public sealed record DurationLiteralExpression(long Milliseconds) : SqlExpression;
+
+/// <summary>标识符引用（列名 / 字段名 / tag 名）。</summary>
+/// <param name="Name">标识符名称（保留原始大小写）。</param>
+public sealed record IdentifierExpression(string Name) : SqlExpression;
+
+/// <summary><c>*</c> 通配符（仅出现在 SELECT 列表或 COUNT(*) 中）。</summary>
+public sealed record StarExpression : SqlExpression
+{
+    /// <summary>共享单例实例。</summary>
+    public static StarExpression Instance { get; } = new();
+}
+
+/// <summary>函数调用，例如 <c>count(*)</c> / <c>avg(value)</c> / <c>time(1m)</c>。</summary>
+/// <param name="Name">函数名（保留原始大小写）。</param>
+/// <param name="Arguments">函数实参；当 <see cref="IsStar"/> 为 <c>true</c> 时为空列表。</param>
+/// <param name="IsStar">是否为 <c>fn(*)</c> 形式。</param>
+public sealed record FunctionCallExpression(
+    string Name,
+    IReadOnlyList<SqlExpression> Arguments,
+    bool IsStar = false) : SqlExpression;
+
+/// <summary>二元运算表达式。</summary>
+/// <param name="Operator">运算符。</param>
+/// <param name="Left">左操作数。</param>
+/// <param name="Right">右操作数。</param>
+public sealed record BinaryExpression(
+    SqlBinaryOperator Operator,
+    SqlExpression Left,
+    SqlExpression Right) : SqlExpression;
+
+/// <summary>一元运算表达式（NOT / 取负）。</summary>
+/// <param name="Operator">一元运算符。</param>
+/// <param name="Operand">操作数。</param>
+public sealed record UnaryExpression(
+    SqlUnaryOperator Operator,
+    SqlExpression Operand) : SqlExpression;

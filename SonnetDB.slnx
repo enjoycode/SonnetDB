@@ -1,0 +1,17 @@
+﻿<Solution>
+  <Folder Name="/eng/">
+    <Project Path="eng/benchmarks/run-benchmarks/run-benchmarks.csproj" />
+    <Project Path="eng/benchmarks/start-benchmark-env/start-benchmark-env.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/SonnetDB.Cli/SonnetDB.Cli.csproj" />
+    <Project Path="src/SonnetDB.Core/SonnetDB.Core.csproj" />
+    <Project Path="src/SonnetDB.Data/SonnetDB.Data.csproj" />
+    <Project Path="src/SonnetDB/SonnetDB.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj" />
+    <Project Path="tests/SonnetDB.Core.Tests/SonnetDB.Core.Tests.csproj" />
+    <Project Path="tests/SonnetDB.Tests/SonnetDB.Tests.csproj" />
+  </Folder>
+</Solution>

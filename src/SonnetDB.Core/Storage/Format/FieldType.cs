@@ -1,0 +1,22 @@
+﻿namespace SonnetDB.Storage.Format;
+
+/// <summary>
+/// 时序字段的数据类型。
+/// </summary>
+public enum FieldType : byte
+{
+    /// <summary>未知类型（占位，不应出现在有效数据中）。</summary>
+    Unknown = 0,
+
+    /// <summary>64 位双精度浮点数（IEEE 754）。</summary>
+    Float64 = 1,
+
+    /// <summary>64 位有符号整数。</summary>
+    Int64 = 2,
+
+    /// <summary>布尔值（0 = false，1 = true）。</summary>
+    Boolean = 3,
+
+    /// <summary>UTF-8 编码字符串（变长，仅 WAL 内使用）。</summary>
+    String = 4,
+}
