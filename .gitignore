@@ -423,4 +423,4 @@ FodyWeavers.xsd
 *.msp
 /.tools
 /.tools5
-/src/TSLite.Server/tslite-data-pr47-bench
+.dotnet_home/
