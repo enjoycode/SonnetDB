@@ -269,6 +269,107 @@ db.Functions.RegisterAggregate(new KalmanAggregate()); // 实现 IAggregateFunct
 **推进顺序**：PR #50 → #51 → #52 → #53 → #54 → #55 → #56 → #57。
 其中 PR #50 是基础设施重构，必须先合并；PR #54 / #55 / #56 是对外差异化卖点，建议在 Milestone 9（发布）完成后立刻推进。
 
+---
+
+## Milestone 13 — 向量类型与嵌入式向量索引（Copilot 知识库底座）
+
+> **背景**：Milestone 14 的 SonnetDB Copilot（智能体）需要一个"零外部依赖"的向量召回能力。我们已经决定 **dogfooding——把向量库做到 SonnetDB 自己里**，而不是引入 SQLite/sqlite-vec / Qdrant 等外部组件。这样既能复用 WAL/Segment/Compaction 的存储栈，也能成为 SonnetDB 的对外差异化能力（"时序 + 向量"二合一）。
+>
+> **设计原则**：
+> 1. **Safe-only 仍生效**：向量距离计算优先使用 `System.Numerics.Tensors.TensorPrimitives`（.NET 10 已内置 SIMD，零 `unsafe`）。
+> 2. **零破坏**：新增 `VECTOR(dim)` 字段类型，复用 `FieldValue` 的 union 结构（新增 `Vector` 分支），现有 schema / 写入 / 查询路径保持兼容。
+> 3. **AOT 友好**：内置距离函数 + 索引算子均为 `sealed class`，不引入反射或动态代码生成。
+> 4. **可演进**：第一版用 brute-force 顺扫 + 段内裁剪，足够覆盖 Copilot 知识库（< 50k 切片）；HNSW 留到 PR #61 按需追加。
+
+### PR 列表
+
+| PR | 主题 | 状态 |
+|----|------|------|
+| #58 | **`VECTOR(dim)` 数据类型 + 编解码**：`FieldValue` 新增 `Vector` 分支（`ReadOnlyMemory<float>` + dim 校验）；`SegmentWriter` / `SegmentReader` 新增 `BlockEncoding.VectorRaw`（dim×4 字节定长）；schema 在 `CREATE MEASUREMENT` 中支持 `embedding VECTOR(384)` 列；INSERT 支持 `[0.1,0.2,...]` 字面量与参数化 `float[]`；`FileHeader.Version` 升级到 v3 并保留对 v2 的只读回退 | 📋 |
+| #59 | **向量距离函数（Tier 1 标量 + Tier 2 聚合）**：基于 `TensorPrimitives.CosineSimilarity` / `Distance` / `DotProduct` 实现 `cosine_distance(a,b)` `l2_distance(a,b)` `inner_product(a,b)` `vector_norm(a)`；新增聚合 `centroid(vec)`（按维度求均值，可合并）；`SqlParser` 支持 `<=>` `<->` `<#>` 三个 PostgreSQL/pgvector 兼容运算符（解析为对应函数调用） | 📋 |
+| #60 | **`KNN` 表值函数 + 段内 brute-force 召回**：新增 `knn(measurement, column, query_vector, k[, metric])` TVF，返回 `(time, distance, ...tags, ...fields)`；执行器在 `SegmentManager` 上做"段级时间窗剪枝 → 段内顺扫 + 维护大小为 k 的最小堆"；MemTable 也参与召回；首版无 ANN，仅靠并行 + SIMD；`docs/vector-search.md` 给出端到端用法示例 | 📋 |
+| #61 | **HNSW 段内 ANN 索引（可选构建）**：`SegmentWriter` 在 flush/compaction 阶段对 `VECTOR` 列可选构建 HNSW 图（`SDBVIDX` 边表 sidecar 文件，不污染 `.SDBSEG`）；`SegmentReader` 检测到 `.SDBVIDX` 自动启用 ANN，否则降级为 brute-force；通过 `CREATE MEASUREMENT (... embedding VECTOR(384) WITH INDEX hnsw(m=16, ef=200))` 声明 | 📋 |
+| #62 | **向量基准 + 对比**：`tests/SonnetDB.Benchmarks` 新增 `VectorRecallBenchmark`，10k / 100k / 1M 384-dim 向量的 brute-force 顺扫 vs HNSW 召回延迟 + Recall@10；与 sqlite-vec、pgvector（IVF/HNSW）粗略同机对比写入 README | 📋 |
+
+**推进顺序**：PR #58（类型）→ #59（距离函数）→ #60（KNN 表值函数）→ Milestone 14 可以开始；#61（HNSW）与 #62（基准）允许与 Milestone 14 并行推进。
+
+---
+
+## Milestone 14 — SonnetDB Copilot：MCP 工具 + 知识库 + 智能体
+
+> **背景**：当前服务端 `/mcp/{db}` 已经暴露只读 MCP 工具（`query_sql` / `list_measurements` / `describe_measurement`）+ 三个 schema/stats 资源。在此之上，我们要构建一个**真正能"对话操作 SonnetDB"的智能体**，目标是让用户用自然语言完成"看 schema → 写 SQL → 解释结果 → 调优 / 排错 / 预测"全链路。
+>
+> **架构总览**：
+> ```
+> [Web Admin Chat / 第三方 MCP Host]
+>           │
+>           ▼
+>     SonnetDB.Copilot (Microsoft Agent Framework)
+>           │
+>     ┌─────┼──────────────────────────┐
+>     ▼     ▼                          ▼
+> Skills 库   Knowledge 检索      MCP Tool 调用
+> (剧本/Prompt) (向量召回 ← M13)    (本进程内复用 MCP 工具)
+>           │
+>           ▼
+>     SonnetDB Engine（Tsdb / SQL / Schema）
+> ```
+>
+> **设计原则**：
+> 1. **Agent SDK = Microsoft Agent Framework**（与 .NET 10 / AOT 生态原生契合，可直接 host MCP client）。
+> 2. **知识库存储 = SonnetDB 自身**（依赖 Milestone 13 的 `VECTOR` + `knn(...)`，自我 dogfooding）。
+> 3. **嵌入模型多供应商兼容**：
+>    - **本地 ONNX**（默认 `bge-small-zh-v1.5` int8，~30 MB，CPU 30 ms / 句）——离线/内网/隐私优先。
+>    - **OpenAI 兼容端点**——同一套 `IEmbeddingProvider` 接口，URL + Key + Model 即可切换；天然支持"国际版"（OpenAI / Azure OpenAI）和"国内版"（DashScope / 智谱 GLM / 月之暗面 Moonshot / DeepSeek / SiliconFlow / 火山方舟 等任何 OpenAI-compat 网关）。
+>    - 配置 `SonnetDBServer__Copilot__Embedding__Provider = local|openai`，`Endpoint` / `ApiKey` / `Model` 三件套；**对话模型走同一抽象**，复用同一套 provider 切换逻辑。
+> 4. **零破坏**：新增独立项目 `src/SonnetDB.Copilot/`，不污染 `SonnetDB.Core`；服务端可选启用（`Copilot__Enabled = true`）。
+> 5. **技能库 = 文件系统 + 前置语义召回**：`copilot/skills/*.md`（带 frontmatter `description` / `triggers`），第一轮根据用户问题做向量召回，命中后再加载到上下文。
+
+### PR 列表
+
+| PR | 主题 | 状态 |
+|----|------|------|
+| #63 | **`SonnetDB.Copilot` 项目骨架 + Embedding 抽象**：新建 `src/SonnetDB.Copilot/`（引用 `Microsoft.Agents.AI` / `Microsoft.Extensions.AI` / `Microsoft.ML.OnnxRuntime`）；定义 `IEmbeddingProvider` / `IChatProvider` 抽象 + `LocalOnnxEmbeddingProvider`（bge-small-zh）+ `OpenAICompatibleEmbeddingProvider`（含 `OpenAICompatibleChatProvider`）；`SonnetDBServer__Copilot__*` 配置节 + DI 装配；`/healthz` 暴露 Copilot ready 标志；不接入任何业务流程 | 📋 |
+| #64 | **文档摄入管线 + Knowledge 库**：新建 `Tsdb` 内嵌系统库 `__copilot__`，自动建表 `docs(time, source TAG, section TAG, title TAG, content STRING, embedding VECTOR(384))`；`DocsIngestor` 扫描 `docs/*.md` + `web/admin/help/`，按 H2/H3 切片（≤ 800 字 / 100 字 overlap）→ 嵌入 → 批量入库；CLI `sndb copilot ingest --root ./docs` 与服务端启动时自动增量同步（按文件 mtime 判定）；提供 MCP tool `docs_search(query, k)` | 📋 |
+| #65 | **技能库 + 技能路由**：新增 `copilot/skills/*.md`（首批：`query-aggregation` / `pid-control-tuning` / `forecast-howto` / `troubleshoot-slow-query` / `schema-design` / `bulk-ingest`），frontmatter 含 `name` / `description` / `triggers` / `requires_tools`；`SkillRegistry` 启动时把每个技能 `description + triggers` 嵌入到 `__copilot__.skills`；新增 MCP tool `skill_search(query, k)` / `skill_load(name)`；技能加载后被 Agent 注入 system prompt | 📋 |
+| #66 | **Schema 工具增强 + 抽样工具**：在现有 MCP 工具基础上补齐 `list_databases()` / `sample_rows(measurement, n=5)` / `explain_sql(sql)`（返回估算扫描段数 / 行数）；schema 工具结果加入 30s 内存缓存；所有新工具同样接入 `GrantsStore` 数据库级权限 | 📋 |
+| #67 | **Agent Host：单轮问答闭环**：`CopilotAgent`（基于 Microsoft Agent Framework）= Embedding Provider + Chat Provider + MCP tools + Skills + Docs；HTTP 端点 `POST /v1/copilot/chat`（NDJSON 流式 SSE）+ `/v1/copilot/chat/stream`；最小回路：用户问题 → 召回 skills + docs → 选 tools → 执行 → 回答 + citations；Bearer 鉴权 + 数据库级 read 权限校验 | 📋 |
+| #68 | **多轮 + 自我纠错 + Web Admin 集成**：Agent 支持多轮 history（按 token 预算裁剪）；SQL 执行失败时把 `SqlExecutionException` 反馈给模型让其改写（最多 3 轮）；`web/admin/` 新增 Chat Tab（Naive UI 流式渲染 + skill/citation 折叠展示 + 一键复制 SQL 到控制台执行） | 📋 |
+| #69 | **Eval 套件 + 回归基准**：`tests/SonnetDB.Copilot.Tests` 新增 30~50 个标准问答（schema 查询 / 聚合 / 时间过滤 / PID / forecast / 排错），用 `pytest-agent-evals` 风格的 .NET 实现：accuracy（SQL 等价/结果等价）、latency、citation 命中率三个指标；CI 中 nightly 运行（不阻塞主 CI）；README 新增"Copilot 能力矩阵"表 | 📋 |
+
+### 配置预览
+
+```jsonc
+// appsettings.json
+"SonnetDBServer": {
+  "Copilot": {
+    "Enabled": true,
+    "Embedding": {
+      "Provider": "local",                    // local | openai
+      "LocalModelPath": "./models/bge-small-zh-v1.5-int8.onnx",
+      "Endpoint": "https://api.openai.com/v1",
+      "ApiKey": "${OPENAI_API_KEY}",
+      "Model": "text-embedding-3-small"
+    },
+    "Chat": {
+      "Provider": "openai",                   // openai
+      "Endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "ApiKey": "${DASHSCOPE_API_KEY}",
+      "Model": "qwen-max"
+    },
+    "Docs": { "AutoIngestOnStartup": true, "Roots": [ "./docs", "./web/admin/help" ] },
+    "Skills": { "Root": "./copilot/skills" }
+  }
+}
+```
+
+### 推进顺序
+
+PR #63（骨架 + Provider 抽象）→ #64（文档摄入）→ #65（技能库）→ #66（工具增强）→ #67（Agent 单轮）→ #68（多轮 + Web）→ #69（Eval）。
+**前置依赖**：Milestone 13 的 PR #58 / #59 / #60 至少需要先合并，PR #64 才能在 SonnetDB 自身上落库。
+
+---
+
 ## 里程碑总览
 
 | Milestone | 主题 | PR 范围 | 状态 |
@@ -286,8 +387,10 @@ db.Functions.RegisterAggregate(new KalmanAggregate()); // 实现 IAggregateFunct
 | 10 | 扩展和第三方 | #40, #41 + #42~#45 批量入库专题 | 🚧（#42~#45 ✅） |
 | 11 | 写入快路径（PR #45 瓶颈收尾） | #46 ~ #49 | ✅ |
 | 12 | 函数与算子扩展（PID / Forecast / UDF） | #50 ~ #57 | ✅ |
+| 13 | 向量类型与嵌入式向量索引（Copilot 知识库底座） | #58 ~ #62 | 📋 |
+| 14 | SonnetDB Copilot：MCP 工具 + 知识库 + 智能体 | #63 ~ #69 | 📋 |
 
-**当前推进顺序**：Milestone 12 已完成（PR #50 ~ #57 全部合并），Milestone 13 待规划。
+**当前推进顺序**：Milestone 13（向量类型）→ Milestone 14（Copilot），其中 PR #58→#59→#60 是 Copilot 知识库的硬前置；PR #61（HNSW）/ #62（向量基准）允许与 Milestone 14 并行推进。
 
 ---
 
@@ -302,3 +405,5 @@ db.Functions.RegisterAggregate(new KalmanAggregate()); // 实现 IAggregateFunct
 7. **执行顺序前置**：PR #21（Retention TTL）与 PR #35（嵌入式 Benchmark 基线）必须先于 M8 完成。
 8. **发布顺延到 Milestone 9。**
 9. **新增 Milestone 12 — 函数与算子扩展**：将 `enum Aggregator` 重构为 `FunctionRegistry` + `IAggregateFunction`，引入 Tier 1–5 共 ~50 个函数；以 **PID 与 Forecast** 作为内置差异化能力，并开放 UDF 注册 API 给嵌入式生态。该里程碑独立于原路线图，定位为 SonnetDB 在工业 / IoT / 可观测性场景的横向扩展层。
+10. **新增 Milestone 13 — 向量类型与嵌入式向量索引**：引入 `VECTOR(dim)` 数据类型与 `cosine_distance` / `l2_distance` / `inner_product` 标量函数 + `knn(...)` 表值函数，第一版以 brute-force + SIMD 实现，HNSW 作为可选段内 sidecar 索引（`SDBVIDX`）。定位为 Milestone 14 Copilot 知识库的存储底座，同时让 SonnetDB 形成"时序 + 向量"二合一的对外差异化能力。距离计算全部走 `System.Numerics.Tensors.TensorPrimitives`，继续遵守 Safe-only 原则。
+11. **新增 Milestone 14 — SonnetDB Copilot**：基于 Microsoft Agent Framework 的智能体层，复用现有 `/mcp/{db}` 工具集 + Milestone 13 的向量召回，把"用户文档 / 技能库 / 数据库 schema"全部 dogfood 到 `__copilot__` 系统库中。Embedding/Chat 走统一 `IEmbeddingProvider` / `IChatProvider` 抽象，**本地 ONNX（bge-small-zh）** 与 **OpenAI 兼容端点（国际版 / 国内版任意 OpenAI-compat 网关）** 同时支持，可按部署场景切换。新增项目 `src/SonnetDB.Copilot/`，与 `SonnetDB.Core` 解耦，服务端可选启用，不破坏现有功能。

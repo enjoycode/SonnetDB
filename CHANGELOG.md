@@ -23,6 +23,10 @@
   - **保留**：核心类型名 `Tsdb` / `TsdbOptions` / `SndbConnection` 等不变（`Tsdb` 是通用时序库缩写而非品牌词）。
 - **版本升级**：`0.1.0` → `1.0.0`。
 
+### Planned
+- **Milestone 13 — 向量类型与嵌入式向量索引（Copilot 知识库底座）**：`VECTOR(dim)` 字段类型 + `cosine_distance` / `l2_distance` / `inner_product` 标量函数 + `knn(measurement, column, query, k)` 表值函数；首版 brute-force + `System.Numerics.Tensors.TensorPrimitives`（Safe-only），HNSW 作为可选段内 sidecar 索引（`SDBVIDX`）。详见 ROADMAP PR #58 ~ #62。
+- **Milestone 14 — SonnetDB Copilot：MCP 工具 + 知识库 + 智能体**：基于 Microsoft Agent Framework 新建独立项目 `src/SonnetDB.Copilot/`，复用现有 `/mcp/{db}` 工具集 + Milestone 13 的向量召回，把"用户文档 / 技能库 / 数据库 schema"统一存入 `__copilot__` 系统库（dogfooding）。Embedding/Chat 走统一 `IEmbeddingProvider` / `IChatProvider` 抽象，**本地 ONNX（bge-small-zh）** 与 **OpenAI 兼容端点（国际 / 国内任意 OpenAI-compat 网关）** 同时支持，可按部署场景切换。新增 HTTP 端点 `POST /v1/copilot/chat`（NDJSON / SSE 流式）+ Web Admin Chat Tab。详见 ROADMAP PR #63 ~ #69。
+
 ### Added
 - **服务端内建 MCP（Model Context Protocol）只读入口**
   - `src/SonnetDB` 新增基于官方 `ModelContextProtocol.AspNetCore` 1.2.0 的 Streamable HTTP MCP 端点：`/mcp/{db}`。启用 `Stateless=true`，关闭 legacy SSE，`ConfigureSessionOptions` 会把当前数据库名写入 `ServerInstructions`，明确这是绑定到单个数据库的只读 SonnetDB MCP 会话。
