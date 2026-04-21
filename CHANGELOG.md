@@ -6,12 +6,19 @@
 ## [Unreleased]
 
 ### Added
-- **PR #49（部分）：README 基准章节刷新**
+- **PR #49：基准刷新 + 对外对比（写入快路径专题收尾）**
   - 「写入：100 万点（单序列）」表新增 PR #47 三条服务端 LP/JSON/Bulk 端点的实测数据（1.10–1.20 s / 34–71 MB），把服务端 vs 嵌入式的写入差距从 ~33.8×（SQL Batch 路径）收敛展示到 **~1.77–1.93×**（绕开 SQL parser 路径）。
   - 「嵌入式 vs. TSLite.Server 同机对比」表把写入行拆分为 SQL Batch + LP + JSON + Bulk 四行，标注各自的额外开销与主要来源。
   - 「批量入库快路径」段补充 PR #48 `?flush=` 三档位语义表（None / Async / Sync 与适用场景）。
   - 「小结」最后一行更新为反映 PR #47/#48 后的写入收敛事实。
-  - 注：全量 `BulkIngestBenchmark` / `ServerInsertBenchmark` 的重跑（含 InfluxDB / TDengine schemaless LP 对照）作为后续事项保留，本 PR 仅做文档刷新，未引入代码与依赖变更。
+  - **新增 `InsertBenchmark.TDengine_InsertSchemaless_1M`**：走 TDengine InfluxDB-compat 端点 `POST /influxdb/v1/write?precision=ms`，按 100,000 行/批切片避开 taosadapter 16 MB body 上限；`TDengineRestClient` 配套新增 `WriteLineProtocolAsync(db, lp, precision)`。配合 `bench_insert_schemaless` 隔离 DB，与已有显式 STable 路径互不干扰。
+  - **全量重跑 24 个基准**（i9-13900HX / .NET 10.0.6 / Docker WSL2，~20 分钟）真实数字写入 `tests/TSLite.Benchmarks/README.md`：
+    - InsertBenchmark（1M 点）：TSLite **544.9 ms / 530 MB**（1.00×）、SQLite 811.4 ms / 465 MB（1.49×）、InfluxDB 5,222 ms / 1,457 MB（**9.58×**）、TDengine REST INSERT 44,137 ms / 156 MB（81×）、**TDengine schemaless LP 996 ms / 61 MB（1.83×）**〔同库 schemaless 路径比 REST INSERT 子表路径快 44× / 分配缩到 39%〕
+    - QueryBenchmark：TSLite **6.71 ms / 18.7 MB**，比 InfluxDB 快 61×、比 SQLite 快 6.6×
+    - AggregateBenchmark：TSLite **42.3 ms / 39.4 MB**，比 SQLite 快 7.7×
+    - CompactionBenchmark：TSLite **16.3 ms / 28.3 MB**
+    - **ServerInsertBenchmark（重建镜像后首次全部跑通）**：SQL Batch `19.80 s / 655 MB`、LP `1.293 s / 52 MB`、JSON `1.352 s / 71 MB`、Bulk VALUES `1.120 s / 34 MB`——PR #47 三端点仍稳定在「秒级 1M 点 + ≤ 80 MB」区间，比 SQL Batch 快 **15–7×** / 分配缩到 **5–11%**、仅比嵌入式多 **~2.0–2.5×**额外开销
+    - ServerQuery `88.4 ms / 16 MB`、ServerAggregate `88.8 ms / 2.5 MB`、BulkIngestBenchmark 四个路径均保持 PR #46/#47 后「百万点 / ~110–200 ms / 130–220 MB」区间。
 
 ### Added
 - **PR #48：批量入库端点 Flush 三档位 `?flush=false|true|async`（写入快路径专题，第 3/4 步）**

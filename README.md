@@ -217,6 +217,53 @@ Application / CLI / ADO.NET / Admin UI
 └─ grants.json
 ```
 
+## 性能基准
+
+> 以下为 **PR #49** 同机粗略对比（i9-13900HX / Windows 11 / .NET 10.0.6 / Docker Desktop + WSL2，全集 24 个基准 ~20 分钟）。InfluxDB 2.7、TDengine 3.3.4.3、`tslite-server` 均跑在本机 docker 容器中，仅作同机粗略对比，不代表生产部署性能。完整数据见 [tests/TSLite.Benchmarks/README.md](tests/TSLite.Benchmarks/README.md)。
+
+### 写入：100 万点（单序列，IterationCount=3）
+
+| 写入路径                                         | 平均耗时   | 内存分配   | vs TSLite 嵌入式 |
+|----------------------------------------------- | ---------:| ---------:| ---------------:|
+| **TSLite 嵌入式** `Tsdb.WriteMany`              |   544.9 ms |  529.7 MB |          1.00× |
+| TSLite Server `POST /v1/.../bulk`              |   1.120 s |   34.2 MB |          2.06× |
+| TSLite Server `POST /v1/.../lp`                |   1.293 s |   52.4 MB |          2.37× |
+| TSLite Server `POST /v1/.../json`              |   1.352 s |   71.4 MB |          2.48× |
+| TSLite Server `POST /v1/.../sql/batch`         |  19.797 s |  655.5 MB |         36.3× |
+| SQLite (file + WAL，单事务批量 INSERT)          |   811.4 ms |  465.4 MB |          1.49× |
+| InfluxDB 2.7 (`WriteApiAsync`，10k/批 LP)       |   5.222 s | 1457.4 MB |          9.58× |
+| TDengine 3.3.4.3 REST INSERT (1k/批 显式 STable)| 44.137 s |  156.1 MB |         81.0× |
+| TDengine 3.3.4.3 schemaless LP (`/influxdb/v1/write`) | 996.0 ms |  61.2 MB |    1.83× |
+
+> TSLite 嵌入式 ≈ **1.83 M pts/s**；服务端 LP/JSON/Bulk 三端点已进入「秒级 1M 点 + ≤ 80 MB 分配」区间（Milestone 11 既定目标 ≥ 700k pts/s 已超额完成）。`/sql/batch` 走 SQL parser，按设计开销最高。
+
+### 范围查询：约 100k 行
+
+| 引擎                | 平均耗时   | 内存分配   |
+|-------------------- | ---------:| ---------:|
+| **TSLite 嵌入式**    |   6.71 ms |   18.7 MB |
+| TSLite Server (HTTP) |  88.40 ms |   16.1 MB |
+| SQLite              |  44.54 ms |    9.8 MB |
+| InfluxDB 2.7        | 411.13 ms |  280.5 MB |
+| TDengine 3.3.4.3    |  56.29 ms |   14.0 MB |
+
+### 1 分钟桶聚合 (AVG/MIN/MAX/COUNT，16,667 桶)
+
+| 引擎                | 平均耗时   | 内存分配   |
+|-------------------- | ---------:| ---------:|
+| **TSLite 嵌入式**    |  42.26 ms |   39.4 MB |
+| TSLite Server (HTTP) |  88.82 ms |    2.5 MB |
+| SQLite              | 327.29 ms |    2.5 MB |
+| InfluxDB 2.7        |  81.48 ms |   47.2 MB |
+| TDengine 3.3.4.3    |  59.63 ms |    3.1 MB |
+
+### 小结
+
+- TSLite 写入比 InfluxDB 快 **9.6×**、比 TDengine REST INSERT 快 **81×**、比 TDengine schemaless LP 快 **1.83×**。
+- TSLite 范围查询比 InfluxDB 快 **61×**、比 SQLite 快 **6.6×**。
+- 服务端 LP/JSON/Bulk 三端点比 SQL Batch 路径快 **15–17×**、分配缩到 **5–11%**，相对嵌入式仅多 ~2.0–2.5× 的 HTTP/Kestrel/Auth/解析开销。
+- TDengine 同库 schemaless LP 比 REST INSERT 子表路径快 **44×** / 分配缩到 **39%**，体现 schemaless 快路径与 SQL parser 路径的差异。
+
 ## 设计原则
 
 - Safe-only：核心库在当前阶段不使用 `unsafe`，底层内存操作基于 `Span<T>`、`MemoryMarshal`、`BinaryPrimitives` 等安全 API。
