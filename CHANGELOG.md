@@ -20,6 +20,9 @@
     - **ServerInsertBenchmark（重建镜像后首次全部跑通）**：SQL Batch `19.80 s / 655 MB`、LP `1.293 s / 52 MB`、JSON `1.352 s / 71 MB`、Bulk VALUES `1.120 s / 34 MB`——PR #47 三端点仍稳定在「秒级 1M 点 + ≤ 80 MB」区间，比 SQL Batch 快 **15–7×** / 分配缩到 **5–11%**、仅比嵌入式多 **~2.0–2.5×**额外开销
     - ServerQuery `88.4 ms / 16 MB`、ServerAggregate `88.8 ms / 2.5 MB`、BulkIngestBenchmark 四个路径均保持 PR #46/#47 后「百万点 / ~110–200 ms / 130–220 MB」区间。
 
+### Changed
+- 优化查询热路径：未压缩时间戳 block 的范围裁剪改为直接在 little-endian byte payload 上二分，避免为整块 block 分配 `long[]`；数值聚合在无墓碑且非 `First/Last` 时下推到 Segment block payload 扫描，使用 `ReadOnlySpan<byte>` + `CollectionsMarshal.GetValueRefOrAddDefault` 直接更新桶状态，减少 `DataPoint[]` 物化与托管堆分配。
+
 ### Added
 - **PR #48：批量入库端点 Flush 三档位 `?flush=false|true|async`（写入快路径专题，第 3/4 步）**
   - `Tsdb` 新增 `public void SignalFlush()`：仅向 `BackgroundFlushWorker` 发信号后立即返回，不阻塞调用方；若未启用后台 Flush（`BackgroundFlush.Enabled = false`），降级为同步 `FlushNow()`，保证 `flush=async` 始终具备「最终一致」语义。

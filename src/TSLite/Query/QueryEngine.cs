@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using TSLite.Catalog;
 using TSLite.Engine;
 using TSLite.Memory;
@@ -142,6 +144,14 @@ public sealed class QueryEngine
     {
         ArgumentNullException.ThrowIfNull(query);
 
+        if (ShouldUsePointAggregatePath(query))
+            return ExecuteAggregateViaPoints(query);
+
+        return ExecuteAggregateFast(query);
+    }
+
+    private IEnumerable<AggregateBucket> ExecuteAggregateViaPoints(AggregateQuery query)
+    {
         // 用 PointQuery 取原始点流（利用已实现的合并逻辑）
         var pointQuery = new PointQuery(query.SeriesId, query.FieldName, query.Range);
         var points = Execute(pointQuery);
@@ -266,6 +276,59 @@ public sealed class QueryEngine
         }
     }
 
+    private IReadOnlyList<AggregateBucket> ExecuteAggregateFast(AggregateQuery query)
+    {
+        long from = query.Range.FromInclusive;
+        long to = query.Range.ToInclusive;
+
+        var key = new SeriesFieldKey(query.SeriesId, query.FieldName);
+        var bucket = _memTable.TryGet(in key);
+        ReadOnlyMemory<DataPoint>? memSlice = bucket?.SnapshotRange(from, to);
+        FieldType? memFieldType = bucket?.FieldType;
+
+        var candidates = _segments.Index.LookupCandidates(
+            query.SeriesId, query.FieldName, from, to);
+        var readers = BuildReaderMap(_segments.Readers);
+
+        if (query.BucketSizeMs <= 0)
+        {
+            long bucketStart = query.Range.FromInclusive == long.MinValue
+                ? long.MaxValue
+                : query.Range.FromInclusive;
+            long bucketEnd = query.Range.ToInclusive < long.MaxValue
+                ? query.Range.ToInclusive + 1
+                : long.MaxValue;
+            var state = new AggregateState(bucketStart, bucketEnd);
+            bool useObservedStart = query.Range.FromInclusive == long.MinValue;
+
+            AddDecodedPointsToGlobal(memSlice, ref state, useObservedStart);
+            AddSegmentBlocksToGlobal(
+                candidates, readers, memFieldType, query.Range, ref state, useObservedStart);
+
+            if (!state.HasData)
+                return Array.Empty<AggregateBucket>();
+
+            return new[] { state.ToBucket(query.Aggregator) };
+        }
+
+        var buckets = new Dictionary<long, AggregateState>();
+        AddDecodedPointsToBuckets(memSlice, query.BucketSizeMs, buckets);
+        AddSegmentBlocksToBuckets(
+            candidates, readers, memFieldType, query.Range, query.BucketSizeMs, buckets);
+
+        if (buckets.Count == 0)
+            return Array.Empty<AggregateBucket>();
+
+        var bucketStarts = buckets.Keys.ToArray();
+        Array.Sort(bucketStarts);
+
+        var result = new List<AggregateBucket>(bucketStarts.Length);
+        foreach (long bucketStart in bucketStarts)
+            result.Add(buckets[bucketStart].ToBucket(query.Aggregator));
+
+        return result;
+    }
+
     /// <summary>
     /// 批量聚合：对一组 series 做相同的聚合查询（field / range / aggregator / bucketSizeMs 共享）。
     /// </summary>
@@ -299,6 +362,314 @@ public sealed class QueryEngine
     }
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
+
+    private bool ShouldUsePointAggregatePath(AggregateQuery query)
+    {
+        if (query.Aggregator is Aggregator.First or Aggregator.Last)
+            return true;
+
+        if (_tombstones == null)
+            return false;
+
+        var tombstoneList = _tombstones.GetForSeriesField(query.SeriesId, query.FieldName);
+        return tombstoneList.Count > 0;
+    }
+
+    private static void AddDecodedPointsToGlobal(
+        ReadOnlyMemory<DataPoint>? points,
+        ref AggregateState state,
+        bool useObservedStart)
+    {
+        if (!points.HasValue)
+            return;
+
+        AddDecodedPointsToGlobal(points.Value.Span, ref state, useObservedStart);
+    }
+
+    private static void AddDecodedPointsToGlobal(
+        ReadOnlySpan<DataPoint> points,
+        ref AggregateState state,
+        bool useObservedStart)
+    {
+        for (int i = 0; i < points.Length; i++)
+        {
+            var point = points[i];
+            state.Add(point.Timestamp, ToDouble(point.Value), useObservedStart);
+        }
+    }
+
+    private static void AddDecodedPointsToBuckets(
+        ReadOnlyMemory<DataPoint>? points,
+        long bucketSizeMs,
+        Dictionary<long, AggregateState> buckets)
+    {
+        if (!points.HasValue)
+            return;
+
+        AddDecodedPointsToBuckets(points.Value.Span, bucketSizeMs, buckets);
+    }
+
+    private static void AddDecodedPointsToBuckets(
+        ReadOnlySpan<DataPoint> points,
+        long bucketSizeMs,
+        Dictionary<long, AggregateState> buckets)
+    {
+        for (int i = 0; i < points.Length; i++)
+        {
+            var point = points[i];
+            AddValueToBucket(buckets, bucketSizeMs, point.Timestamp, ToDouble(point.Value));
+        }
+    }
+
+    private static void AddSegmentBlocksToGlobal(
+        IReadOnlyList<SegmentBlockRef> candidates,
+        Dictionary<long, SegmentReader> readers,
+        FieldType? memFieldType,
+        TimeRange range,
+        ref AggregateState state,
+        bool useObservedStart)
+    {
+        foreach (var blockRef in candidates)
+        {
+            ThrowIfFieldTypeMismatch(memFieldType, blockRef);
+
+            if (!readers.TryGetValue(blockRef.SegmentId, out var reader))
+                continue;
+
+            var data = reader.ReadBlock(blockRef.Descriptor);
+            AddBlockToGlobal(
+                blockRef.Descriptor,
+                data.TimestampPayload,
+                data.ValuePayload,
+                range,
+                ref state,
+                useObservedStart);
+        }
+    }
+
+    private static void AddSegmentBlocksToBuckets(
+        IReadOnlyList<SegmentBlockRef> candidates,
+        Dictionary<long, SegmentReader> readers,
+        FieldType? memFieldType,
+        TimeRange range,
+        long bucketSizeMs,
+        Dictionary<long, AggregateState> buckets)
+    {
+        foreach (var blockRef in candidates)
+        {
+            ThrowIfFieldTypeMismatch(memFieldType, blockRef);
+
+            if (!readers.TryGetValue(blockRef.SegmentId, out var reader))
+                continue;
+
+            var data = reader.ReadBlock(blockRef.Descriptor);
+            AddBlockToBuckets(
+                blockRef.Descriptor,
+                data.TimestampPayload,
+                data.ValuePayload,
+                range,
+                bucketSizeMs,
+                buckets);
+        }
+    }
+
+    private static void AddBlockToGlobal(
+        in BlockDescriptor descriptor,
+        ReadOnlySpan<byte> tsPayload,
+        ReadOnlySpan<byte> valPayload,
+        TimeRange range,
+        ref AggregateState state,
+        bool useObservedStart)
+    {
+        if (CanAggregateRawBlock(descriptor))
+        {
+            int start = LowerBoundRaw(tsPayload, descriptor.Count, range.FromInclusive);
+            int end = UpperBoundRaw(tsPayload, descriptor.Count, range.ToInclusive);
+            if (start >= end)
+                return;
+
+            ThrowIfString(descriptor.FieldType);
+            for (int i = start; i < end; i++)
+            {
+                long timestamp = ReadRawTimestamp(tsPayload, i);
+                double value = ReadRawNumericValue(descriptor.FieldType, valPayload, i);
+                state.Add(timestamp, value, useObservedStart);
+            }
+            return;
+        }
+
+        var points = BlockDecoder.DecodeRange(
+            descriptor,
+            tsPayload,
+            valPayload,
+            range.FromInclusive,
+            range.ToInclusive);
+        AddDecodedPointsToGlobal(points.AsSpan(), ref state, useObservedStart);
+    }
+
+    private static void AddBlockToBuckets(
+        in BlockDescriptor descriptor,
+        ReadOnlySpan<byte> tsPayload,
+        ReadOnlySpan<byte> valPayload,
+        TimeRange range,
+        long bucketSizeMs,
+        Dictionary<long, AggregateState> buckets)
+    {
+        if (CanAggregateRawBlock(descriptor))
+        {
+            int start = LowerBoundRaw(tsPayload, descriptor.Count, range.FromInclusive);
+            int end = UpperBoundRaw(tsPayload, descriptor.Count, range.ToInclusive);
+            if (start >= end)
+                return;
+
+            ThrowIfString(descriptor.FieldType);
+            for (int i = start; i < end; i++)
+            {
+                long timestamp = ReadRawTimestamp(tsPayload, i);
+                double value = ReadRawNumericValue(descriptor.FieldType, valPayload, i);
+                AddValueToBucket(buckets, bucketSizeMs, timestamp, value);
+            }
+            return;
+        }
+
+        var points = BlockDecoder.DecodeRange(
+            descriptor,
+            tsPayload,
+            valPayload,
+            range.FromInclusive,
+            range.ToInclusive);
+        AddDecodedPointsToBuckets(points.AsSpan(), bucketSizeMs, buckets);
+    }
+
+    private static void AddValueToBucket(
+        Dictionary<long, AggregateState> buckets,
+        long bucketSizeMs,
+        long timestamp,
+        double value)
+    {
+        long bucketStart = TimeBucket.Floor(timestamp, bucketSizeMs);
+        ref var state = ref CollectionsMarshal.GetValueRefOrAddDefault(
+            buckets,
+            bucketStart,
+            out bool exists);
+
+        if (!exists)
+            state = new AggregateState(bucketStart, bucketStart + bucketSizeMs);
+
+        state.Add(timestamp, value, useObservedStart: false);
+    }
+
+    private static bool CanAggregateRawBlock(in BlockDescriptor descriptor)
+    {
+        return (descriptor.TimestampEncoding & BlockEncoding.DeltaTimestamp) == 0
+            && (descriptor.ValueEncoding & BlockEncoding.DeltaValue) == 0;
+    }
+
+    private static double ReadRawNumericValue(
+        FieldType fieldType,
+        ReadOnlySpan<byte> valPayload,
+        int index)
+    {
+        return fieldType switch
+        {
+            FieldType.Float64 => BinaryPrimitives.ReadDoubleLittleEndian(valPayload.Slice(index * 8, 8)),
+            FieldType.Int64 => (double)BinaryPrimitives.ReadInt64LittleEndian(valPayload.Slice(index * 8, 8)),
+            FieldType.Boolean => valPayload[index] != 0 ? 1.0 : 0.0,
+            _ => throw new NotSupportedException(
+                $"字段类型 {fieldType} 不支持数值聚合。仅支持 Float64 / Int64 / Boolean 字段。"),
+        };
+    }
+
+    private static int LowerBoundRaw(ReadOnlySpan<byte> tsPayload, int count, long value)
+    {
+        int lo = 0, hi = count;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (ReadRawTimestamp(tsPayload, mid) < value)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
+    }
+
+    private static int UpperBoundRaw(ReadOnlySpan<byte> tsPayload, int count, long value)
+    {
+        int lo = 0, hi = count;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (ReadRawTimestamp(tsPayload, mid) <= value)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
+    }
+
+    private static long ReadRawTimestamp(ReadOnlySpan<byte> tsPayload, int index)
+        => BinaryPrimitives.ReadInt64LittleEndian(tsPayload.Slice(index * 8, 8));
+
+    private static void ThrowIfFieldTypeMismatch(FieldType? memFieldType, SegmentBlockRef blockRef)
+    {
+        if (memFieldType.HasValue && memFieldType.Value != blockRef.FieldType)
+        {
+            throw new InvalidOperationException(
+                $"FieldType mismatch across MemTable and Segment for series {blockRef.SeriesId:X16}/{blockRef.FieldName}: " +
+                $"MemTable={memFieldType.Value}, Segment(id={blockRef.SegmentId})={blockRef.FieldType}。");
+        }
+    }
+
+    private struct AggregateState
+    {
+        public long BucketStart;
+        public long BucketEndExclusive;
+        public long Count;
+        public double Sum;
+        public double Min;
+        public double Max;
+        public double FirstValue;
+        public double LastValue;
+
+        public AggregateState(long bucketStart, long bucketEndExclusive)
+        {
+            BucketStart = bucketStart;
+            BucketEndExclusive = bucketEndExclusive;
+            Count = 0;
+            Sum = 0;
+            Min = double.PositiveInfinity;
+            Max = double.NegativeInfinity;
+            FirstValue = 0;
+            LastValue = 0;
+        }
+
+        public readonly bool HasData => Count > 0;
+
+        public void Add(long timestamp, double value, bool useObservedStart)
+        {
+            if (useObservedStart && timestamp < BucketStart)
+                BucketStart = timestamp;
+
+            if (Count == 0)
+                FirstValue = value;
+
+            LastValue = value;
+            Count++;
+            Sum += value;
+            if (value < Min) Min = value;
+            if (value > Max) Max = value;
+        }
+
+        public readonly AggregateBucket ToBucket(Aggregator aggregator)
+        {
+            return new AggregateBucket(
+                BucketStart,
+                BucketEndExclusive,
+                Count,
+                ComputeValue(aggregator, Count, Sum, Min, Max, FirstValue, LastValue));
+        }
+    }
 
     /// <summary>构建 SegmentId → SegmentReader 的轻量映射（每次查询时重建，不长期缓存）。</summary>
     private static Dictionary<long, SegmentReader> BuildReaderMap(IReadOnlyList<SegmentReader> readers)

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Buffers;
 using System.Text;
 using TSLite.Model;
 using TSLite.Storage.Format;
@@ -53,26 +54,37 @@ internal static class BlockDecoder
         if (count == 0)
             return [];
 
-        // 先读所有时间戳，用二分查找确定范围
-        long[] timestamps = new long[count];
-        ReadTimestampsRaw(d.TimestampEncoding, tsPayload, count, timestamps);
+        if ((d.TimestampEncoding & BlockEncoding.DeltaTimestamp) == 0)
+            return DecodeRawTimestampRange(d, tsPayload, valPayload, count, from, toInclusive);
 
-        int start = LowerBound(timestamps, from);
-        int end = UpperBound(timestamps, toInclusive);
+        // Delta-of-delta 时间戳不支持随机访问；使用 ArrayPool 避免每次查询分配整块 long[]。
+        long[] rented = ArrayPool<long>.Shared.Rent(count);
+        try
+        {
+            Span<long> timestamps = rented.AsSpan(0, count);
+            TimestampCodec.ReadDeltaOfDelta(tsPayload, timestamps);
 
-        if (start >= end)
-            return [];
+            int start = LowerBound(timestamps, from);
+            int end = UpperBound(timestamps, toInclusive);
 
-        int rangeCount = end - start;
-        var result = new DataPoint[rangeCount];
+            if (start >= end)
+                return [];
 
-        // 将目标时间戳复制到 DataPoint
-        for (int i = 0; i < rangeCount; i++)
-            result[i] = new DataPoint(timestamps[start + i], default);
+            int rangeCount = end - start;
+            var result = new DataPoint[rangeCount];
 
-        // 解码对应范围的值
-        ReadValuesRange(d.FieldType, d.ValueEncoding, valPayload, count, start, rangeCount, result);
-        return result;
+            // 将目标时间戳复制到 DataPoint
+            for (int i = 0; i < rangeCount; i++)
+                result[i] = new DataPoint(timestamps[start + i], default);
+
+            // 解码对应范围的值
+            ReadValuesRange(d.FieldType, d.ValueEncoding, valPayload, count, start, rangeCount, result);
+            return result;
+        }
+        finally
+        {
+            ArrayPool<long>.Shared.Return(rented);
+        }
     }
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
@@ -81,10 +93,18 @@ internal static class BlockDecoder
     {
         if ((tsEncoding & BlockEncoding.DeltaTimestamp) != 0)
         {
-            long[] tmp = new long[count];
-            TimestampCodec.ReadDeltaOfDelta(tsPayload, tmp);
-            for (int i = 0; i < count; i++)
-                result[i] = new DataPoint(tmp[i], default);
+            long[] rented = ArrayPool<long>.Shared.Rent(count);
+            try
+            {
+                Span<long> tmp = rented.AsSpan(0, count);
+                TimestampCodec.ReadDeltaOfDelta(tsPayload, tmp);
+                for (int i = 0; i < count; i++)
+                    result[i] = new DataPoint(tmp[i], default);
+            }
+            finally
+            {
+                ArrayPool<long>.Shared.Return(rented);
+            }
             return;
         }
 
@@ -95,16 +115,30 @@ internal static class BlockDecoder
         }
     }
 
-    private static void ReadTimestampsRaw(BlockEncoding tsEncoding, ReadOnlySpan<byte> tsPayload, int count, long[] timestamps)
+    private static DataPoint[] DecodeRawTimestampRange(
+        in BlockDescriptor d,
+        ReadOnlySpan<byte> tsPayload,
+        ReadOnlySpan<byte> valPayload,
+        int count,
+        long from,
+        long toInclusive)
     {
-        if ((tsEncoding & BlockEncoding.DeltaTimestamp) != 0)
+        int start = LowerBoundRaw(tsPayload, count, from);
+        int end = UpperBoundRaw(tsPayload, count, toInclusive);
+
+        if (start >= end)
+            return [];
+
+        int rangeCount = end - start;
+        var result = new DataPoint[rangeCount];
+        for (int i = 0; i < rangeCount; i++)
         {
-            TimestampCodec.ReadDeltaOfDelta(tsPayload, timestamps.AsSpan(0, count));
-            return;
+            long ts = ReadRawTimestamp(tsPayload, start + i);
+            result[i] = new DataPoint(ts, default);
         }
 
-        for (int i = 0; i < count; i++)
-            timestamps[i] = BinaryPrimitives.ReadInt64LittleEndian(tsPayload.Slice(i * 8, 8));
+        ReadValuesRange(d.FieldType, d.ValueEncoding, valPayload, count, start, rangeCount, result);
+        return result;
     }
 
     private static void ReadValues(FieldType fieldType, BlockEncoding valEncoding, ReadOnlySpan<byte> valPayload, int count, DataPoint[] result)
@@ -241,7 +275,7 @@ internal static class BlockDecoder
     }
 
     /// <summary>二分查找：第一个 timestamps[i] >= value 的位置。</summary>
-    private static int LowerBound(long[] timestamps, long value)
+    private static int LowerBound(ReadOnlySpan<long> timestamps, long value)
     {
         int lo = 0, hi = timestamps.Length;
         while (lo < hi)
@@ -256,7 +290,7 @@ internal static class BlockDecoder
     }
 
     /// <summary>二分查找：第一个 timestamps[i] > value 的位置（即上界 exclusive end）。</summary>
-    private static int UpperBound(long[] timestamps, long value)
+    private static int UpperBound(ReadOnlySpan<long> timestamps, long value)
     {
         int lo = 0, hi = timestamps.Length;
         while (lo < hi)
@@ -269,4 +303,35 @@ internal static class BlockDecoder
         }
         return lo;
     }
+
+    private static int LowerBoundRaw(ReadOnlySpan<byte> tsPayload, int count, long value)
+    {
+        int lo = 0, hi = count;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (ReadRawTimestamp(tsPayload, mid) < value)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
+    }
+
+    private static int UpperBoundRaw(ReadOnlySpan<byte> tsPayload, int count, long value)
+    {
+        int lo = 0, hi = count;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (ReadRawTimestamp(tsPayload, mid) <= value)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
+    }
+
+    private static long ReadRawTimestamp(ReadOnlySpan<byte> tsPayload, int index)
+        => BinaryPrimitives.ReadInt64LittleEndian(tsPayload.Slice(index * 8, 8));
 }
