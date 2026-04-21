@@ -12,7 +12,7 @@ TSLite 在 PR #54 中提供了三组与 PID 控制相关的能力，全部以纯
 |------|------|-----------|
 | 行级控制律 | 窗口函数 | `pid_series(field, setpoint, kp, ki, kd)` |
 | 桶级控制律 | 聚合函数 | `pid(field, setpoint, kp, ki, kd)` |
-| 阶跃响应辨识 + 自动整定 | 库 API | `TSLite.Query.Functions.Control.PidParameterEstimator.Estimate(...)` |
+| 阶跃响应辨识 + 自动整定 | 聚合函数 / 库 API | `pid_estimate(field, method, step_magnitude, initial_fraction, final_fraction, imc_lambda)` 或 `PidParameterEstimator.Estimate(...)` |
 
 控制律统一为离散时间步进形式：
 
@@ -84,10 +84,38 @@ GROUP BY time(1m);
 
 ---
 
-## 3. 库 API：阶跃响应自动整定
+## 3. 阶跃响应自动整定
 
-`PidParameterEstimator` 通过 Sundaresan & Krishnaswamy 35%/85% 两点法识别一阶纯滞后（FOPDT）模型，
-然后按指定整定规则计算 `Kp`、`Ki`、`Kd`，避免人工试凑。
+### 3.1 SQL 聚合形态：`pid_estimate`
+
+`pid_estimate` 是一个聚合函数，对结果集中的全部 (time, value) 样本调用
+Sundaresan & Krishnaswamy 35%/85% 两点法识别 FOPDT 模型，再按指定整定规则计算
+`Kp / Ki / Kd`，输出一行 JSON 字符串 `{"kp":..,"ki":..,"kd":..}`。
+
+```sql
+SELECT pid_estimate(temperature, 'imc', 1.0, 0.1, 0.1, NULL) AS tuning
+FROM reactor
+WHERE device = 'r1'
+  AND time BETWEEN 1700000000000 AND 1700001800000;
+```
+
+参数：
+
+| 位置 | 参数 | 类型 | 含义 |
+|------|------|------|------|
+| 1 | `field` | FIELD 列 | 过程变量 PV |
+| 2 | `method` | 字符串字面量或 NULL | `'zn'` / `'cc'` / `'imc'`；NULL 默认 `'zn'` |
+| 3 | `step_magnitude` | 数值字面量或 NULL | 阶跃幅度 Δu；NULL 表示假定 Δu = 1.0 |
+| 4 | `initial_fraction` | (0,0.5) 数值或 NULL | 取首部样本求 y₀ 的比例，默认 0.1 |
+| 5 | `final_fraction` | (0,0.5) 数值或 NULL | 取尾部样本求 y∞ 的比例，默认 0.1 |
+| 6 | `imc_lambda` | 数值或 NULL | 仅 `'imc'` 生效；NULL 时 λ = θ |
+
+> **建议工作流**：先在客户端解析 JSON，把 `Kp/Ki/Kd` 作为常量带回到 `pid_series` / `pid` 控制律，
+> 实现「整定 → 回测 → 上线」闭环。
+
+### 3.2 库 API：`PidParameterEstimator.Estimate`
+
+嵌入式场景如果想跳过 SQL，直接拿到强类型 `PidParameters` 记录，仍可使用库 API：
 
 ```csharp
 using TSLite.Query.Functions.Control;
@@ -139,7 +167,7 @@ var sql = $"SELECT pid_series(temperature, 75.0, " +
 ## 4. 端到端工作流
 
 1. **采集**：把过程变量（如反应器温度）写入 measurement，使用控制器/PLC 周期性 `INSERT`。
-2. **离线整定**：抽取一段阶跃响应数据，调用 `PidParameterEstimator.Estimate(...)` 得到 `Kp / Ki / Kd`。
+2. **离线整定**：抽取一段阶跃响应数据，调用 `pid_estimate(...)` SQL 聚合或 `PidParameterEstimator.Estimate(...)` 库 API 得到 `Kp / Ki / Kd`。
 3. **回测**：用 `SELECT pid_series(...)` 在历史数据上预演控制律，验证响应是否合预期。
 4. **上线**：把 `pid_series(...)` 输出按时序写入 actuator 表；下游执行器订阅该表（参考 [SSE 推送]({{ '/getting-started/' | relative_url }})）即可获得实时控制量。
 5. **监控**：用 `SELECT pid(temperature, ...) FROM reactor GROUP BY time(1m)` 监控控制律在每分钟末的输出，便于仪表盘报警。
@@ -151,6 +179,7 @@ var sql = $"SELECT pid_series(temperature, 75.0, " +
 - 控制器内核：[`src/TSLite/Query/Functions/Control/PidController.cs`](https://github.com/IoTSharp/TSLite/blob/main/src/TSLite/Query/Functions/Control/PidController.cs)
 - 行级窗口函数：[`PidSeriesFunction.cs`](https://github.com/IoTSharp/TSLite/blob/main/src/TSLite/Query/Functions/Control/PidSeriesFunction.cs)
 - 聚合函数：[`PidAggregateFunction.cs`](https://github.com/IoTSharp/TSLite/blob/main/src/TSLite/Query/Functions/Control/PidAggregateFunction.cs)
-- 自动整定：[`PidParameterEstimator.cs`](https://github.com/IoTSharp/TSLite/blob/main/src/TSLite/Query/Functions/Control/PidParameterEstimator.cs)
+- 自动整定 SQL：[`PidEstimateFunction.cs`](https://github.com/IoTSharp/TSLite/blob/main/src/TSLite/Query/Functions/Control/PidEstimateFunction.cs)
+- 自动整定库 API：[`PidParameterEstimator.cs`](https://github.com/IoTSharp/TSLite/blob/main/src/TSLite/Query/Functions/Control/PidParameterEstimator.cs)
 
 更多 SQL 函数参考请见 [SQL Reference]({{ '/sql-reference/' | relative_url }})。

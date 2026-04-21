@@ -188,4 +188,120 @@ public sealed class SqlExecutorPidFunctionTests : IDisposable
         Assert.Equal(-10.0, (double)r.Rows[0][0]!, precision: 9);
         Assert.Equal(-5.0, (double)r.Rows[1][0]!, precision: 9);
     }
+
+    // ── pid_estimate 阶跃响应自动整定 ───────────────────────────────────
+
+    /// <summary>
+    /// 生成 FOPDT 阶跃响应数据：y(t) = y0 + K·Δu·(1 − exp(−(t − θ)/τ))。
+    /// </summary>
+    private static (long Ts, double V)[] FopdtStep(
+        double K, double tau, double theta, int n, long dtMs)
+    {
+        var samples = new (long, double)[n];
+        for (int i = 0; i < n; i++)
+        {
+            long t = i * dtMs;
+            double e = t - theta;
+            double y = e <= 0.0 ? 0.0 : K * (1.0 - Math.Exp(-e / tau));
+            samples[i] = (t, y);
+        }
+        return samples;
+    }
+
+    private static void InsertFopdtStep(Tsdb db, double K, double tau, double theta, int n, long dtMs)
+    {
+        var sb = new System.Text.StringBuilder("INSERT INTO reactor (time, device, temperature) VALUES ");
+        var rows = FopdtStep(K, tau, theta, n, dtMs);
+        for (int i = 0; i < rows.Length; i++)
+        {
+            if (i > 0) sb.Append(", ");
+            sb.Append('(').Append(rows[i].Ts).Append(", 'r1', ")
+              .Append(rows[i].V.ToString(System.Globalization.CultureInfo.InvariantCulture))
+              .Append(')');
+        }
+        SqlExecutor.Execute(db, sb.ToString());
+    }
+
+    [Fact]
+    public void Select_PidEstimate_ZN_ReturnsTuningJson()
+    {
+        using var db = OpenWithSchema(Options());
+        // K=2, τ=100ms, θ=200ms ⇒ ZN 理论值 Kp≈0.3, Ki≈7.5e-4/ms, Kd≈30ms
+        InsertFopdtStep(db, K: 2.0, tau: 100.0, theta: 200.0, n: 300, dtMs: 5);
+
+        var r = Select(db,
+            "SELECT pid_estimate(temperature, 'zn', 1.0, 0.1, 0.1, NULL) FROM reactor");
+
+        Assert.Single(r.Rows);
+        var json = (string)r.Rows[0][0]!;
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        double kp = doc.RootElement.GetProperty("kp").GetDouble();
+        double ki = doc.RootElement.GetProperty("ki").GetDouble();
+        double kd = doc.RootElement.GetProperty("kd").GetDouble();
+
+        Assert.InRange(kp, 0.27, 0.33);
+        Assert.InRange(ki, 0.00060, 0.00090);
+        Assert.InRange(kd, 25.0, 35.0);
+    }
+
+    [Fact]
+    public void Select_PidEstimate_Imc_AcceptsExplicitLambda()
+    {
+        using var db = OpenWithSchema(Options());
+        InsertFopdtStep(db, K: 2.0, tau: 100.0, theta: 20.0, n: 400, dtMs: 1);
+
+        var r = Select(db,
+            "SELECT pid_estimate(temperature, 'imc', 1.0, 0.1, 0.1, 50) FROM reactor");
+
+        Assert.Single(r.Rows);
+        var json = (string)r.Rows[0][0]!;
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        double kp = doc.RootElement.GetProperty("kp").GetDouble();
+        Assert.True(kp > 0, $"IMC Kp 应为正，实际 {kp}");
+    }
+
+    [Fact]
+    public void Select_PidEstimate_NullArguments_UseDefaults()
+    {
+        using var db = OpenWithSchema(Options());
+        InsertFopdtStep(db, K: 2.0, tau: 100.0, theta: 200.0, n: 300, dtMs: 5);
+
+        // 全部可选参数传 NULL → method=ZN, Δu=1, IF=0.1, FF=0.1, λ=θ
+        var r = Select(db,
+            "SELECT pid_estimate(temperature, NULL, NULL, NULL, NULL, NULL) FROM reactor");
+
+        Assert.Single(r.Rows);
+        Assert.Contains("\"kp\":", (string)r.Rows[0][0]!);
+    }
+
+    [Fact]
+    public void Select_PidEstimate_RejectsUnknownMethod()
+    {
+        using var db = OpenWithSchema(Options());
+        InsertFopdtStep(db, K: 2.0, tau: 100.0, theta: 200.0, n: 300, dtMs: 5);
+
+        Assert.Throws<InvalidOperationException>(() => Select(db,
+            "SELECT pid_estimate(temperature, 'foobar', 1.0, 0.1, 0.1, NULL) FROM reactor"));
+    }
+
+    [Fact]
+    public void Select_PidEstimate_RejectsWrongArgumentCount()
+    {
+        using var db = OpenWithSchema(Options());
+        InsertFopdtStep(db, K: 2.0, tau: 100.0, theta: 200.0, n: 300, dtMs: 5);
+
+        Assert.Throws<InvalidOperationException>(() => Select(db,
+            "SELECT pid_estimate(temperature, 'zn', 1.0) FROM reactor"));
+    }
+
+    [Fact]
+    public void Select_PidEstimate_EmptyResult_ReturnsNoRows()
+    {
+        using var db = OpenWithSchema(Options());
+        // 没有插入任何数据
+        var r = Select(db,
+            "SELECT pid_estimate(temperature, 'zn', 1.0, 0.1, 0.1, NULL) FROM reactor");
+
+        Assert.Empty(r.Rows);
+    }
 }

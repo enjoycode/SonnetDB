@@ -178,11 +178,15 @@ public sealed class PidControllerTests
     {
         Assert.Equal(FunctionKind.Aggregate, FunctionRegistry.GetFunctionKind("pid"));
         Assert.Equal(FunctionKind.Window, FunctionRegistry.GetFunctionKind("pid_series"));
+        Assert.Equal(FunctionKind.Aggregate, FunctionRegistry.GetFunctionKind("pid_estimate"));
 
         Assert.True(FunctionRegistry.TryGetAggregate("pid", out var agg));
         Assert.Equal("pid", agg.Name);
 
         Assert.True(FunctionRegistry.TryGetWindow("pid_series", out var win));
         Assert.Equal("pid_series", win.Name);
+
+        Assert.True(FunctionRegistry.TryGetAggregate("pid_estimate", out var est));
+        Assert.Equal("pid_estimate", est.Name);
     }
 }

@@ -100,6 +100,7 @@ public static class FunctionRegistry
         new HistogramFunction(),
         // Tier 4 — PID 控制律（PR #54）
         new PidAggregateFunction(),
+        new PidEstimateFunction(),
     ];
 
     private static IScalarFunction[] CreateScalarFunctionList() =>

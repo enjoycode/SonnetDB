@@ -12,7 +12,7 @@
   - 新增 SQL 聚合函数 `pid(field, setpoint, kp, ki, kd)`（`IAggregateFunction` + `PidAccumulator`）：与 `GROUP BY time(...)` 组合时桶内逐行推进、桶尾输出最终 $u(t)$；`Merge` 取 `PrevTimeMs` 更晚的段以支持跨段拼接；拒绝 `pid(*)`、错误参数个数、非 FIELD 列、字符串字段。
   - `IAggregateAccumulator` 增加默认接口方法 `Add(long timestampMs, double value) => Add(value);`；`SelectExecutor.AggSlot.Update` 改为通过该重载传递时间戳，对既有 Welford / TDigest / HLL / Histogram 累加器**零行为变化**。
   - `FunctionRegistry` 注册 `pid` 为 `Aggregate`、`pid_series` 为 `Window`，纳入既有 `GetFunctionKind` / `TryGetAggregate` / `TryGetWindow` 路由。
-  - 既有 `PidParameterEstimator`（Sundaresan & Krishnaswamy 35%/85% 两点法识别 FOPDT 模型 + Ziegler-Nichols / Cohen-Coon / Skogestad IMC 三种整定规则）按 ROADMAP 要求保持纯库级 API，`docs/pid-control.md` 提供端到端工作流（采集 → 离线整定 → SQL 回测 → 控制回写 → 监控）与控制回写示例。
+  - 既有 `PidParameterEstimator`（Sundaresan & Krishnaswamy 35%/85% 两点法识别 FOPDT 模型 + Ziegler-Nichols / Cohen-Coon / Skogestad IMC 三种整定规则）保持库级 API；同时新增 SQL 聚合函数 `pid_estimate(field, method, step_magnitude, initial_fraction, final_fraction, imc_lambda)`，对结果集中 (time, value) 样本调用辨识 + 整定，输出 JSON `{"kp":..,"ki":..,"kd":..}`。`method` 接受字符串字面量 `'zn'` / `'cc'` / `'imc'` 或 NULL（默认 ZN），数值参数允许 NULL 取默认值。`docs/pid-control.md` 提供端到端工作流（采集 → 离线整定 → SQL 回测 → 控制回写 → 监控）与 SQL/库 API 双形态示例。
   - 新增测试：`tests/TSLite.Tests/Query/Functions/Control/PidControllerTests.cs`（14 项控制器与累加器/求值器单元测试）+ `tests/TSLite.Tests/Sql/SqlExecutorPidFunctionTests.cs`（10 项 SQL 端到端：行级输出、桶级最终 u、与时间/字段投影混合、负增益字面量、参数校验、Tag/字符串列拒绝、控制回写两步流程）。
 
 - **Milestone 12 — PR #53：Tier 3 窗口算子框架（17 个窗口函数）**
