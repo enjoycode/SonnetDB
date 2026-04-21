@@ -1,4 +1,4 @@
----
+﻿---
 layout: default
 title: "数据模型"
 description: "了解 measurement、tag、field、time、series 与数据库层级的真实关系。"
@@ -7,7 +7,7 @@ permalink: /data-model/
 
 ## 核心概念
 
-TSLite 中的一条时序数据由四个部分组成：
+SonnetDB 中的一条时序数据由四个部分组成：
 
 - 一个 `measurement`
 - 一组 `tags`
@@ -60,7 +60,7 @@ tag 用来表示序列身份和过滤维度，例如：
 - 区域
 - 租户或站点
 
-TSLite 会使用 `measurement + sorted(tags)` 规范化出逻辑序列键。因此：
+SonnetDB 会使用 `measurement + sorted(tags)` 规范化出逻辑序列键。因此：
 
 - 相同 measurement
 - 相同 tag 集合
@@ -151,7 +151,7 @@ VALUES (1000, 'server-01', 0.71, 63.5)
 
 ## 数据库层级
 
-在 `TSLite.Server` 中，一个数据库对应一个独立的数据目录和一个 `Tsdb` 实例：
+在 `SonnetDB` 中，一个数据库对应一个独立的数据目录和一个 `Tsdb` 实例：
 
 ```text
 <data-root>/
@@ -164,7 +164,7 @@ VALUES (1000, 'server-01', 0.71, 63.5)
 每个数据库内部都有自己独立的：
 
 - `measurements.tslschema`
-- `catalog.tslcat`
+- `catalog.SDBCAT`
 - `tombstones.tslmanifest`
 - `wal/`
 - `segments/`

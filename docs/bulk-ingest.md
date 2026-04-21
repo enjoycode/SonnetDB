@@ -1,4 +1,4 @@
----
+﻿---
 layout: default
 title: "批量写入"
 description: "使用 TableDirect、Line Protocol、JSON points 和 Bulk VALUES 快路径批量写入数据。"
@@ -7,7 +7,7 @@ permalink: /bulk-ingest/
 
 ## 为什么有批量快路径
 
-除了普通 SQL `INSERT`，TSLite 还支持绕开 SQL 解析器的批量写入路径，适合：
+除了普通 SQL `INSERT`，SonnetDB 还支持绕开 SQL 解析器的批量写入路径，适合：
 
 - 更高吞吐量
 - 更低分配
@@ -23,7 +23,7 @@ permalink: /bulk-ingest/
 
 ```csharp
 using System.Data;
-using TSLite.Data;
+using SonnetDB.Data;
 
 using var connection = new TsdbConnection("Data Source=./demo-data");
 connection.Open();
@@ -62,10 +62,10 @@ ignored,host=server-02 value=2.0 2
 
 ```csharp
 using System.Data;
-using TSLite.Data;
+using SonnetDB.Data;
 
 using var connection = new TsdbConnection(
-    "Data Source=tslite+http://127.0.0.1:5080/metrics;Token=your-token");
+    "Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=your-token");
 connection.Open();
 
 using var command = connection.CreateCommand();
@@ -100,7 +100,7 @@ ADO.NET 示例：
 
 ```csharp
 using System.Data;
-using TSLite.Data;
+using SonnetDB.Data;
 
 using var connection = new TsdbConnection("Data Source=./demo-data");
 connection.Open();
@@ -133,7 +133,7 @@ ADO.NET 示例：
 
 ```csharp
 using System.Data;
-using TSLite.Data;
+using SonnetDB.Data;
 
 using var connection = new TsdbConnection("Data Source=./demo-data");
 connection.Open();

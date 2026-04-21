@@ -1,14 +1,14 @@
----
+﻿---
 layout: default
 title: "ADO.NET 参考"
-description: "使用 TSLite.Data 连接本地嵌入式数据库或远程 TSLite.Server。"
+description: "使用 SonnetDB.Data 连接本地嵌入式数据库或远程 SonnetDB。"
 permalink: /ado-net/
 ---
 
 ## 安装
 
 ```bash
-dotnet add package TSLite.Data --version 0.1.0
+dotnet add package SonnetDB.Data --version 0.1.0
 ```
 
 ## 连接字符串
@@ -16,9 +16,9 @@ dotnet add package TSLite.Data --version 0.1.0
 | 模式 | 示例 |
 | --- | --- |
 | 嵌入式 | `Data Source=./demo-data` |
-| 嵌入式别名 | `Data Source=tslite://./demo-data` |
-| 远程 | `Data Source=tslite+http://127.0.0.1:5080/metrics;Token=<token>` |
-| 远程显式库名 | `Data Source=tslite+http://127.0.0.1:5080;Database=metrics;Token=<token>` |
+| 嵌入式别名 | `Data Source=sonnetdb://./demo-data` |
+| 远程 | `Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=<token>` |
+| 远程显式库名 | `Data Source=sonnetdb+http://127.0.0.1:5080;Database=metrics;Token=<token>` |
 
 常用键：
 
@@ -30,7 +30,7 @@ dotnet add package TSLite.Data --version 0.1.0
 ## 本地嵌入式示例
 
 ```csharp
-using TSLite.Data;
+using SonnetDB.Data;
 
 using var connection = new TsdbConnection("Data Source=./demo-data");
 connection.Open();
@@ -61,7 +61,7 @@ while (reader.Read())
 参数名支持 `@name` 和 `:name`：
 
 ```csharp
-using TSLite.Data;
+using SonnetDB.Data;
 
 using var connection = new TsdbConnection("Data Source=./demo-data");
 connection.Open();
@@ -82,10 +82,10 @@ using var reader = command.ExecuteReader();
 ## 远程模式示例
 
 ```csharp
-using TSLite.Data;
+using SonnetDB.Data;
 
 using var connection = new TsdbConnection(
-    "Data Source=tslite+http://127.0.0.1:5080/metrics;Token=your-token;Timeout=30");
+    "Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=your-token;Timeout=30");
 connection.Open();
 
 using var command = connection.CreateCommand();
@@ -107,13 +107,13 @@ while (reader.Read())
 ## 远程异常处理
 
 ```csharp
-using TSLite.Data;
-using TSLite.Data.Remote;
+using SonnetDB.Data;
+using SonnetDB.Data.Remote;
 
 try
 {
     using var connection = new TsdbConnection(
-        "Data Source=tslite+http://127.0.0.1:5080/metrics;Token=bad-token");
+        "Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=bad-token");
     connection.Open();
 
     using var command = connection.CreateCommand();
@@ -145,7 +145,7 @@ catch (TsdbServerException ex)
 示例：
 
 ```csharp
-using TSLite.Data;
+using SonnetDB.Data;
 
 using var connection = new TsdbConnection("Data Source=./demo-data");
 connection.Open();

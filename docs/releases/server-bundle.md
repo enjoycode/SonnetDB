@@ -1,4 +1,4 @@
----
+﻿---
 layout: default
 title: Server Bundle
 description: 下载即运行的完整服务端发布包，包含后台、CLI、文档和默认配置。
@@ -7,11 +7,11 @@ permalink: /releases/server-bundle/
 
 Server Bundle 面向“下载即启动”的部署场景，默认包含：
 
-- `TSLite.Server` 可执行文件
+- `SonnetDB` 可执行文件
 - 管理后台前端
 - `/help` 帮助文档静态站点
-- `TSLite.Cli`
-- `TSLite` / `TSLite.Data` / `TSLite.Cli` NuGet 包
+- `SonnetDB.Cli`
+- `SonnetDB` / `SonnetDB.Data` / `SonnetDB.Cli` NuGet 包
 - 启动脚本与说明文档
 
 ## 启动方式
@@ -19,14 +19,14 @@ Server Bundle 面向“下载即启动”的部署场景，默认包含：
 Windows:
 
 ```powershell
-.\start-tslite-server.cmd
+.\start-sonnetdb.cmd
 ```
 
 Linux:
 
 ```bash
-chmod +x ./start-tslite-server.sh ./tslite
-./start-tslite-server.sh
+chmod +x ./start-sonnetdb.sh ./sndb
+./start-sonnetdb.sh
 ```
 
 ## 常用访问地址
@@ -39,12 +39,12 @@ chmod +x ./start-tslite-server.sh ./tslite
 ## 目录结构示意
 
 ```text
-tslite-server-full-<version>-<rid>/
-├─ TSLite.Server(.exe)
+sonnetdb-full-<version>-<rid>/
+├─ SonnetDB(.exe)
 ├─ appsettings.json
 ├─ cli/
 ├─ packages/
 ├─ docs/
-├─ tslite-data/
-└─ start-tslite-server.cmd|sh
+├─ sonnetdb-data/
+└─ start-sonnetdb.cmd|sh
 ```

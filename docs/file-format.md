@@ -1,13 +1,13 @@
----
+﻿---
 layout: default
 title: "文件格式与目录布局"
-description: "TSLite 当前真实的磁盘布局，包括数据库目录、.system 控制面目录和帮助文档挂载位置。"
+description: "SonnetDB 当前真实的磁盘布局，包括数据库目录、.system 控制面目录和帮助文档挂载位置。"
 permalink: /file-format/
 ---
 
 ## 服务端数据根目录
 
-`TSLite.Server` 的数据根目录通常如下：
+`SonnetDB` 的数据根目录通常如下：
 
 ```text
 <DataRoot>/
@@ -28,13 +28,13 @@ permalink: /file-format/
 
 ```text
 <database-root>/
-├─ catalog.tslcat
+├─ catalog.SDBCAT
 ├─ measurements.tslschema
 ├─ tombstones.tslmanifest
 ├─ wal/
-│  └─ {startLsn:X16}.tslwal
+│  └─ {startLsn:X16}.SDBWAL
 └─ segments/
-   └─ {id:X16}.tslseg
+   └─ {id:X16}.SDBSEG
 ```
 
 关键文件说明：
@@ -42,10 +42,10 @@ permalink: /file-format/
 | 文件 | 作用 |
 | --- | --- |
 | `measurements.tslschema` | measurement schema 集合 |
-| `catalog.tslcat` | series catalog |
+| `catalog.SDBCAT` | series catalog |
 | `tombstones.tslmanifest` | 删除与 retention 的 tombstone 清单 |
-| `wal/*.tslwal` | 分段 WAL 文件 |
-| `segments/*.tslseg` | 不可变数据段 |
+| `wal/*.SDBWAL` | 分段 WAL 文件 |
+| `segments/*.SDBSEG` | 不可变数据段 |
 
 ## 与旧描述的差异
 
@@ -60,10 +60,10 @@ permalink: /file-format/
 当前运行时使用分段 WAL：
 
 ```text
-wal/{startLsn:X16}.tslwal
+wal/{startLsn:X16}.SDBWAL
 ```
 
-仓库中仍保留对旧 `wal/active.tslwal` 形态的兼容升级逻辑，旧目录在打开时会自动迁移到当前布局。
+仓库中仍保留对旧 `wal/active.SDBWAL` 形态的兼容升级逻辑，旧目录在打开时会自动迁移到当前布局。
 
 ## `.system/` 控制面目录
 
@@ -101,7 +101,7 @@ wwwroot/help/
 - `.system/`
 - 各数据库子目录
 - `measurements.tslschema`
-- `catalog.tslcat`
+- `catalog.SDBCAT`
 - `wal/`
 - `segments/`
 - `tombstones.tslmanifest`

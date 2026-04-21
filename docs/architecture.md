@@ -1,7 +1,7 @@
----
+﻿---
 layout: default
 title: "架构总览"
-description: "从组件划分、写入路径、查询路径到服务端控制面，理解 TSLite 当前的真实系统结构。"
+description: "从组件划分、写入路径、查询路径到服务端控制面，理解 SonnetDB 当前的真实系统结构。"
 permalink: /architecture/
 ---
 
@@ -9,10 +9,10 @@ permalink: /architecture/
 
 | 组件 | 责任 |
 | --- | --- |
-| `TSLite` | 嵌入式引擎，负责 schema、写入、查询、删除、后台 flush、compaction、retention |
-| `TSLite.Data` | ADO.NET 提供程序，统一本地和远程模式 |
-| `TSLite.Cli` | 命令行工具，适合脚本化执行和交互式 REPL |
-| `TSLite.Server` | HTTP API、首次安装、认证授权、SSE、Admin UI、帮助文档 |
+| `SonnetDB` | 嵌入式引擎，负责 schema、写入、查询、删除、后台 flush、compaction、retention |
+| `SonnetDB.Data` | ADO.NET 提供程序，统一本地和远程模式 |
+| `SonnetDB.Cli` | 命令行工具，适合脚本化执行和交互式 REPL |
+| `SonnetDB` | HTTP API、首次安装、认证授权、SSE、Admin UI、帮助文档 |
 | `web/admin` | 产品首页、首次安装向导、登录与管理后台 |
 | `docs` | JekyllNet 帮助站点源码 |
 
@@ -23,7 +23,7 @@ Application / Service / Tooling
         |
         +-- Tsdb + SqlExecutor
         +-- TsdbConnection / TsdbCommand
-        +-- tslite CLI
+        +-- sndb CLI
         +-- HTTP / Admin UI
                 |
                 v
@@ -80,17 +80,17 @@ Application / Service / Tooling
 
 ## 嵌入式与远程的关系
 
-`TSLite.Data` 把两种运行方式统一成一套 ADO.NET API：
+`SonnetDB.Data` 把两种运行方式统一成一套 ADO.NET API：
 
 - 嵌入式模式：直接打开本地数据库目录
-- 远程模式：通过 HTTP 调用 `TSLite.Server`
+- 远程模式：通过 HTTP 调用 `SonnetDB`
 
 切换方式主要由连接字符串决定：
 
 ```text
 Data Source=./demo-data
-Data Source=tslite://./demo-data
-Data Source=tslite+http://127.0.0.1:5080/metrics;Token=...
+Data Source=sonnetdb://./demo-data
+Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=...
 ```
 
 这意味着：
@@ -101,7 +101,7 @@ Data Source=tslite+http://127.0.0.1:5080/metrics;Token=...
 
 ## 服务端控制面
 
-`TSLite.Server` 在引擎之上增加了一个控制面：
+`SonnetDB` 在引擎之上增加了一个控制面：
 
 - 首次安装与 `installation.json`
 - 用户、密码哈希、Token 与 `users.json`
@@ -115,7 +115,7 @@ Data Source=tslite+http://127.0.0.1:5080/metrics;Token=...
 
 ## 帮助文档与镜像
 
-`docs/` 目录中的文档会在 Docker 构建时通过 JekyllNet 生成，并随 `TSLite.Server` 一起打包到镜像中，运行时挂在 `/help`。
+`docs/` 目录中的文档会在 Docker 构建时通过 JekyllNet 生成，并随 `SonnetDB` 一起打包到镜像中，运行时挂在 `/help`。
 
 这让镜像本身就携带：
 

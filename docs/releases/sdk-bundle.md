@@ -1,4 +1,4 @@
----
+﻿---
 layout: default
 title: SDK Bundle
 description: 面向开发者的 SDK 打包说明，包含 NuGet 包、本地 CLI 与配套文档。
@@ -9,23 +9,23 @@ SDK Bundle 面向开发者，目标是“一次下载，直接拥有完整开发
 
 ## 包含内容
 
-- `packages/TSLite.<version>.nupkg`
-- `packages/TSLite.Data.<version>.nupkg`
-- `packages/TSLite.Cli.<version>.nupkg`
+- `packages/SonnetDB.<version>.nupkg`
+- `packages/SonnetDB.Data.<version>.nupkg`
+- `packages/SonnetDB.Cli.<version>.nupkg`
 - `cli/` 本地命令行工具
 - `docs/` 使用说明
 
 ## 常见使用方式
 
 ```bash
-dotnet add package TSLite --version <version>
-dotnet add package TSLite.Data --version <version>
-dotnet tool install --global TSLite.Cli --version <version>
+dotnet add package SonnetDB --version <version>
+dotnet add package SonnetDB.Data --version <version>
+dotnet tool install --global SonnetDB.Cli --version <version>
 ```
 
 本地 CLI 示例：
 
 ```bash
-tslite version
-tslite sql --connection "Data Source=./demo-data" --command "SELECT count(*) FROM cpu"
+sndb version
+sndb sql --connection "Data Source=./demo-data" --command "SELECT count(*) FROM cpu"
 ```

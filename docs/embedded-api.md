@@ -1,13 +1,13 @@
----
+﻿---
 layout: default
 title: "嵌入式与 in-proc API"
-description: "直接在进程内使用 TSLite 引擎的方式，包括 SQL 执行和 Point/WriteMany 示例。"
+description: "直接在进程内使用 SonnetDB 引擎的方式，包括 SQL 执行和 Point/WriteMany 示例。"
 permalink: /embedded-api/
 ---
 
 ## 适用场景
 
-如果你的应用和数据库在同一个进程内运行，最直接的方式是使用 `TSLite` 核心引擎：
+如果你的应用和数据库在同一个进程内运行，最直接的方式是使用 `SonnetDB` 核心引擎：
 
 - 打开一个本地数据库目录
 - 定义 measurement schema
@@ -17,14 +17,14 @@ permalink: /embedded-api/
 ## 安装
 
 ```bash
-dotnet add package TSLite --version 0.1.0
+dotnet add package SonnetDB --version 0.1.0
 ```
 
 ## 用 SQL 执行最小示例
 
 ```csharp
-using TSLite.Engine;
-using TSLite.Sql.Execution;
+using SonnetDB.Engine;
+using SonnetDB.Sql.Execution;
 
 using var db = Tsdb.Open(new TsdbOptions
 {
@@ -60,9 +60,9 @@ foreach (var row in result.Rows)
 如果你已经在业务层拿到了结构化点位对象，可以直接使用 `Point.Create(...)` 和 `WriteMany(...)`：
 
 ```csharp
-using TSLite.Engine;
-using TSLite.Model;
-using TSLite.Sql.Execution;
+using SonnetDB.Engine;
+using SonnetDB.Model;
+using SonnetDB.Sql.Execution;
 
 using var db = Tsdb.Open(new TsdbOptions
 {
@@ -91,8 +91,8 @@ db.WriteMany(points);
 ## 删除示例
 
 ```csharp
-using TSLite.Engine;
-using TSLite.Sql.Execution;
+using SonnetDB.Engine;
+using SonnetDB.Sql.Execution;
 
 using var db = Tsdb.Open(new TsdbOptions
 {
@@ -125,7 +125,7 @@ WHERE host = 'server-01' AND time >= 1713676800000 AND time <= 1713677400000
 
 ```text
 ./demo-data/
-├─ catalog.tslcat
+├─ catalog.SDBCAT
 ├─ measurements.tslschema
 ├─ tombstones.tslmanifest
 ├─ wal/

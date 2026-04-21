@@ -1,19 +1,19 @@
----
+﻿---
 layout: default
 title: 发布与打包
 description: 了解 NuGet、SDK Bundle、Server Bundle 和安装包的组成与默认启动方式。
 permalink: /releases/
 ---
 
-TSLite 当前的发布物主要分为五类：
+SonnetDB 当前的发布物主要分为五类：
 
 | 类型 | 产物 | 说明 |
 | --- | --- | --- |
-| NuGet | `TSLite.*.nupkg` | 嵌入式核心库、远程 ADO.NET 接入与 CLI 工具包 |
-| SDK Bundle | `tslite-sdk-<version>-<rid>` | 面向开发者，包含 NuGet 包、本地 CLI 与配套文档 |
-| Server Bundle | `tslite-server-full-<version>-<rid>` | 面向部署者，包含 `TSLite.Server`、前端、CLI 与默认启动配置 |
+| NuGet | `SonnetDB.*.nupkg` | 嵌入式核心库、远程 ADO.NET 接入与 CLI 工具包 |
+| SDK Bundle | `sndb-sdk-<version>-<rid>` | 面向开发者，包含 NuGet 包、本地 CLI 与配套文档 |
+| Server Bundle | `sonnetdb-full-<version>-<rid>` | 面向部署者，包含 `SonnetDB`、前端、CLI 与默认启动配置 |
 | Installer | `.msi` / `.deb` / `.rpm` | 面向最终安装的操作系统包 |
-| Docker Image | `iotsharp/tslite-server` / `ghcr.io/<owner>/tslite-server` | 面向容器化部署的服务端镜像，包含后台、帮助中心与默认运行配置 |
+| Docker Image | `iotsharp/sonnetdb` / `ghcr.io/<owner>/sonnetdb` | 面向容器化部署的服务端镜像，包含后台、帮助中心与默认运行配置 |
 
 ## 默认启动信息
 

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-labelledby="title desc">
-  <title id="title">TSLite benchmark summary</title>
-  <desc id="desc">Four bar charts showing embedded TSLite and TSLite.Server benchmark results for insert throughput, range query latency, aggregate latency, and insert allocations.</desc>
+  <title id="title">SonnetDB benchmark summary</title>
+  <desc id="desc">Four bar charts showing embedded SonnetDB and SonnetDB Server benchmark results for insert throughput, range query latency, aggregate latency, and insert allocations.</desc>
   <style>
     .bg { fill: #ffffff; }
     .panel { fill: #fbfcfe; stroke: #d7dee8; stroke-width: 1; }
@@ -24,7 +24,7 @@
   </style>
 
   <rect class="bg" width="1280" height="360"/>
-  <text class="title" x="24" y="32">TSLite benchmark summary</text>
+  <text class="title" x="24" y="32">SonnetDB benchmark summary</text>
   <text class="subtitle" x="24" y="54">PR #49 local run: i9-13900HX / Windows 11 / .NET 10.0.6 / Docker Desktop + WSL2. Relative comparison only.</text>
   <text class="subtitle" x="976" y="32">Run: eng/benchmarks/run-benchmarks</text>
 
@@ -138,9 +138,9 @@
 
   <g transform="translate(24 334)">
     <rect class="embedded" x="0" y="-9" width="10" height="10" rx="2"/>
-    <text class="legend" x="15" y="0">TSLite embedded</text>
+    <text class="legend" x="15" y="0">SonnetDB embedded</text>
     <rect class="server" x="132" y="-9" width="10" height="10" rx="2"/>
-    <text class="legend" x="147" y="0">TSLite.Server</text>
+    <text class="legend" x="147" y="0">SonnetDB Server</text>
     <rect class="server-lp" x="260" y="-9" width="10" height="10" rx="2"/>
     <text class="legend" x="275" y="0">Server LP</text>
     <rect class="server-json" x="365" y="-9" width="10" height="10" rx="2"/>

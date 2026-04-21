@@ -1,12 +1,12 @@
-# AGENTS
+﻿# AGENTS
 
-本文件定义 AI 协作（如 GitHub Copilot Agent）在 TSLite 仓库工作的规范与约束。所有 AI 辅助生成的代码和文档均须遵守此规范。
+本文件定义 AI 协作（如 GitHub Copilot Agent）在 SonnetDB 仓库工作的规范与约束。所有 AI 辅助生成的代码和文档均须遵守此规范。
 
 ---
 
 ## 项目目标
 
-**TSLite** 是一个使用 C# / .NET 10 实现的嵌入式单文件时序数据库，目标是：
+**SonnetDB** 是一个使用 C# / .NET 10 实现的嵌入式单文件时序数据库，目标是：
 
 > 可以通过 SQL 语句进行 `INSERT` 和 `SELECT` 时序数据，单文件持久化，零外部依赖，嵌入式进程内运行。
 
@@ -64,7 +64,7 @@ public struct FileHeader
 
 ### 4. 依赖约束
 
-- 核心类库 `src/TSLite` **不得**引入任何第三方 NuGet 运行时依赖
+- 核心类库 `src/SonnetDB` **不得**引入任何第三方 NuGet 运行时依赖
 - 测试项目可引用 `xUnit`、`xUnit.runner.visualstudio`、`Microsoft.NET.Test.Sdk`
 - 基准项目可引用 `BenchmarkDotNet`
 - **不得**引入 `Newtonsoft.Json`、`Dapper`、`EntityFramework` 等大型依赖
@@ -112,7 +112,7 @@ public IEnumerable<DataPoint> QueryRaw(SeriesId seriesId, long from, long to) { 
 
 - 参数校验使用 `ArgumentNullException.ThrowIfNull`、`ArgumentOutOfRangeException.ThrowIfNegative` 等现代 API
 - 不吞掉 `IOException`、`InvalidDataException` 等存储层异常
-- 自定义异常继承 `Exception` 并放置在 `TSLite.Exceptions` 命名空间
+- 自定义异常继承 `Exception` 并放置在 `SonnetDB.Exceptions` 命名空间
 
 ---
 
@@ -249,9 +249,9 @@ feat(io): 实现 SpanReader 与 SpanWriter
 ## 目录约定
 
 ```
-TSLite/
+SonnetDB/
 ├── src/
-│   ├── TSLite/                    # 核心类库（无第三方依赖）
+│   ├── SonnetDB/                    # 核心类库（无第三方依赖）
 │   │   ├── Api/                   # 公共 API：TsdbDatabase / Connection / Command / Reader
 │   │   ├── Buffers/               # InlineArray 工具：Magic8、Reserved16
 │   │   ├── Catalog/               # SeriesCatalog
@@ -264,10 +264,10 @@ TSLite/
 │   │   ├── Sql/                   # Lexer / Parser / AST / Executor
 │   │   ├── Storage/               # MemTable / SegmentWriter / Reader / Flush / Compaction
 │   │   └── Wal/                   # WalWriter / WalReader
-│   └── TSLite.Cli/                # 命令行工具
+│   └── SonnetDB.Cli/                # 命令行工具
 ├── tests/
-│   ├── TSLite.Tests/              # xUnit 单元测试（目录结构镜像 src/TSLite）
-│   └── TSLite.Benchmarks/         # BenchmarkDotNet 基准测试
+│   ├── SonnetDB.Core.Tests/              # xUnit 单元测试（目录结构镜像 src/SonnetDB）
+│   └── SonnetDB.Benchmarks/         # BenchmarkDotNet 基准测试
 ├── docs/                          # 额外文档
 ├── .github/
 │   └── workflows/
@@ -275,7 +275,7 @@ TSLite/
 │       └── publish.yml            # NuGet 发布
 ├── .editorconfig
 ├── Directory.Build.props
-└── TSLite.sln
+└── SonnetDB.sln
 ```
 
 ---
@@ -285,7 +285,7 @@ TSLite/
 | 禁止 | 原因 |
 |------|------|
 | 使用 `unsafe` | 第一版 Safe-only 原则 |
-| 在 `src/TSLite` 中引入运行时第三方依赖 | 保持零依赖特性 |
+| 在 `src/SonnetDB` 中引入运行时第三方依赖 | 保持零依赖特性 |
 | 引入 `Newtonsoft.Json`、`Dapper` 等大型库 | 最小化依赖 |
 | 修改二进制格式不升级 `FileHeader.Version` | 破坏向后兼容 |
 | 压制编译警告（无注释说明） | 维护代码质量 |

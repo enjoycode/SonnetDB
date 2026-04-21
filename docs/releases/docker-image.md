@@ -1,18 +1,18 @@
----
+﻿---
 layout: default
 title: Docker 镜像
-description: TSLite.Server 的容器镜像发布、标签策略与启动方式。
+description: SonnetDB 的容器镜像发布、标签策略与启动方式。
 permalink: /releases/docker-image/
 ---
 
-`PR #39` 为仓库补齐了 `TSLite.Server` 的 Docker 镜像自动发布流水线，目标仓库为：
+`PR #39` 为仓库补齐了 `SonnetDB` 的 Docker 镜像自动发布流水线，目标仓库为：
 
-- Docker Hub：`iotsharp/tslite-server`
-- GHCR：`ghcr.io/<owner>/tslite-server`
+- Docker Hub：`iotsharp/sonnetdb`
+- GHCR：`ghcr.io/<owner>/sonnetdb`
 
 镜像内包含：
 
-- `TSLite.Server`
+- `SonnetDB`
 - 管理后台前端
 - `/help` 静态帮助站点
 - 默认的 `/data` 数据目录挂载点
@@ -30,8 +30,8 @@ permalink: /releases/docker-image/
 ```bash
 docker run --rm \
   -p 5080:5080 \
-  -v ./tslite-data:/data \
-  iotsharp/tslite-server:latest
+  -v ./sonnetdb-data:/data \
+  iotsharp/sonnetdb:latest
 ```
 
 或者使用 GHCR：
@@ -39,8 +39,8 @@ docker run --rm \
 ```bash
 docker run --rm \
   -p 5080:5080 \
-  -v ./tslite-data:/data \
-  ghcr.io/<owner>/tslite-server:latest
+  -v ./sonnetdb-data:/data \
+  ghcr.io/<owner>/sonnetdb:latest
 ```
 
 启动后默认可访问：
@@ -60,9 +60,9 @@ docker run --rm \
 
 工作流会：
 
-1. 构建 `src/TSLite.Server/Dockerfile`
+1. 构建 `src/SonnetDB/Dockerfile`
 2. 推送到 GHCR
-3. 在 Docker Hub Secrets 配置完成后同步推送到 `iotsharp/tslite-server`
+3. 在 Docker Hub Secrets 配置完成后同步推送到 `iotsharp/sonnetdb`
 4. 生成 OCI labels 与版本标签
 5. 通过 GitHub Actions Cache 复用 Docker 层缓存
 

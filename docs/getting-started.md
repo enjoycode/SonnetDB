@@ -1,22 +1,22 @@
----
+﻿---
 layout: default
 title: "开始使用"
 description: "从 Docker 启动、首次安装到本地和远程访问的最短路径。"
 permalink: /getting-started/
 ---
 
-## 1. 启动 `TSLite.Server`
+## 1. 启动 `SonnetDB`
 
 从仓库根目录构建镜像：
 
 ```bash
-docker build -f src/TSLite.Server/Dockerfile -t tslite-server .
+docker build -f src/SonnetDB/Dockerfile -t sonnetdb .
 ```
 
 运行容器：
 
 ```bash
-docker run --rm -p 5080:5080 -v ./tslite-data:/data tslite-server
+docker run --rm -p 5080:5080 -v ./sonnetdb-data:/data sonnetdb
 ```
 
 默认行为：
@@ -25,7 +25,7 @@ docker run --rm -p 5080:5080 -v ./tslite-data:/data tslite-server
 - 数据根目录为 `/data`
 - 帮助文档会随镜像一起发布到 `/help`
 
-如果直接从源码运行服务端，也会默认监听 `5080`，并使用 `./tslite-data` 作为数据根目录。
+如果直接从源码运行服务端，也会默认监听 `5080`，并使用 `./sonnetdb-data` 作为数据根目录。
 
 ## 2. 打开管理入口
 
@@ -106,8 +106,8 @@ curl -X POST "http://127.0.0.1:5080/v1/db/metrics/sql" \
 如果你不需要 HTTP 服务端，可以直接在进程内打开数据库目录：
 
 ```csharp
-using TSLite.Engine;
-using TSLite.Sql.Execution;
+using SonnetDB.Engine;
+using SonnetDB.Sql.Execution;
 
 using var db = Tsdb.Open(new TsdbOptions
 {
@@ -130,13 +130,13 @@ Data Source=./demo-data
 远程 ADO.NET 连接：
 
 ```text
-Data Source=tslite+http://127.0.0.1:5080/metrics;Token=<your-token>
+Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=<your-token>
 ```
 
 CLI 示例：
 
 ```bash
-tslite sql --connection "Data Source=./demo-data" --command "SELECT count(*) FROM cpu"
+sndb sql --connection "Data Source=./demo-data" --command "SELECT count(*) FROM cpu"
 ```
 
 详细用法分别见：

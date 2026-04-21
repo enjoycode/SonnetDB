@@ -1,4 +1,4 @@
----
+﻿---
 layout: default
 title: PID 控制律内置函数
 permalink: /pid-control/
@@ -6,7 +6,7 @@ permalink: /pid-control/
 
 # PID 控制律内置函数
 
-TSLite 在 PR #54 中提供了三组与 PID 控制相关的能力，全部以纯 C# 实现、零外部依赖、可在嵌入式或 Server 模式下使用：
+SonnetDB 在 PR #54 中提供了三组与 PID 控制相关的能力，全部以纯 C# 实现、零外部依赖、可在嵌入式或 Server 模式下使用：
 
 | 能力 | 形态 | API / SQL |
 |------|------|-----------|
@@ -118,7 +118,7 @@ WHERE device = 'r1'
 嵌入式场景如果想跳过 SQL，直接拿到强类型 `PidParameters` 记录，仍可使用库 API：
 
 ```csharp
-using TSLite.Query.Functions.Control;
+using SonnetDB.Query.Functions.Control;
 
 // 1) 从历史阶跃响应数据查询样本
 var rows = ((SelectExecutionResult)SqlExecutor.Execute(db,
@@ -176,10 +176,10 @@ var sql = $"SELECT pid_series(temperature, 75.0, " +
 
 ## 参考实现
 
-- 控制器内核：[`src/TSLite/Query/Functions/Control/PidController.cs`](https://github.com/IoTSharp/TSLite/blob/main/src/TSLite/Query/Functions/Control/PidController.cs)
-- 行级窗口函数：[`PidSeriesFunction.cs`](https://github.com/IoTSharp/TSLite/blob/main/src/TSLite/Query/Functions/Control/PidSeriesFunction.cs)
-- 聚合函数：[`PidAggregateFunction.cs`](https://github.com/IoTSharp/TSLite/blob/main/src/TSLite/Query/Functions/Control/PidAggregateFunction.cs)
-- 自动整定 SQL：[`PidEstimateFunction.cs`](https://github.com/IoTSharp/TSLite/blob/main/src/TSLite/Query/Functions/Control/PidEstimateFunction.cs)
-- 自动整定库 API：[`PidParameterEstimator.cs`](https://github.com/IoTSharp/TSLite/blob/main/src/TSLite/Query/Functions/Control/PidParameterEstimator.cs)
+- 控制器内核：[`src/SonnetDB/Query/Functions/Control/PidController.cs`](https://github.com/IoTSharp/SonnetDB/blob/main/src/SonnetDB/Query/Functions/Control/PidController.cs)
+- 行级窗口函数：[`PidSeriesFunction.cs`](https://github.com/IoTSharp/SonnetDB/blob/main/src/SonnetDB/Query/Functions/Control/PidSeriesFunction.cs)
+- 聚合函数：[`PidAggregateFunction.cs`](https://github.com/IoTSharp/SonnetDB/blob/main/src/SonnetDB/Query/Functions/Control/PidAggregateFunction.cs)
+- 自动整定 SQL：[`PidEstimateFunction.cs`](https://github.com/IoTSharp/SonnetDB/blob/main/src/SonnetDB/Query/Functions/Control/PidEstimateFunction.cs)
+- 自动整定库 API：[`PidParameterEstimator.cs`](https://github.com/IoTSharp/SonnetDB/blob/main/src/SonnetDB/Query/Functions/Control/PidParameterEstimator.cs)
 
 更多 SQL 函数参考请见 [SQL Reference]({{ '/sql-reference/' | relative_url }})。

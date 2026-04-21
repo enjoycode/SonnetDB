@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   {% assign docs_baseurl = site.docs_baseurl | default: '/help' %}
@@ -6,8 +6,8 @@
   {% assign app_link_text = site.app_link_text | default: '管理' %}
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% if page.title %}{{ page.title }} | {% endif %}TSLite Docs</title>
-  <meta name="description" content="{% if page.description %}{{ page.description }}{% else %}TSLite help center{% endif %}">
+  <title>{% if page.title %}{{ page.title }} | {% endif %}SonnetDB Docs</title>
+  <meta name="description" content="{% if page.description %}{{ page.description }}{% else %}SonnetDB help center{% endif %}">
   <link rel="stylesheet" href="{{ docs_baseurl }}/assets/docs.css">
 </head>
 <body>
@@ -30,7 +30,7 @@
           </svg>
         </span>
         <span class="brand-copy">
-          <strong>TSLite</strong>
+          <strong>SonnetDB</strong>
           <span>Help Center</span>
         </span>
       </a>
@@ -69,7 +69,7 @@
 
       <article class="content-card">
         <header class="page-head">
-          <p class="eyebrow">TSLite Docs</p>
+          <p class="eyebrow">SonnetDB Docs</p>
           <h1>{{ page.title }}</h1>
           {% if page.description %}
           <p class="page-description">{{ page.description }}</p>

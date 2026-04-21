@@ -1,4 +1,4 @@
----
+﻿---
 layout: default
 title: 预测 / 异常 / 变点检测
 permalink: /forecast/
@@ -6,7 +6,7 @@ permalink: /forecast/
 
 # 预测 / 异常 / 变点检测
 
-TSLite 在 PR #55 中提供了三组开箱即用、纯 C# 实现、零外部依赖的时序分析能力：
+SonnetDB 在 PR #55 中提供了三组开箱即用、纯 C# 实现、零外部依赖的时序分析能力：
 
 | 能力 | 形态 | API / SQL |
 |------|------|-----------|
@@ -163,10 +163,10 @@ WHERE source = 's-1';
 
 ## 4. 嵌入式 API
 
-预测算法核心暴露在 `TSLite.Query.Functions.Forecasting.TimeSeriesForecaster`：
+预测算法核心暴露在 `SonnetDB.Query.Functions.Forecasting.TimeSeriesForecaster`：
 
 ```csharp
-using TSLite.Query.Functions.Forecasting;
+using SonnetDB.Query.Functions.Forecasting;
 
 long[] timestampsMs = ...;
 double[] values = ...;
