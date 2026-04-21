@@ -64,6 +64,21 @@ public sealed class MeasurementSchema
                     $"Tag 列 '{col.Name}' 必须是 STRING 类型，但声明为 {col.DataType}。", nameof(columns));
             if (col.DataType == FieldType.Unknown)
                 throw new ArgumentException($"列 '{col.Name}' 的数据类型不能为 Unknown。", nameof(columns));
+            if (col.DataType == FieldType.Vector)
+            {
+                if (col.Role != MeasurementColumnRole.Field)
+                    throw new ArgumentException(
+                        $"VECTOR 列 '{col.Name}' 必须是 FIELD 角色。", nameof(columns));
+                if (col.VectorDimension is not int dim || dim <= 0)
+                    throw new ArgumentException(
+                        $"VECTOR 列 '{col.Name}' 必须声明正的维度（VectorDimension > 0），实际为 {(col.VectorDimension?.ToString() ?? "null")}。",
+                        nameof(columns));
+            }
+            else if (col.VectorDimension is not null)
+            {
+                throw new ArgumentException(
+                    $"列 '{col.Name}' 的类型为 {col.DataType}，不应声明 VectorDimension。", nameof(columns));
+            }
             if (col.Role == MeasurementColumnRole.Field)
                 fieldCount++;
             copy.Add(col);

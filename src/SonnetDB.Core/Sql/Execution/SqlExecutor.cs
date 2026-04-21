@@ -116,7 +116,7 @@ public static class SqlExecutor
             {
                 col.Name,
                 col.Role == MeasurementColumnRole.Tag ? "tag" : "field",
-                FormatFieldType(col.DataType),
+                FormatColumnDataType(col),
             });
         }
         return new SelectExecutionResult(
@@ -130,8 +130,16 @@ public static class SqlExecutor
         FieldType.Int64 => "int64",
         FieldType.Boolean => "boolean",
         FieldType.String => "string",
+        FieldType.Vector => "vector",
         _ => type.ToString().ToLowerInvariant(),
     };
+
+    private static string FormatColumnDataType(MeasurementColumn col)
+    {
+        if (col.DataType == FieldType.Vector && col.VectorDimension is int dim)
+            return $"vector({dim})";
+        return FormatFieldType(col.DataType);
+    }
 
     private static object ShowUsers(IControlPlane cp)
     {
@@ -260,7 +268,7 @@ public static class SqlExecutor
 
         var columns = new List<MeasurementColumn>(statement.Columns.Count);
         foreach (var col in statement.Columns)
-            columns.Add(new MeasurementColumn(col.Name, MapRole(col.Kind), MapType(col.DataType)));
+            columns.Add(new MeasurementColumn(col.Name, MapRole(col.Kind), MapType(col.DataType), col.VectorDimension));
 
         var schema = MeasurementSchema.Create(statement.Name, columns);
         return tsdb.CreateMeasurement(schema);
@@ -279,6 +287,7 @@ public static class SqlExecutor
         SqlDataType.Int64 => FieldType.Int64,
         SqlDataType.Boolean => FieldType.Boolean,
         SqlDataType.String => FieldType.String,
+        SqlDataType.Vector => FieldType.Vector,
         _ => throw new NotSupportedException($"未知数据类型 {type}。"),
     };
 
@@ -353,10 +362,10 @@ public static class SqlExecutor
                     continue;
 
                 var binding = bindings[i];
-                var literal = AsLiteral(row[i], binding.Column!.Name);
 
                 if (binding.Column!.Role == MeasurementColumnRole.Tag)
                 {
+                    var literal = AsLiteral(row[i], binding.Column.Name);
                     if (literal.Kind == SqlLiteralKind.Null)
                         throw new InvalidOperationException(
                             $"Tag 列 '{binding.Column.Name}' 不允许为 NULL。");
@@ -368,12 +377,24 @@ public static class SqlExecutor
                 }
                 else
                 {
+                    if (binding.Column.DataType == FieldType.Vector)
+                    {
+                        if (row[i] is not VectorLiteralExpression vecExpr)
+                            throw new InvalidOperationException(
+                                $"Field 列 '{binding.Column.Name}' 期望 VECTOR 字面量 [..]，实际为 {row[i].GetType().Name}。");
+                        var value = ConvertVectorField(vecExpr, binding.Column);
+                        fields ??= new Dictionary<string, FieldValue>(StringComparer.Ordinal);
+                        fields[binding.Column.Name] = value;
+                        continue;
+                    }
+
+                    var literal = AsLiteral(row[i], binding.Column.Name);
                     if (literal.Kind == SqlLiteralKind.Null)
                         throw new InvalidOperationException(
                             $"Field 列 '{binding.Column.Name}' 不允许为 NULL。");
-                    var value = ConvertField(literal, binding.Column);
+                    var fv = ConvertField(literal, binding.Column);
                     fields ??= new Dictionary<string, FieldValue>(StringComparer.Ordinal);
-                    fields[binding.Column.Name] = value;
+                    fields[binding.Column.Name] = fv;
                 }
             }
 
@@ -466,9 +487,30 @@ public static class SqlExecutor
                 if (literal.Kind != SqlLiteralKind.String)
                     throw TypeMismatch(column, literal.Kind);
                 return FieldValue.FromString(literal.StringValue!);
+            case FieldType.Vector:
+                throw new InvalidOperationException(
+                    $"Field 列 '{column.Name}' 是 VECTOR 列，必须传入 [..] 向量字面量，不允许标量字面量。");
             default:
                 throw new NotSupportedException($"不支持的列类型 {column.DataType}。");
         }
+    }
+
+    /// <summary>
+    /// 把 <see cref="VectorLiteralExpression"/> 校验维度并转换为 <see cref="FieldValue"/>（PR #58 b）。
+    /// </summary>
+    private static FieldValue ConvertVectorField(VectorLiteralExpression literal, MeasurementColumn column)
+    {
+        int expectedDim = column.VectorDimension
+            ?? throw new InvalidOperationException(
+                $"VECTOR 列 '{column.Name}' 缺少维度声明（schema 损坏）。");
+        if (literal.Components.Count != expectedDim)
+            throw new InvalidOperationException(
+                $"VECTOR 列 '{column.Name}' 维度不匹配：声明 {expectedDim}，字面量 {literal.Components.Count}。");
+
+        var arr = new float[expectedDim];
+        for (int i = 0; i < expectedDim; i++)
+            arr[i] = (float)literal.Components[i];
+        return FieldValue.FromVector(arr);
     }
 
     private static InvalidOperationException TypeMismatch(MeasurementColumn column, SqlLiteralKind actual)

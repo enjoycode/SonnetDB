@@ -28,6 +28,16 @@
 - **Milestone 14 — SonnetDB Copilot：MCP 工具 + 知识库 + 智能体**：基于 Microsoft Agent Framework 新建独立项目 `src/SonnetDB.Copilot/`，复用现有 `/mcp/{db}` 工具集 + Milestone 13 的向量召回，把"用户文档 / 技能库 / 数据库 schema"统一存入 `__copilot__` 系统库（dogfooding）。Embedding/Chat 走统一 `IEmbeddingProvider` / `IChatProvider` 抽象，**本地 ONNX（bge-small-zh）** 与 **OpenAI 兼容端点（国际 / 国内任意 OpenAI-compat 网关）** 同时支持，可按部署场景切换。新增 HTTP 端点 `POST /v1/copilot/chat`（NDJSON / SSE 流式）+ Web Admin Chat Tab。详见 ROADMAP PR #63 ~ #69。
 
 ### Added
+- **PR #58 b — Schema VECTOR(dim) 列声明 + SQL `[v0, v1, ...]` 字面量（Milestone 13 第二切片）**
+  - `MeasurementColumn` 新增可选 `int? VectorDimension`；`MeasurementSchema.Create` 校验：Vector 列必须 `Field` 角色且 `dim > 0`，非 Vector 列禁止携带 dim。
+  - SQL 解析层：新增 `KeywordVector` / `LeftBracket` / `RightBracket` token；`SqlLexer` 识别 `vector` 关键字与 `[` / `]` 标点；`SqlDataType.Vector` + `ColumnDefinition.VectorDimension` + `VectorLiteralExpression(IReadOnlyList<double>)` AST。
+  - `SqlParser`：`ParseColumnDefinition` 支持 `<col> FIELD VECTOR(N)` 语法（N ∈ [1, int32]）；`ParsePrimary` 支持 `[a, b, c]` 字面量（拒绝空 `[]`，组件接受可选 `+/-` 前缀的整数 / 浮点）。
+  - `SqlExecutor`：`CREATE MEASUREMENT` 透传 dim 至 schema；`INSERT` 在 Vector 列上要求 `[..]` 字面量并校验维度匹配（错误信息含 `维度不匹配`），非 Vector 列拒绝向量字面量；`DESCRIBE` 输出 `vector(N)`；`MapType` 新增 `SqlDataType.Vector → FieldType.Vector` 映射。
+  - `MeasurementSchemaCodec` v1 → **v2**：在 `Vector` 列的类型字节后追加 4 字节 little-endian `dim`；读取兼容 v1（仅当文件中无 Vector 列时），v1 文件含 Vector 列则抛 `InvalidDataException`。`measurements.tslschema` 文件版本号字段同步升级为 2。
+  - `MemTableSeries.ComputeEstimatedBytes`：新增 `FieldType.Vector` 分支，按 `16 + dim*4` 估算每点常驻字节。
+  - `SelectExecutor.UnboxFieldValue`：Vector → `float[]`，便于 `SELECT embedding` 直接吐出数组。
+  - 测试：新增 26 个测试（`SqlParserVectorTests` × 12、`SqlExecutorVectorTests` × 7、`MeasurementSchemaVectorTests` × 7）；总计 **1662 测试全部通过**。
+  - 兼容性：仍未升级 `FileHeader.Version`（Segment 编码层尚未涉及）；Vector 数据落 WAL → MemTable → flush 走现有路径，落 segment 暂不支持，将随 PR #58 c 引入 `BlockEncoding.VectorRaw` + `FileHeader v3`。
 - **PR #58 a — `FieldValue.Vector` 与 WAL `WritePoint` Vector 编解码（Milestone 13 第一切片）**
   - 新增 `FieldType.Vector = 5`：定长 32 位浮点向量，dim 由后续 schema 声明，WAL 内按 `dim(4) + dim×float32(LE)` 排布。
   - `FieldValue` 新增 `Vector` 分支：`FromVector(ReadOnlyMemory<float>)` / `FromVector(float[])` 工厂；`AsVector()` / `VectorDimension` 取值；`Equals` 全量序列比较，`GetHashCode` 采样首/中/末三分量；`ToString` 形如 `vector(N)[a,b,...]`，超过 8 维自动截断。

@@ -29,6 +29,8 @@ namespace SonnetDB.Catalog;
 ///     byte[] ColumnNameUtf8            变长
 ///     byte   Role                      (1B)  0=Tag, 1=Field
 ///     byte   DataType                  (1B)  SonnetDB.Storage.Format.FieldType
+///     // PR #58 b（v2 起）：仅当 DataType == Vector(5) 时追加：
+///     int32  VectorDimension           (4B)  必须 > 0
 ///
 /// MeasurementSchemaFooter (16B)
 ///   Crc32                              (4B)  整个 MeasurementSchema[] 区域的 CRC32
@@ -37,6 +39,10 @@ namespace SonnetDB.Catalog;
 /// </code>
 /// </para>
 /// <para>写入策略：临时文件 + 原子 rename（崩溃安全）。</para>
+/// <para>
+/// 版本兼容：当前写入版本为 v2（见 <see cref="_formatVersion"/>）。v1 文件只能包含非 VECTOR 列；读取
+/// 时按版本号决定是否解析每列尾部的 4 字节 dim。
+/// </para>
 /// </summary>
 public static class MeasurementSchemaCodec
 {
@@ -46,7 +52,7 @@ public static class MeasurementSchemaCodec
     private static readonly byte[] _magic = "SDBMEAv1"u8.ToArray();
     private static readonly Encoding _utf8 = Encoding.UTF8;
 
-    private const int _formatVersion = 1;
+    private const int _formatVersion = 2;
     private const int _headerSize = 32;
     private const int _footerSize = 16;
 
@@ -110,7 +116,7 @@ public static class MeasurementSchemaCodec
                 throw new InvalidDataException("MeasurementSchema: invalid magic in header.");
 
             int version = headerReader.ReadInt32();
-            if (version != _formatVersion)
+            if (version != 1 && version != _formatVersion)
                 throw new InvalidDataException($"MeasurementSchema: unsupported format version {version}.");
 
             int hSize = headerReader.ReadInt32();
@@ -125,7 +131,7 @@ public static class MeasurementSchemaCodec
             var result = new List<MeasurementSchema>(measurementCount);
 
             for (int i = 0; i < measurementCount; i++)
-                result.Add(ReadMeasurement(source, crcHasher, i));
+                result.Add(ReadMeasurement(source, crcHasher, i, version));
 
             // Footer
             byte[] footerBuf = ArrayPool<byte>.Shared.Rent(_footerSize);
@@ -158,7 +164,7 @@ public static class MeasurementSchemaCodec
         }
     }
 
-    private static MeasurementSchema ReadMeasurement(Stream source, Crc32 crc, int index)
+    private static MeasurementSchema ReadMeasurement(Stream source, Crc32 crc, int index, int version)
     {
         // Name: uint16 length + bytes
         string name = ReadString(source, crc, fieldDescription: $"measurement {index} name");
@@ -177,6 +183,7 @@ public static class MeasurementSchemaCodec
 
         var columns = new List<MeasurementColumn>(columnCount);
         Span<byte> roleAndType = stackalloc byte[2];
+        Span<byte> dimBuf = stackalloc byte[4];
         for (int c = 0; c < columnCount; c++)
         {
             string colName = ReadString(source, crc, fieldDescription: $"measurement {index} column {c} name");
@@ -197,7 +204,22 @@ public static class MeasurementSchemaCodec
                 throw new InvalidDataException(
                     $"MeasurementSchema: invalid column data type {typeByte} (measurement '{name}', column '{colName}').");
 
-            columns.Add(new MeasurementColumn(colName, role, dataType));
+            int? vectorDim = null;
+            if (dataType == FieldType.Vector)
+            {
+                if (version < 2)
+                    throw new InvalidDataException(
+                        $"MeasurementSchema: VECTOR column '{colName}' requires format version >= 2 (file version {version}).");
+                ReadExactSpan(source, dimBuf, $"measurement {index} column {c} vector dim");
+                crc.Append(dimBuf);
+                int dim = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(dimBuf);
+                if (dim <= 0)
+                    throw new InvalidDataException(
+                        $"MeasurementSchema: invalid VECTOR dimension {dim} (measurement '{name}', column '{colName}').");
+                vectorDim = dim;
+            }
+
+            columns.Add(new MeasurementColumn(colName, role, dataType, vectorDim));
         }
 
         return MeasurementSchema.Create(name, columns, createdAt);
@@ -260,8 +282,11 @@ public static class MeasurementSchemaCodec
             if (colNameLen > ushort.MaxValue)
                 throw new InvalidDataException(
                     $"Column '{schema.Columns[i].Name}' 名称过长（{colNameLen} 字节，最大 {ushort.MaxValue}）。");
-            columnSizes[i] = 2 + colNameLen + 1 + 1; // nameLen + name + role + type
-            totalSize += columnSizes[i];
+            int colSize = 2 + colNameLen + 1 + 1; // nameLen + name + role + type
+            if (schema.Columns[i].DataType == FieldType.Vector)
+                colSize += 4; // VectorDimension (int32)
+            columnSizes[i] = colSize;
+            totalSize += colSize;
         }
 
         byte[] buf = ArrayPool<byte>.Shared.Rent(totalSize);
@@ -280,12 +305,20 @@ public static class MeasurementSchemaCodec
             for (int i = 0; i < schema.Columns.Count; i++)
             {
                 var col = schema.Columns[i];
-                int colNameLen = columnSizes[i] - 4; // 2(len) + 1(role) + 1(type) = 4 fixed
+                int extraDimSize = col.DataType == FieldType.Vector ? 4 : 0;
+                int colNameLen = columnSizes[i] - 4 - extraDimSize; // 2(len) + 1(role) + 1(type) (+ 4 if vector)
                 writer.WriteUInt16((ushort)colNameLen);
                 int colWritten = _utf8.GetBytes(col.Name, writer.FreeSpan);
                 writer.Advance(colWritten);
                 writer.WriteByte((byte)col.Role);
                 writer.WriteByte((byte)col.DataType);
+                if (col.DataType == FieldType.Vector)
+                {
+                    int dim = col.VectorDimension
+                        ?? throw new InvalidDataException(
+                            $"VECTOR column '{col.Name}' missing dimension when persisting schema.");
+                    writer.WriteInt32(dim);
+                }
             }
 
             crc.Append(buf.AsSpan(0, totalSize));

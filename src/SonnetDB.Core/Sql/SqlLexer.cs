@@ -36,6 +36,7 @@ public sealed class SqlLexer
         ["int"] = TokenKind.KeywordInt,
         ["bool"] = TokenKind.KeywordBool,
         ["string"] = TokenKind.KeywordString,
+        ["vector"] = TokenKind.KeywordVector,
 
         // PR #34a：控制面 DDL 关键字
         ["user"] = TokenKind.KeywordUser,
@@ -140,6 +141,8 @@ public sealed class SqlLexer
         {
             case '(': _position++; return new Token(TokenKind.LeftParen, "(", start);
             case ')': _position++; return new Token(TokenKind.RightParen, ")", start);
+            case '[': _position++; return new Token(TokenKind.LeftBracket, "[", start);
+            case ']': _position++; return new Token(TokenKind.RightBracket, "]", start);
             case ',': _position++; return new Token(TokenKind.Comma, ",", start);
             case ';': _position++; return new Token(TokenKind.Semicolon, ";", start);
             case '*': _position++; return new Token(TokenKind.Star, "*", start);

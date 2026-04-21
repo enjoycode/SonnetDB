@@ -254,6 +254,7 @@ public sealed class MemTableSeries
         {
             FieldType.Boolean => count * 9L,
             FieldType.String => ComputeStringBytes(),
+            FieldType.Vector => ComputeVectorBytes(),
             _ => count * 16L, // Float64 / Int64
         };
     }
@@ -264,6 +265,17 @@ public sealed class MemTableSeries
         foreach (var dp in _points)
         {
             total += 8 + System.Text.Encoding.UTF8.GetByteCount(dp.Value.AsString()) + 8;
+        }
+        return total;
+    }
+
+    private long ComputeVectorBytes()
+    {
+        // 8(timestamp) + 8(ROM<float> overhead) + dim*4
+        long total = 0;
+        foreach (var dp in _points)
+        {
+            total += 16 + dp.Value.VectorDimension * 4L;
         }
         return total;
     }

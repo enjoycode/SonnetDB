@@ -47,6 +47,13 @@ public sealed record LiteralExpression(
 /// <param name="Milliseconds">已转换为毫秒的整数值。</param>
 public sealed record DurationLiteralExpression(long Milliseconds) : SqlExpression;
 
+/// <summary>
+/// 向量字面量 <c>[v0, v1, v2, ...]</c>（PR #58 b）。
+/// 解析器将每个元素归一为 <see cref="double"/>，由执行器负责转换为 <see cref="float"/> 数组并校验维度匹配。
+/// </summary>
+/// <param name="Components">按声明顺序的分量值（长度即维度，&gt;= 1）。</param>
+public sealed record VectorLiteralExpression(IReadOnlyList<double> Components) : SqlExpression;
+
 /// <summary>标识符引用（列名 / 字段名 / tag 名）。</summary>
 /// <param name="Name">标识符名称（保留原始大小写）。</param>
 public sealed record IdentifierExpression(string Name) : SqlExpression;

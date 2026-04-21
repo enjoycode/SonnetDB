@@ -18,6 +18,8 @@ public enum TokenKind
     // 标点
     LeftParen,
     RightParen,
+    LeftBracket,
+    RightBracket,
     Comma,
     Semicolon,
     Star,
@@ -60,6 +62,8 @@ public enum TokenKind
     KeywordInt,
     KeywordBool,
     KeywordString,
+    /// <summary>VECTOR(dim) 列声明（PR #58 b）。</summary>
+    KeywordVector,
 
     // PR #34a：控制面 DDL
     KeywordUser,

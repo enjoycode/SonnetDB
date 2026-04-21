@@ -20,6 +20,8 @@ public enum SqlDataType
     Boolean,
     /// <summary>字符串。</summary>
     String,
+    /// <summary>定长 32 位浮点向量；维度由 <c>ColumnDefinition.VectorDimension</c> 声明（PR #58 b）。</summary>
+    Vector,
 }
 
 /// <summary>SQL 层支持的二元运算符。</summary>

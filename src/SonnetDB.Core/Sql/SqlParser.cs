@@ -118,6 +118,7 @@ public sealed class SqlParser
         var columnName = ExpectIdentifierName();
         ColumnKind kind;
         SqlDataType dataType;
+        int? vectorDim = null;
         switch (Current.Kind)
         {
             case TokenKind.KeywordTag:
@@ -138,13 +139,13 @@ public sealed class SqlParser
             case TokenKind.KeywordField:
                 Advance();
                 kind = ColumnKind.Field;
-                dataType = ParseDataType();
+                (dataType, vectorDim) = ParseFieldDataType();
                 break;
 
             default:
                 throw Error("期望 TAG 或 FIELD");
         }
-        return new ColumnDefinition(columnName, kind, dataType);
+        return new ColumnDefinition(columnName, kind, dataType, vectorDim);
     }
 
     private SqlDataType ParseDataType()
@@ -160,9 +161,32 @@ public sealed class SqlParser
         }
     }
 
+    /// <summary>
+    /// 解析 FIELD 列数据类型，特别支持 <c>VECTOR(dim)</c> 形式（PR #58 b）。
+    /// </summary>
+    private (SqlDataType DataType, int? VectorDim) ParseFieldDataType()
+    {
+        if (Current.Kind != TokenKind.KeywordVector)
+            return (ParseDataType(), null);
+
+        var vecPos = Current.Position;
+        Advance();
+        Expect(TokenKind.LeftParen);
+        if (Current.Kind != TokenKind.IntegerLiteral)
+            throw Error("VECTOR 必须声明维度，例如 VECTOR(384)");
+        long dimLong = Current.IntegerValue;
+        Advance();
+        Expect(TokenKind.RightParen);
+        if (dimLong <= 0 || dimLong > int.MaxValue)
+            throw new SqlParseException(
+                $"VECTOR 维度必须为正且不超过 Int32.MaxValue，实际为 {dimLong}", vecPos);
+        return (SqlDataType.Vector, (int)dimLong);
+    }
+
     private static bool IsDataTypeKeyword(TokenKind kind)
         => kind is TokenKind.KeywordFloat or TokenKind.KeywordInt
-                or TokenKind.KeywordBool or TokenKind.KeywordString;
+                or TokenKind.KeywordBool or TokenKind.KeywordString
+                or TokenKind.KeywordVector;
 
     // ── INSERT INTO ────────────────────────────────────────────────────────
 
@@ -539,6 +563,8 @@ public sealed class SqlParser
                 var inner = ParseExpression();
                 Expect(TokenKind.RightParen);
                 return inner;
+            case TokenKind.LeftBracket:
+                return ParseVectorLiteral();
             case TokenKind.KeywordTime:
                 // time 既可以作为列名（time >= 100），也可以作为函数（time(1m)）；
                 // 看下一个 token 是否为 '(' 决定。
@@ -589,6 +615,62 @@ public sealed class SqlParser
         }
         Expect(TokenKind.RightParen);
         return new FunctionCallExpression(name, args);
+    }
+
+    /// <summary>
+    /// 解析向量字面量 <c>[v0, v1, v2, ...]</c>（PR #58 b）。
+    /// 仅接受数值字面量（INT / FLOAT，可带 <c>+/-</c> 前缀）；至少包含 1 个元素。
+    /// </summary>
+    private VectorLiteralExpression ParseVectorLiteral()
+    {
+        var startPos = Current.Position;
+        Expect(TokenKind.LeftBracket);
+        if (Current.Kind == TokenKind.RightBracket)
+            throw new SqlParseException("向量字面量至少需要 1 个元素", startPos);
+
+        var components = new List<double>();
+        components.Add(ParseVectorComponent());
+        while (Current.Kind == TokenKind.Comma)
+        {
+            Advance();
+            components.Add(ParseVectorComponent());
+        }
+        Expect(TokenKind.RightBracket);
+        return new VectorLiteralExpression(components);
+    }
+
+    /// <summary>
+    /// 解析向量字面量内部的单个分量：可选 <c>+/-</c> + INT/FLOAT 字面量。
+    /// </summary>
+    private double ParseVectorComponent()
+    {
+        int sign = 1;
+        if (Current.Kind == TokenKind.Minus)
+        {
+            sign = -1;
+            Advance();
+        }
+        else if (Current.Kind == TokenKind.Plus)
+        {
+            Advance();
+        }
+        switch (Current.Kind)
+        {
+            case TokenKind.IntegerLiteral:
+                {
+                    long iv = Current.IntegerValue;
+                    Advance();
+                    return sign * (double)iv;
+                }
+            case TokenKind.FloatLiteral:
+                {
+                    double dv = Current.DoubleValue;
+                    Advance();
+                    return sign * dv;
+                }
+            default:
+                throw Error("向量字面量分量必须是数值字面量");
+        }
     }
 
     // ── 工具方法 ────────────────────────────────────────────────────────────

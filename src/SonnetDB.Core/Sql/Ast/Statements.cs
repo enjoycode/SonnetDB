@@ -16,10 +16,14 @@ public sealed record CreateMeasurementStatement(
 /// <param name="Name">列名。</param>
 /// <param name="Kind">Tag 或 Field。</param>
 /// <param name="DataType">列数据类型；Tag 列固定为 <see cref="SqlDataType.String"/>。</param>
+/// <param name="VectorDimension">
+/// 向量列的维度（仅当 <see cref="DataType"/> 为 <see cref="SqlDataType.Vector"/> 时非 <c>null</c>，且 &gt; 0）。
+/// </param>
 public sealed record ColumnDefinition(
     string Name,
     ColumnKind Kind,
-    SqlDataType DataType);
+    SqlDataType DataType,
+    int? VectorDimension = null);
 
 /// <summary>
 /// <c>INSERT INTO measurement (col, ...) VALUES (v, ...), (...)</c>。

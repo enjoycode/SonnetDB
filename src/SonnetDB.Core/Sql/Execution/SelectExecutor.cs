@@ -490,6 +490,7 @@ internal static class SelectExecutor
         FieldType.Int64 => v.AsLong(),
         FieldType.Boolean => v.AsBool(),
         FieldType.String => v.AsString(),
+        FieldType.Vector => v.AsVector().ToArray(),
         _ => throw new InvalidOperationException($"不支持的 FieldType {v.Type}。"),
     };
 
