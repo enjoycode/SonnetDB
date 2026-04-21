@@ -314,7 +314,7 @@ public sealed class QueryEngine
         var buckets = new Dictionary<long, AggregateState>();
         AddDecodedPointsToBuckets(memSlice, query.BucketSizeMs, buckets);
         AddSegmentBlocksToBuckets(
-            candidates, readers, memFieldType, query.Range, query.BucketSizeMs, buckets);
+            candidates, readers, memFieldType, query.Range, query.BucketSizeMs, query.Aggregator, buckets);
 
         if (buckets.Count == 0)
             return Array.Empty<AggregateBucket>();
@@ -460,6 +460,7 @@ public sealed class QueryEngine
         FieldType? memFieldType,
         TimeRange range,
         long bucketSizeMs,
+        Aggregator aggregator,
         Dictionary<long, AggregateState> buckets)
     {
         foreach (var blockRef in candidates)
@@ -468,6 +469,21 @@ public sealed class QueryEngine
 
             if (!readers.TryGetValue(blockRef.SegmentId, out var reader))
                 continue;
+
+            // 快路径：block 完整落入查询范围且整体落在同一个桶内时，直接合并元数据。
+            if (TryUseAggregateMetadataForBucket(
+                    blockRef.Descriptor, range, bucketSizeMs, aggregator,
+                    out long bucketStart, out long bucketEndExclusive))
+            {
+                ref var state = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                    buckets, bucketStart, out bool exists);
+
+                if (!exists)
+                    state = new AggregateState(bucketStart, bucketEndExclusive);
+
+                state.AddMetadataBlock(blockRef.Descriptor, useObservedStart: false);
+                continue;
+            }
 
             var data = reader.ReadBlock(blockRef.Descriptor);
             AddBlockToBuckets(
@@ -553,14 +569,47 @@ public sealed class QueryEngine
         TimeRange range,
         Aggregator aggregator)
     {
-        if (!descriptor.HasAggregateMetadata)
+        if (descriptor.MinTimestamp < range.FromInclusive
+            || descriptor.MaxTimestamp > range.ToInclusive)
             return false;
 
-        if (aggregator is not (Aggregator.Count or Aggregator.Sum or Aggregator.Min or Aggregator.Max or Aggregator.Avg))
+        return aggregator switch
+        {
+            // Count 始终可用：descriptor.Count 总是有效的。
+            Aggregator.Count => true,
+            // Sum / Avg 依赖 sum 元数据。
+            Aggregator.Sum or Aggregator.Avg => descriptor.HasAggregateSumCount,
+            // Min / Max 依赖无损 min/max 元数据。
+            Aggregator.Min or Aggregator.Max => descriptor.HasAggregateMinMax,
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// 桶聚合快路径判定：仅当 block 完整落入查询范围、整体落在同一个桶内、且元数据满足聚合函数要求时返回 <c>true</c>。
+    /// </summary>
+    private static bool TryUseAggregateMetadataForBucket(
+        in BlockDescriptor descriptor,
+        TimeRange range,
+        long bucketSizeMs,
+        Aggregator aggregator,
+        out long bucketStart,
+        out long bucketEndExclusive)
+    {
+        bucketStart = 0;
+        bucketEndExclusive = 0;
+
+        if (!CanUseAggregateMetadata(descriptor, range, aggregator))
             return false;
 
-        return descriptor.MinTimestamp >= range.FromInclusive
-            && descriptor.MaxTimestamp <= range.ToInclusive;
+        long startBucket = TimeBucket.Floor(descriptor.MinTimestamp, bucketSizeMs);
+        long endBucket = TimeBucket.Floor(descriptor.MaxTimestamp, bucketSizeMs);
+        if (startBucket != endBucket)
+            return false;
+
+        bucketStart = startBucket;
+        bucketEndExclusive = startBucket + bucketSizeMs;
+        return true;
     }
 
     private static void AddValueToBucket(
@@ -688,14 +737,24 @@ public sealed class QueryEngine
             if (useObservedStart && descriptor.MinTimestamp < BucketStart)
                 BucketStart = descriptor.MinTimestamp;
 
-            if (Count == 0)
+            // First/Last 不会走元数据快路径（ShouldUsePointAggregatePath 已强制走点路径），
+            // 因此这里仅在两个标记集都满足时维护 First/Last 的“最佳近似”，否则保持不变。
+            if (Count == 0 && descriptor.HasAggregateMinMax)
                 FirstValue = descriptor.AggregateMin;
 
-            LastValue = descriptor.AggregateMax;
+            if (descriptor.HasAggregateMinMax)
+                LastValue = descriptor.AggregateMax;
+
             Count += descriptor.Count;
-            Sum += descriptor.AggregateSum;
-            if (descriptor.AggregateMin < Min) Min = descriptor.AggregateMin;
-            if (descriptor.AggregateMax > Max) Max = descriptor.AggregateMax;
+
+            if (descriptor.HasAggregateSumCount)
+                Sum += descriptor.AggregateSum;
+
+            if (descriptor.HasAggregateMinMax)
+            {
+                if (descriptor.AggregateMin < Min) Min = descriptor.AggregateMin;
+                if (descriptor.AggregateMax > Max) Max = descriptor.AggregateMax;
+            }
         }
 
         public readonly AggregateBucket ToBucket(Aggregator aggregator)

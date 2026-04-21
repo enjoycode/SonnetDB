@@ -44,16 +44,22 @@ public readonly struct BlockDescriptor
     /// <summary>BlockHeader 中记录的 CRC32 校验值。</summary>
     public uint Crc32 { get; init; }
 
-    /// <summary>是否持久化了数值聚合元数据。</summary>
-    public bool HasAggregateMetadata { get; init; }
+    /// <summary>是否持久化了可信的 Sum/Count 元数据（对应 BlockHeader.HasSumCount 标记）。</summary>
+    public bool HasAggregateSumCount { get; init; }
 
-    /// <summary>数值聚合的 Sum（统一按 double 存储）。</summary>
+    /// <summary>是否持久化了无损的 Min/Max 元数据（对应 BlockHeader.HasMinMax 标记）。</summary>
+    public bool HasAggregateMinMax { get; init; }
+
+    /// <summary>是否持久化了任意聚合元数据（兼容旧字段名，等价于 <see cref="HasAggregateSumCount"/> 或 <see cref="HasAggregateMinMax"/> 之一为真）。</summary>
+    public bool HasAggregateMetadata => HasAggregateSumCount || HasAggregateMinMax;
+
+    /// <summary>数值聚合的 Sum（仅当 <see cref="HasAggregateSumCount"/> 为真时有效）。</summary>
     public double AggregateSum { get; init; }
 
-    /// <summary>数值聚合的 Min（统一按 double 暴露）。</summary>
+    /// <summary>数值聚合的 Min（仅当 <see cref="HasAggregateMinMax"/> 为真时有效）。</summary>
     public double AggregateMin { get; init; }
 
-    /// <summary>数值聚合的 Max（统一按 double 暴露）。</summary>
+    /// <summary>数值聚合的 Max（仅当 <see cref="HasAggregateMinMax"/> 为真时有效）。</summary>
     public double AggregateMax { get; init; }
 
     /// <summary>字段名 UTF-8 编码的字节数（跟在 BlockHeader 之后）。</summary>

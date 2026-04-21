@@ -1,4 +1,8 @@
 <Solution>
+  <Folder Name="/eng/">
+    <Project Path="eng/benchmarks/run-benchmarks/run-benchmarks.csproj" />
+    <Project Path="eng/benchmarks/start-benchmark-env/start-benchmark-env.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/TSLite.Cli/TSLite.Cli.csproj" />
     <Project Path="src/TSLite.Data/TSLite.Data.csproj" />

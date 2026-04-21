@@ -5,7 +5,7 @@
 
 | 数据库 | 类型 | 说明 |
 |--------|------|------|
-| **TSLite** | 内存占位 | 当前处于 Milestone 0，尚未实现持久化，结果代表纯内存操作基线 |
+| **TSLite** | 嵌入式时序数据库 | 真实引擎路径，覆盖 WAL、MemTable、Segment、查询、聚合与 Compaction |
 | **SQLite** | 嵌入式关系数据库 | 文件模式，WAL 日志，事务批量提交 |
 | **InfluxDB 2.x** | 时序数据库 | Line Protocol 写入，Flux 查询 |
 | **TDengine 3.x** | 时序数据库 | REST API，超级表模型 |
@@ -14,19 +14,51 @@
 
 ## 快速开始
 
-### 1. 启动外部数据库（Docker）
+### 1. 一键运行（推荐）
 
 ```bash
-docker compose -f tests/TSLite.Benchmarks/docker/docker-compose.yml up -d
+dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --filter *
 ```
 
-等待容器健康检查通过后再运行基准（约 10–30 秒）：
+该入口会先调用 `start-benchmark-env.csproj` 执行 `docker compose build`、`docker compose up -d`，等待 `tslite-server`、InfluxDB、TDengine 三个容器健康检查通过后，再以 Release 模式运行 BenchmarkDotNet。
+
+常用筛选：
 
 ```bash
-docker compose -f tests/TSLite.Benchmarks/docker/docker-compose.yml ps
+# 仅运行写入基准
+dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --filter *Insert*
+
+# 仅运行查询基准
+dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --filter *Query*
+
+# 仅运行聚合基准
+dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --filter *Aggregate*
+
+# 仅运行压缩（Compaction）基准
+dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --filter *Compaction*
 ```
 
-### 2. 运行基准测试
+### 2. 单独管理 Docker 环境
+
+只构建并启动外部数据库/服务端：
+
+```bash
+dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.csproj --
+```
+
+重置卷后重新启动：
+
+```bash
+dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.csproj -- --reset-volumes
+```
+
+停止并删除卷：
+
+```bash
+dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.csproj -- --down --remove-volumes
+```
+
+### 3. 手工运行基准测试
 
 > **注意：** BenchmarkDotNet 必须以 Release 模式运行。
 
@@ -47,10 +79,10 @@ dotnet run -c Release --project tests/TSLite.Benchmarks -- --filter *Aggregate*
 dotnet run -c Release --project tests/TSLite.Benchmarks -- --filter *Compaction*
 ```
 
-### 3. 停止外部数据库
+### 4. 停止外部数据库
 
 ```bash
-docker compose -f tests/TSLite.Benchmarks/docker/docker-compose.yml down -v
+dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.csproj -- --down --remove-volumes
 ```
 
 ---
@@ -68,7 +100,7 @@ docker compose -f tests/TSLite.Benchmarks/docker/docker-compose.yml down -v
 
 | 方法 | 说明 |
 |------|------|
-| `TSLite_Insert_1M` | 向 `List<T>` 追加（内存基线） |
+| `TSLite_Insert_1M` | 真实 `Tsdb.WriteMany` + `FlushNow` 路径（MemTable + WAL + Segment） |
 | `SQLite_Insert_1M` | 文件数据库 + WAL + 单事务批量 INSERT |
 | `InfluxDB_Insert_1M` | WriteApiAsync，10,000 条/批 Line Protocol |
 | `TDengine_Insert_1M` | REST API，1,000 条/批 SQL INSERT（显式 STable + 子表） |

@@ -99,7 +99,7 @@ public sealed class BlockHeaderTests
     public void AggregateMetadata_WriteAndRead_RoundTrip()
     {
         BlockHeader original = BlockHeader.CreateNew(1UL, 0L, 0L, 3, FieldType.Float64, 0, 0, 0);
-        original.AggregateFlags = 1;
+        original.AggregateFlags = BlockHeader.HasSumCount | BlockHeader.HasMinMax;
         original.AggregateSum = 12.5;
         original.AggregateMinBits = BitConverter.SingleToInt32Bits(1.25f);
         original.AggregateMaxBits = BitConverter.SingleToInt32Bits(9.5f);
@@ -115,5 +115,17 @@ public sealed class BlockHeaderTests
         Assert.Equal(original.AggregateSum, read.AggregateSum);
         Assert.Equal(original.AggregateMinBits, read.AggregateMinBits);
         Assert.Equal(original.AggregateMaxBits, read.AggregateMaxBits);
+        Assert.True((read.AggregateFlags & BlockHeader.HasSumCount) != 0);
+        Assert.True((read.AggregateFlags & BlockHeader.HasMinMax) != 0);
+    }
+
+    [Fact]
+    public void AggregateFlags_LegacyValueOne_MapsToSumCountOnly()
+    {
+        // 兼容性：v1 写入侧曾把 flags 直接置 1（含义为“sum/min/max 都有”，但 min/max 实为有损）。
+        // 新读取侧应把 1 解读为仅 HasSumCount，从而避免使用不可信的 min/max。
+        const short legacyFlags = 1;
+        Assert.Equal(BlockHeader.HasSumCount, legacyFlags);
+        Assert.Equal(0, legacyFlags & BlockHeader.HasMinMax);
     }
 }

@@ -5,7 +5,18 @@
 
 ## [Unreleased]
 
+### Changed
+- 完善 Block 聚合元数据语义并修复 Min/Max 精度漏洞，新增桶聚合元数据快路径：
+  - `BlockHeader.AggregateFlags` 由「0/1 单值」语义改为按位组合：`HasSumCount = 0x01`（sum/count 可信）、`HasMinMax = 0x02`（min/max 无损）。旧 v1 segment 写入的 `1` 自动等价于「仅 HasSumCount」，min/max 不会被误用，无需 Format 版本号变更（仍为 1）。
+  - `SegmentWriter` 在 Float64 时只在 `(float)min == min && (float)max == max` 时才置 `HasMinMax`，避免向 `Min`/`Max` 查询返回 float 截断后的错误值；Int64 在 min/max 落入 int32 范围时置 `HasMinMax`；sum/count 仍始终写入。
+  - `SegmentReader` 解析两个独立标志，`BlockDescriptor` 新增 `HasAggregateSumCount` / `HasAggregateMinMax`（旧 `HasAggregateMetadata` 改为派生属性）。
+  - `QueryEngine.CanUseAggregateMetadata` 改为按聚合函数挑选元数据：`Count` 始终命中（用 `descriptor.Count`），`Sum/Avg` 需 `HasAggregateSumCount`，`Min/Max` 需 `HasAggregateMinMax`。
+  - 桶聚合（`AddSegmentBlocksToBuckets`）新增元数据快路径：当 block 完整落入查询范围且 `[MinTimestamp, MaxTimestamp]` 整体落在同一个桶内时，直接合并元数据到桶状态，避免读取 payload 与逐点扫描，写入密集场景对 `SUM/COUNT/AVG/MIN/MAX` 的桶聚合直接获益。
+  - 测试：新增 4 项 `QueryEngineAggregateTests`（Float64 非可表示数的 Min/Max 精度、Sum/Avg/Count 仍走快路径、桶 SUM/MIN/MAX 命中元数据、跨桶 block 回退扫描），1 项 `BlockHeaderTests` 校验旧 `flags == 1` 的兼容映射；`TSLite.Tests` 1250/1250 + `TSLite.Server.Tests` 97/97 通过。
+  - 不修改文件二进制格式与 `FileHeader.Version`。
+
 ### Added
+- 新增跨平台 C# 基准运行入口：`eng/benchmarks/start-benchmark-env/start-benchmark-env.csproj` 负责 Docker Compose 构建、启动、健康等待与停止，`eng/benchmarks/run-benchmarks/run-benchmarks.csproj` 负责调用环境入口并运行 BenchmarkDotNet；根 README 改为嵌入 `docs/assets/benchmark-summary.svg` 基准摘要图，后续刷新性能数字时无需反复改根 README 表格。
 - **PR #49：基准刷新 + 对外对比（写入快路径专题收尾）**
   - 「写入：100 万点（单序列）」表新增 PR #47 三条服务端 LP/JSON/Bulk 端点的实测数据（1.10–1.20 s / 34–71 MB），把服务端 vs 嵌入式的写入差距从 ~33.8×（SQL Batch 路径）收敛展示到 **~1.77–1.93×**（绕开 SQL parser 路径）。
   - 「嵌入式 vs. TSLite.Server 同机对比」表把写入行拆分为 SQL Batch + LP + JSON + Bulk 四行，标注各自的额外开销与主要来源。

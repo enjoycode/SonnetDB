@@ -327,9 +327,12 @@ public sealed class SegmentWriter
                 valLen: valSpan.Length);
             bh.Crc32 = crc32;
             bh.Encoding = tsEncoding | (useV2Val ? BlockEncoding.DeltaValue : BlockEncoding.None);
-            if (TryBuildAggregateMetadata(bucket.FieldType, points.Span, out var aggregateSum, out var aggregateMin, out var aggregateMax))
+            short aggregateFlags = TryBuildAggregateMetadata(
+                bucket.FieldType, points.Span,
+                out var aggregateSum, out var aggregateMin, out var aggregateMax);
+            if (aggregateFlags != 0)
             {
-                bh.AggregateFlags = 1;
+                bh.AggregateFlags = aggregateFlags;
                 bh.AggregateSum = aggregateSum;
                 bh.AggregateMinBits = aggregateMin;
                 bh.AggregateMaxBits = aggregateMax;
@@ -358,7 +361,16 @@ public sealed class SegmentWriter
         finally { ArrayPool<byte>.Shared.Return(valBuf); }
     }
 
-    private static bool TryBuildAggregateMetadata(
+    /// <summary>
+    /// 计算给定数据点的聚合元数据。
+    /// 返回值是写入 <see cref="BlockHeader.AggregateFlags"/> 的位掩码（0 表示不写元数据）。
+    /// </summary>
+    /// <remarks>
+    /// 数值类型一律计算 <c>sum</c>（按 <see cref="double"/> 累加，与查询路径精度一致），并置 <see cref="BlockHeader.HasSumCount"/>。
+    /// 仅当 <c>min</c>/<c>max</c> 可被对应的窄类型（Float64→<see cref="float"/>，Int64→<see cref="int"/>）无损表示时才置 <see cref="BlockHeader.HasMinMax"/>，
+    /// 否则放弃 min/max 元数据以避免返回错误的查询结果。
+    /// </remarks>
+    private static short TryBuildAggregateMetadata(
         FieldType fieldType,
         ReadOnlySpan<DataPoint> points,
         out double sum,
@@ -370,7 +382,7 @@ public sealed class SegmentWriter
         maxBits = 0;
 
         if (points.IsEmpty)
-            return false;
+            return 0;
 
         switch (fieldType)
         {
@@ -386,9 +398,17 @@ public sealed class SegmentWriter
                     if (value > max) max = value;
                 }
 
-                minBits = BitConverter.SingleToInt32Bits((float)min);
-                maxBits = BitConverter.SingleToInt32Bits((float)max);
-                return true;
+                short flags = BlockHeader.HasSumCount;
+                float minF = (float)min;
+                float maxF = (float)max;
+                if ((double)minF == min && (double)maxF == max)
+                {
+                    minBits = BitConverter.SingleToInt32Bits(minF);
+                    maxBits = BitConverter.SingleToInt32Bits(maxF);
+                    flags |= BlockHeader.HasMinMax;
+                }
+
+                return flags;
             }
 
             case FieldType.Int64:
@@ -403,12 +423,16 @@ public sealed class SegmentWriter
                     if (value > max) max = value;
                 }
 
-                if (min < int.MinValue || min > int.MaxValue || max < int.MinValue || max > int.MaxValue)
-                    return false;
+                short flags = BlockHeader.HasSumCount;
+                if (min >= int.MinValue && min <= int.MaxValue
+                    && max >= int.MinValue && max <= int.MaxValue)
+                {
+                    minBits = (int)min;
+                    maxBits = (int)max;
+                    flags |= BlockHeader.HasMinMax;
+                }
 
-                minBits = (int)min;
-                maxBits = (int)max;
-                return true;
+                return flags;
             }
 
             case FieldType.Boolean:
@@ -425,11 +449,11 @@ public sealed class SegmentWriter
 
                 minBits = min;
                 maxBits = max;
-                return true;
+                return BlockHeader.HasSumCount | BlockHeader.HasMinMax;
             }
 
             default:
-                return false;
+                return 0;
         }
     }
 

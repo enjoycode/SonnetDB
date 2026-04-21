@@ -61,17 +61,34 @@ public struct BlockHeader
     /// <summary>字段数据类型（见 <see cref="Format.FieldType"/>）。</summary>
     public FieldType FieldType;
 
-    /// <summary>聚合元数据标记（0 = 无，1 = 含 sum/min/max）。</summary>
+    /// <summary>
+    /// 聚合元数据标记（按位组合）。
+    /// <list type="bullet">
+    ///   <item><c>0x01</c> <see cref="HasSumCount"/>: <see cref="AggregateSum"/> 已写入且对 Sum/Count/Avg 精度足够。</item>
+    ///   <item><c>0x02</c> <see cref="HasMinMax"/>: <see cref="AggregateMinBits"/> / <see cref="AggregateMaxBits"/> 为无损值，可用于 Min/Max。</item>
+    /// </list>
+    /// 老版本（仅 0/1）的 <c>1</c> 等同于 <see cref="HasSumCount"/>，min/max 精度被视为不可信。
+    /// </summary>
     public short AggregateFlags;
 
     /// <summary>数值聚合的 Sum（统一按 double 持久化）。</summary>
     public double AggregateSum;
 
-    /// <summary>数值聚合的 Min 位模式（float 用 double 截断存储，int/bool 用 int32 数值）。</summary>
+    /// <summary>
+    /// 数值聚合的 Min 位模式（仅当 <see cref="HasMinMax"/> 置位时有效）。
+    /// Float64 字段使用 <see cref="BitConverter.SingleToInt32Bits(float)"/>（写入侧已校验无精度损失），
+    /// Int64/Boolean 直接为 int32 数值。
+    /// </summary>
     public int AggregateMinBits;
 
-    /// <summary>数值聚合的 Max 位模式（float 用 double 截断存储，int/bool 用 int32 数值）。</summary>
+    /// <summary>数值聚合的 Max 位模式（编码方式同 <see cref="AggregateMinBits"/>）。</summary>
     public int AggregateMaxBits;
+
+    /// <summary><see cref="AggregateFlags"/> 的标记位：sum/count 已写入。</summary>
+    public const short HasSumCount = 0x01;
+
+    /// <summary><see cref="AggregateFlags"/> 的标记位：min/max 已无损写入。</summary>
+    public const short HasMinMax = 0x02;
 
     /// <summary>块数据 CRC32 校验值（CRC32(FieldNameUtf8 ++ TimestampPayload ++ ValuePayload)）。</summary>
     public uint Crc32;

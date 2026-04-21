@@ -388,4 +388,133 @@ public sealed class QueryEngineAggregateTests : IDisposable
         Assert.Equal(500L, result[1].BucketStart);
         Assert.Equal(1000L, result[1].BucketEndExclusive);
     }
+
+    // ── 元数据精度与快路径回归测试 ──────────────────────────────────────────
+
+    [Fact]
+    public void Execute_GlobalMin_Float64_NonRepresentable_ReturnsExactValue()
+    {
+        // 0.1 等小数无法被 float 精确表示；旧实现把 min/max 截断为 float 后写入元数据，
+        // 导致 Min/Max 查询返回错误的 0.10000000149011612 之类的值。
+        // 新实现应在不可无损降精度时跳过 min/max 元数据，回落到扫描，从而保持精度。
+        using var db = Tsdb.Open(_opts);
+
+        double[] values = { 0.1, 0.2, 0.3, 0.4, 0.5 };
+        for (int i = 0; i < values.Length; i++)
+            db.Write(MakePoint("m", (i + 1) * 100L, "v", FieldValue.FromDouble(values[i])));
+        db.FlushNow();
+
+        var entry = db.Catalog.Snapshot().First();
+
+        var minQuery = new AggregateQuery(entry.Id, "v", TimeRange.All, Aggregator.Min, 0);
+        var minResult = db.Query.Execute(minQuery).Single();
+        Assert.Equal(0.1, minResult.Value);  // 严格等于，不允许 float 截断误差
+
+        var maxQuery = new AggregateQuery(entry.Id, "v", TimeRange.All, Aggregator.Max, 0);
+        var maxResult = db.Query.Execute(maxQuery).Single();
+        Assert.Equal(0.5, maxResult.Value);
+    }
+
+    [Fact]
+    public void Execute_GlobalSum_Float64_NonRepresentable_StillUsesPersistedSum()
+    {
+        // 即便 min/max 元数据被跳过，sum 元数据仍应写入，Sum/Avg/Count 走快路径。
+        // 该用例只校验数值正确，性能由基准测试覆盖。
+        using var db = Tsdb.Open(_opts);
+
+        double[] values = { 0.1, 0.2, 0.3 };
+        for (int i = 0; i < values.Length; i++)
+            db.Write(MakePoint("m", (i + 1) * 100L, "v", FieldValue.FromDouble(values[i])));
+        db.FlushNow();
+
+        var entry = db.Catalog.Snapshot().First();
+        var sumResult = db.Query.Execute(
+            new AggregateQuery(entry.Id, "v", TimeRange.All, Aggregator.Sum, 0)).Single();
+        Assert.Equal(0.6, sumResult.Value, precision: 9);
+
+        var avgResult = db.Query.Execute(
+            new AggregateQuery(entry.Id, "v", TimeRange.All, Aggregator.Avg, 0)).Single();
+        Assert.Equal(0.2, avgResult.Value, precision: 9);
+
+        var countResult = db.Query.Execute(
+            new AggregateQuery(entry.Id, "v", TimeRange.All, Aggregator.Count, 0)).Single();
+        Assert.Equal(3L, countResult.Count);
+    }
+
+    [Fact]
+    public void Execute_BucketAgg_Sum_AfterFlush_UsesPerBlockMetadataFastPath()
+    {
+        // 桶大小 1000ms，每 100ms 一个 int64 点，每桶 10 个点；写入并 Flush 后单 block 整体落入单桶，
+        // 应走桶聚合元数据快路径并返回正确结果。
+        using var db = Tsdb.Open(_opts);
+
+        for (int bucket = 0; bucket < 3; bucket++)
+            for (int j = 0; j < 10; j++)
+            {
+                long ts = bucket * 1000L + j * 100L;
+                db.Write(MakePoint("m", ts, "v", FieldValue.FromLong(bucket * 100L + j)));
+            }
+        db.FlushNow();
+
+        var entry = db.Catalog.Snapshot().First();
+        var q = new AggregateQuery(entry.Id, "v", TimeRange.All, Aggregator.Sum, 1000L);
+        var result = db.Query.Execute(q).ToList();
+
+        Assert.Equal(3, result.Count);
+        // 桶 0: 0+1+...+9 = 45
+        // 桶 1: 100+101+...+109 = 1045
+        // 桶 2: 200+201+...+209 = 2045
+        Assert.Equal(45.0, result[0].Value, precision: 9);
+        Assert.Equal(1045.0, result[1].Value, precision: 9);
+        Assert.Equal(2045.0, result[2].Value, precision: 9);
+    }
+
+    [Fact]
+    public void Execute_BucketAgg_MinMax_AfterFlush_UsesPerBlockMetadataFastPath()
+    {
+        // Int64 在 int32 范围内时 min/max 元数据无损，桶快路径应使用并返回正确值。
+        using var db = Tsdb.Open(_opts);
+
+        for (int bucket = 0; bucket < 2; bucket++)
+            for (int j = 0; j < 5; j++)
+            {
+                long ts = bucket * 1000L + j * 100L;
+                db.Write(MakePoint("m", ts, "v", FieldValue.FromLong(bucket * 10L + j)));
+            }
+        db.FlushNow();
+
+        var entry = db.Catalog.Snapshot().First();
+        var minResult = db.Query.Execute(
+            new AggregateQuery(entry.Id, "v", TimeRange.All, Aggregator.Min, 1000L)).ToList();
+        Assert.Equal(2, minResult.Count);
+        Assert.Equal(0.0, minResult[0].Value, precision: 9);    // 桶 0 min
+        Assert.Equal(10.0, minResult[1].Value, precision: 9);   // 桶 1 min
+
+        var maxResult = db.Query.Execute(
+            new AggregateQuery(entry.Id, "v", TimeRange.All, Aggregator.Max, 1000L)).ToList();
+        Assert.Equal(2, maxResult.Count);
+        Assert.Equal(4.0, maxResult[0].Value, precision: 9);    // 桶 0 max
+        Assert.Equal(14.0, maxResult[1].Value, precision: 9);   // 桶 1 max
+    }
+
+    [Fact]
+    public void Execute_BucketAgg_BlockSpansMultipleBuckets_FallsBackToScan()
+    {
+        // 当 block 横跨多个桶时桶快路径不能用，必须回退到扫描；结果仍要正确。
+        using var db = Tsdb.Open(_opts);
+
+        // 5 个点跨 0..2000 的范围，桶大小 500 → 跨多个桶
+        long[] timestamps = { 0L, 500L, 1000L, 1500L, 2000L };
+        for (int i = 0; i < timestamps.Length; i++)
+            db.Write(MakePoint("m", timestamps[i], "v", FieldValue.FromLong(i + 1)));
+        db.FlushNow();
+
+        var entry = db.Catalog.Snapshot().First();
+        var q = new AggregateQuery(entry.Id, "v", TimeRange.All, Aggregator.Sum, 500L);
+        var result = db.Query.Execute(q).ToList();
+
+        Assert.Equal(5, result.Count);
+        for (int i = 0; i < 5; i++)
+            Assert.Equal((double)(i + 1), result[i].Value, precision: 9);
+    }
 }
