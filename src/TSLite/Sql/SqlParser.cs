@@ -218,7 +218,31 @@ public sealed class SqlParser
         Expect(TokenKind.KeywordSelect);
         var projections = ParseSelectList();
         Expect(TokenKind.KeywordFrom);
-        var measurement = ExpectIdentifierName();
+
+        // FROM 后允许两种形式：
+        //   1) 普通 measurement 标识符
+        //   2) 表值函数调用，例如 forecast(measurement, field, horizon, 'algo'[, season])
+        string measurement;
+        FunctionCallExpression? tvf = null;
+        if (Current.Kind == TokenKind.IdentifierLiteral
+            && _index + 1 < _tokens.Count
+            && _tokens[_index + 1].Kind == TokenKind.LeftParen)
+        {
+            var name = Current.Text;
+            Advance();
+            var fnCall = ParseFunctionCallTail(name);
+            if (fnCall is not FunctionCallExpression call || call.IsStar)
+                throw Error("FROM 子句的表值函数调用非法");
+            tvf = call;
+            // 第一个参数必须是 source measurement 标识符
+            if (call.Arguments.Count == 0 || call.Arguments[0] is not IdentifierExpression sourceId)
+                throw Error($"表值函数 {name}(...) 第 1 个参数必须是 measurement 列名");
+            measurement = sourceId.Name;
+        }
+        else
+        {
+            measurement = ExpectIdentifierName();
+        }
 
         SqlExpression? where = null;
         if (Current.Kind == TokenKind.KeywordWhere)
@@ -235,7 +259,7 @@ public sealed class SqlParser
             groupBy = ParseGroupByList();
         }
 
-        return new SelectStatement(projections, measurement, where, groupBy);
+        return new SelectStatement(projections, measurement, where, groupBy, tvf);
     }
 
     private IReadOnlyList<SelectItem> ParseSelectList()

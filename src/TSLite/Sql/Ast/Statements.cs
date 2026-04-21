@@ -36,14 +36,16 @@ public sealed record InsertStatement(
 /// <c>SELECT projections FROM measurement [WHERE expr] [GROUP BY expr, ...]</c>。
 /// </summary>
 /// <param name="Projections">投影列表，可包含 <c>*</c> / 函数 / 列引用。</param>
-/// <param name="Measurement">目标 measurement 名称。</param>
+/// <param name="Measurement">目标 measurement 名称（FROM 是 TVF 时为 TVF 推断的 source measurement，例如 <c>forecast(meter, ...)</c> → <c>meter</c>）。</param>
 /// <param name="Where">可选 WHERE 表达式。</param>
 /// <param name="GroupBy">GROUP BY 表达式列表；当未指定 GROUP BY 时为空集合（不为 <c>null</c>）。</param>
+/// <param name="TableValuedFunction">FROM 子句若为表值函数调用（PR #55 起的 forecast 等）则非 <c>null</c>，否则 <c>null</c>。</param>
 public sealed record SelectStatement(
     IReadOnlyList<SelectItem> Projections,
     string Measurement,
     SqlExpression? Where,
-    IReadOnlyList<SqlExpression> GroupBy) : SqlStatement;
+    IReadOnlyList<SqlExpression> GroupBy,
+    FunctionCallExpression? TableValuedFunction = null) : SqlStatement;
 
 /// <summary>SELECT 投影项。</summary>
 /// <param name="Expression">投影表达式（可能为 <see cref="StarExpression"/>）。</param>

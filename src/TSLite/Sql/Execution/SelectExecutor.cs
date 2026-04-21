@@ -3,6 +3,7 @@ using TSLite.Engine;
 using TSLite.Model;
 using TSLite.Query;
 using TSLite.Query.Functions;
+using TSLite.Query.Functions.Forecasting;
 using TSLite.Sql.Ast;
 using TSLite.Storage.Format;
 
@@ -16,6 +17,9 @@ internal static class SelectExecutor
 {
     public static SelectExecutionResult Execute(Tsdb tsdb, SelectStatement statement)
     {
+        if (statement.TableValuedFunction is not null)
+            return TableValuedFunctionExecutor.Execute(tsdb, statement);
+
         var schema = tsdb.Measurements.TryGet(statement.Measurement)
             ?? throw new InvalidOperationException(
                 $"Measurement '{statement.Measurement}' 不存在；请先执行 CREATE MEASUREMENT。");

@@ -6,6 +6,15 @@
 ## [Unreleased]
 
 ### Added
+- **Milestone 12 — PR #55：Tier 4 Forecast TVF + 异常 / 变点检测**
+  - 新增公开类型 `TSLite.Query.Functions.Forecasting.TimeSeriesForecaster`：纯 C#、零外部依赖的预测库 API，提供 `Forecast(long[] timestampsMs, double[] values, int horizon, ForecastAlgorithm algorithm, int season = 0)`，输出 `ForecastPoint[] (TimestampMs, Value, Lower, Upper)`；支持 **线性最小二乘外推** 与 **Holt / Holt-Winters 三次指数平滑（加性季节）**，置信区间按残差 RMSE × $z_{0.975}$ × $\sqrt{h+1}$ 给出。
+  - 新增 SQL 表值函数 `forecast(measurement, field, horizon, 'algo'[, season])`：在 `FROM` 子句中作为数据源，按 measurement / FIELD 拉取历史数据并按 series 维度独立预测；输出列 `(time, value, lower, upper, ...tag_columns)`。Parser 在 `ParseSelect()` 中识别 `FROM <ident>(` 调用形态并填充 `SelectStatement.TableValuedFunction`；新增 `TableValuedFunctionExecutor` 路由器：校验参数（measurement / FIELD 标识符、`horizon` 正整数字面量、`'linear'` / `'holt_winters'` / `'hw'` 算法、可选 `season` 非负整数），复用 `WhereClauseDecomposer` 处理标签过滤，按 series 调用 `TimeSeriesForecaster.Forecast` 并按预测点落行。当前要求 `SELECT *`。
+  - 新增 SQL 窗口函数 `anomaly(field, 'zscore' | 'mad' | 'iqr', threshold)`：行流→行流，输出 `bool?`；`zscore` 用样本标准差（N−1），`mad` 用 1.4826 × MAD 鲁棒尺度，`iqr` 用 0.25 / 0.75 分位线性插值 + Tukey $k$ 倍 IQR 围栏。`null` 输入透传 `null`。
+  - 新增 SQL 窗口函数 `changepoint(field, 'cusum', threshold[, drift])`：双边 CUSUM 累积和变点检测；用前 `max(5, n/4)` 个非空样本估计基线均值与样本标准差以避免变点本身污染参考；触发后累积器复位以探测下一个变点。`drift` 默认 `0.5`。
+  - `FunctionRegistry` 注册 `anomaly` 与 `changepoint` 为 Tier 3 窗口函数，与 PR #53 框架共享 `IWindowFunction` / `IWindowEvaluator` 协议。
+  - 新增 `docs/forecast.md`：完整覆盖 SQL 语法、输出列、算法公式、嵌入式库 API、局限与与 UDF 扩展的关系。
+  - 新增测试：`tests/TSLite.Tests/Query/Functions/TimeSeriesForecasterTests.cs`（7 项算法层单测：线性外推方向 / 截距、Holt-Winters 季节恢复、置信区间宽度、退化输入、空 / 单点输入边界）+ `AnomalyChangepointFunctionTests.cs`（8 项窗口函数单测：z-score / MAD / IQR 各方法、`null` 输入、常数序列、CUSUM 检测均值漂移并触发后复位）+ `tests/TSLite.Tests/Sql/SqlExecutorForecastTests.cs`（8 项 SQL 端到端：线性 / HW 预测列形态、与 WHERE 标签过滤组合、参数校验、`SELECT *` 强制、anomaly / changepoint 输出 bool 列）。
+
 - **Milestone 12 — PR #54：Tier 4 PID 控制律内置函数 + 自动整定库 API**
   - 新增公开类型 `TSLite.Query.Functions.Control.PidController`：纯 C# 离散 PID 状态机，提供 `Update(timestampMs, processVariable, setpoint)`、`Snapshot()` / `Restore(...)` 与 `Reset()`；首行只输出比例项（无 dt 参考），$\Delta t \le 0$ 时跳过 I/D 更新避免发散；状态结构 `PidControllerSnapshot { Integral, PrevError, PrevTimeMs, HasHistory }`。
   - 新增 SQL 行级窗口函数 `pid_series(field, setpoint, kp, ki, kd)`（`IWindowFunction`）：与 PR #53 窗口算子框架共享 `Compute(long[] timestamps, FieldValue?[] values)` 协议，按 series 独立维护控制器实例；`null` 输入透传 `null` 输出且不推进状态。

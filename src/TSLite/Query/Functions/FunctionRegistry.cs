@@ -138,6 +138,9 @@ public static class FunctionRegistry
         new StateDurationFunction(),
         // Tier 4 — PID 行级控制律（PR #54）
         new PidSeriesFunction(),
+        // Tier 4 — 异常 / 变点检测（PR #55）
+        new AnomalyFunction(),
+        new ChangepointFunction(),
     ];
 
     private static IReadOnlyDictionary<string, TFunction> CreateFunctionsByName<TFunction>(TFunction[] functions)
