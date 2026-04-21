@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 
 return await BenchmarkEnvironmentScript.RunAsync(args);
 
@@ -6,9 +6,9 @@ static class BenchmarkEnvironmentScript
 {
     private static readonly string[] ContainerNames =
     [
-        "tslite-bench-server",
-        "tslite-bench-influxdb",
-        "tslite-bench-tdengine"
+        "sndb-bench-server",
+        "sndb-bench-influxdb",
+        "sndb-bench-tdengine"
     ];
 
     public static async Task<int> RunAsync(string[] args)
@@ -23,7 +23,7 @@ static class BenchmarkEnvironmentScript
             }
 
             var repoRoot = FindRepoRoot();
-            var composeFile = Path.Combine(repoRoot, "tests", "TSLite.Benchmarks", "docker", "docker-compose.yml");
+            var composeFile = Path.Combine(repoRoot, "tests", "SonnetDB.Benchmarks", "docker", "docker-compose.yml");
             var compose = await ResolveDockerComposeAsync();
 
             if (options.Down)
@@ -179,7 +179,7 @@ static class BenchmarkEnvironmentScript
         var directory = new DirectoryInfo(Directory.GetCurrentDirectory());
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "TSLite.slnx")))
+            if (File.Exists(Path.Combine(directory.FullName, "SonnetDB.slnx")))
             {
                 return directory.FullName;
             }
@@ -187,7 +187,7 @@ static class BenchmarkEnvironmentScript
             directory = directory.Parent;
         }
 
-        throw new InvalidOperationException("Could not find the TSLite repository root. Run this script from inside the repository.");
+        throw new InvalidOperationException("Could not find the SonnetDB repository root. Run this script from inside the repository.");
     }
 
     private static async Task<bool> TryRunQuietAsync(string fileName, IReadOnlyList<string> arguments)

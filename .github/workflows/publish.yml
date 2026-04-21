@@ -1,4 +1,4 @@
-name: Publish
+﻿name: Publish
 
 on:
   push:
@@ -151,7 +151,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF_NAME}"
-          title="TSLite ${tag#v}"
+          title="SonnetDB ${tag#v}"
 
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --title "$title" --notes-file docs/releases/README.md

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 
 return await BenchmarkRunScript.RunAsync(args);
 
@@ -22,7 +22,7 @@ static class BenchmarkRunScript
 
             repoRoot = FindRepoRoot();
             startProject = Path.Combine(repoRoot, "eng", "benchmarks", "start-benchmark-env", "start-benchmark-env.csproj");
-            var benchmarkProject = Path.Combine(repoRoot, "tests", "TSLite.Benchmarks", "TSLite.Benchmarks.csproj");
+            var benchmarkProject = Path.Combine(repoRoot, "tests", "SonnetDB.Benchmarks", "SonnetDB.Benchmarks.csproj");
 
             if (!options.SkipEnvironment)
             {
@@ -64,9 +64,9 @@ static class BenchmarkRunScript
             benchmarkArgs.AddRange(options.ExtraBenchmarkArgs);
 
             var environment = new Dictionary<string, string?>();
-            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TSLITE_BENCH_TOKEN")))
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SONNETDB_BENCH_TOKEN")))
             {
-                environment["TSLITE_BENCH_TOKEN"] = "bench-admin-token";
+                environment["SONNETDB_BENCH_TOKEN"] = "bench-admin-token";
             }
 
             await RunCommandAsync("dotnet", benchmarkArgs, repoRoot, environment);
@@ -140,7 +140,7 @@ static class BenchmarkRunScript
         var directory = new DirectoryInfo(Directory.GetCurrentDirectory());
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "TSLite.slnx")))
+            if (File.Exists(Path.Combine(directory.FullName, "SonnetDB.slnx")))
             {
                 return directory.FullName;
             }
@@ -148,7 +148,7 @@ static class BenchmarkRunScript
             directory = directory.Parent;
         }
 
-        throw new InvalidOperationException("Could not find the TSLite repository root. Run this script from inside the repository.");
+        throw new InvalidOperationException("Could not find the SonnetDB repository root. Run this script from inside the repository.");
     }
 
     private static async Task RunCommandAsync(

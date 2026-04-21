@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet('nuget', 'bundles', 'installers', 'all')]
     [string[]]$Tasks = @('all'),
     [string]$Version = '0.1.0',
@@ -40,9 +40,9 @@ function Pack-NuGetPackages
     Write-Section "Packing NuGet packages"
     Reset-Directory $NuGetOutput
 
-    Invoke-DotNetPack 'src/TSLite/TSLite.csproj' $NuGetOutput
-    Invoke-DotNetPack 'src/TSLite.Data/TSLite.Data.csproj' $NuGetOutput
-    Invoke-DotNetPack 'src/TSLite.Cli/TSLite.Cli.csproj' $NuGetOutput
+    Invoke-DotNetPack 'src/SonnetDB/SonnetDB.csproj' $NuGetOutput
+    Invoke-DotNetPack 'src/SonnetDB.Data/SonnetDB.Data.csproj' $NuGetOutput
+    Invoke-DotNetPack 'src/SonnetDB.Cli/SonnetDB.Cli.csproj' $NuGetOutput
 }
 
 function Publish-Binaries
@@ -61,16 +61,16 @@ function Publish-Binaries
     Ensure-Directory $cliPublishDir
     Ensure-Directory $serverPublishDir
 
-    $null = & dotnet publish (Join-Path $RepoRoot 'src/TSLite.Cli/TSLite.Cli.csproj') `
+    $null = & dotnet publish (Join-Path $RepoRoot 'src/SonnetDB.Cli/SonnetDB.Cli.csproj') `
         -c $Configuration `
         -r $TargetRid `
         -p:PublishAot=true `
         -p:Version=$Version `
         -o $cliPublishDir `
         /warnaserror
-    Assert-LastExitCode "dotnet publish TSLite.Cli ($TargetRid)"
+    Assert-LastExitCode "dotnet publish SonnetDB.Cli ($TargetRid)"
 
-    $null = & dotnet publish (Join-Path $RepoRoot 'src/TSLite.Server/TSLite.Server.csproj') `
+    $null = & dotnet publish (Join-Path $RepoRoot 'src/SonnetDB/SonnetDB.csproj') `
         -c $Configuration `
         -r $TargetRid `
         -p:PublishAot=true `
@@ -78,7 +78,7 @@ function Publish-Binaries
         -p:BuildAdminUi=$($BuildAdminUi.IsPresent.ToString().ToLowerInvariant()) `
         -o $serverPublishDir `
         /warnaserror
-    Assert-LastExitCode "dotnet publish TSLite.Server ($TargetRid)"
+    Assert-LastExitCode "dotnet publish SonnetDB ($TargetRid)"
 
     return @{
         CliPublishDir = $cliPublishDir
@@ -95,7 +95,7 @@ function New-SdkBundle
         [string]$CliPublishDir
     )
 
-    $bundleName = "tslite-sdk-$Version-$TargetRid"
+    $bundleName = "sndb-sdk-$Version-$TargetRid"
     $bundleRoot = Join-Path $OutputRoot "staging\$TargetRid\$bundleName"
     $bundleOutputDir = Join-Path $OutputRoot "bundles\$TargetRid"
 
@@ -138,7 +138,7 @@ function New-ServerBundle
         [string]$ServerPublishDir
     )
 
-    $bundleName = "tslite-server-full-$Version-$TargetRid"
+    $bundleName = "sonnetdb-full-$Version-$TargetRid"
     $bundleRoot = Join-Path $OutputRoot "staging\$TargetRid\$bundleName"
     $bundleOutputDir = Join-Path $OutputRoot "bundles\$TargetRid"
 
@@ -151,7 +151,7 @@ function New-ServerBundle
     $cliDir = Join-Path $bundleRoot 'cli'
     $packagesDir = Join-Path $bundleRoot 'packages'
     $docsDir = Join-Path $bundleRoot 'docs'
-    $systemDir = Join-Path $bundleRoot 'tslite-data\.system'
+    $systemDir = Join-Path $bundleRoot 'sonnetdb-data\.system'
 
     Ensure-Directory $cliDir
     Ensure-Directory $packagesDir
@@ -253,11 +253,11 @@ function Update-ServerBundleAppSettings
     }
 
     $json = Get-Content -LiteralPath $AppSettingsPath -Raw | ConvertFrom-Json
-    $json.TSLiteServer.DataRoot = './tslite-data'
-    $json.TSLiteServer.AutoLoadExistingDatabases = $true
-    $json.TSLiteServer.AllowAnonymousProbes = $true
-    $json.TSLiteServer.Tokens = [ordered]@{
-        'tslite-admin-token' = 'admin'
+    $json.SonnetDBServer.DataRoot = './sonnetdb-data'
+    $json.SonnetDBServer.AutoLoadExistingDatabases = $true
+    $json.SonnetDBServer.AllowAnonymousProbes = $true
+    $json.SonnetDBServer.Tokens = [ordered]@{
+        'sonnetdb-admin-token' = 'admin'
     }
 
     $json | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $AppSettingsPath -Encoding utf8
@@ -319,19 +319,19 @@ function Write-CliLaunchers
 
     if ($TargetRid -eq 'win-x64')
     {
-        Set-Content -LiteralPath (Join-Path $RootDir 'tslite.cmd') -Encoding ascii -Value @'
+        Set-Content -LiteralPath (Join-Path $RootDir 'sndb.cmd') -Encoding ascii -Value @'
 @echo off
 setlocal
-"%~dp0cli\TSLite.Cli.exe" %*
+"%~dp0cli\SonnetDB.Cli.exe" %*
 '@
         return
     }
 
-    Set-Content -LiteralPath (Join-Path $RootDir 'tslite') -Encoding utf8 -Value @'
+    Set-Content -LiteralPath (Join-Path $RootDir 'sndb') -Encoding utf8 -Value @'
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$SCRIPT_DIR/cli/TSLite.Cli" "$@"
+exec "$SCRIPT_DIR/cli/SonnetDB.Cli" "$@"
 '@
 }
 
@@ -346,15 +346,15 @@ function Write-ServerLaunchers
 
     if ($TargetRid -eq 'win-x64')
     {
-        Set-Content -LiteralPath (Join-Path $RootDir 'start-tslite-server.cmd') -Encoding ascii -Value @"
+        Set-Content -LiteralPath (Join-Path $RootDir 'start-sonnetdb.cmd') -Encoding ascii -Value @"
 @echo off
 setlocal
 cd /d "%~dp0"
-echo TSLite.Server $Version
+echo SonnetDB $Version
 echo URL: http://127.0.0.1:5080/admin
 echo Admin: admin / Admin123!
-echo Bearer token: tslite-admin-token
-".\TSLite.Server.exe"
+echo Bearer token: sonnetdb-admin-token
+".\SonnetDB.exe"
 "@
         return
     }
@@ -364,14 +364,14 @@ echo Bearer token: tslite-admin-token
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-echo "TSLite.Server __VERSION__"
+echo "SonnetDB __VERSION__"
 echo "URL: http://127.0.0.1:5080/admin"
 echo "Admin: admin / Admin123!"
-echo "Bearer token: tslite-admin-token"
-exec "$SCRIPT_DIR/TSLite.Server"
+echo "Bearer token: sonnetdb-admin-token"
+exec "$SCRIPT_DIR/SonnetDB"
 '@.Replace('__VERSION__', $Version)
 
-    Set-Content -LiteralPath (Join-Path $RootDir 'start-tslite-server.sh') -Encoding utf8 -Value $script
+    Set-Content -LiteralPath (Join-Path $RootDir 'start-sonnetdb.sh') -Encoding utf8 -Value $script
 }
 
 function Write-SdkBundleReadme
@@ -383,15 +383,15 @@ function Write-SdkBundleReadme
         [string]$TargetRid
     )
 
-    $commandLine = if ($TargetRid -eq 'win-x64') { '.\tslite.cmd' } else { './tslite' }
+    $commandLine = if ($TargetRid -eq 'win-x64') { '.\sndb.cmd' } else { './sndb' }
     $content = @'
-# TSLite SDK Bundle __VERSION__
+# SonnetDB SDK Bundle __VERSION__
 
 该目录包含：
 
-- `packages/TSLite.__VERSION__.nupkg`
-- `packages/TSLite.Data.__VERSION__.nupkg`
-- `packages/TSLite.Cli.__VERSION__.nupkg`
+- `packages/SonnetDB.__VERSION__.nupkg`
+- `packages/SonnetDB.Data.__VERSION__.nupkg`
+- `packages/SonnetDB.Cli.__VERSION__.nupkg`
 - `cli/` 原生命令行工具
 - `docs/` 发布与使用说明
 
@@ -416,11 +416,11 @@ function Write-ServerBundleReadme
         [string]$TargetRid
     )
 
-    $startCommand = if ($TargetRid -eq 'win-x64') { '.\start-tslite-server.cmd' } else { './start-tslite-server.sh' }
-    $cliCommand = if ($TargetRid -eq 'win-x64') { '.\tslite.cmd' } else { './tslite' }
+    $startCommand = if ($TargetRid -eq 'win-x64') { '.\start-sonnetdb.cmd' } else { './start-sonnetdb.sh' }
+    $cliCommand = if ($TargetRid -eq 'win-x64') { '.\sndb.cmd' } else { './sndb' }
 
     $content = @'
-# TSLite Server Full Bundle __VERSION__
+# SonnetDB Server Full Bundle __VERSION__
 
 一键启动：
 
@@ -433,12 +433,12 @@ __START__
 - 管理后台：`http://127.0.0.1:5080/admin`
 - 用户名：`admin`
 - 密码：`Admin123!`
-- Bearer Token：`tslite-admin-token`
+- Bearer Token：`sonnetdb-admin-token`
 
 CLI 示例：
 
 ```text
-__CLI__ sql --connection "Data Source=tslite+http://127.0.0.1:5080/metrics;Token=tslite-admin-token" --command "SHOW DATABASES"
+__CLI__ sql --connection "Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=sonnetdb-admin-token" --command "SHOW DATABASES"
 ```
 '@
 
@@ -461,13 +461,13 @@ function Set-BundleExecutableBits
         return
     }
 
-    & chmod +x (Join-Path $BundleRoot 'cli/TSLite.Cli')
-    & chmod +x (Join-Path $BundleRoot 'tslite')
+    & chmod +x (Join-Path $BundleRoot 'cli/SonnetDB.Cli')
+    & chmod +x (Join-Path $BundleRoot 'sndb')
 
     if ($IncludeServer)
     {
-        & chmod +x (Join-Path $BundleRoot 'TSLite.Server')
-        & chmod +x (Join-Path $BundleRoot 'start-tslite-server.sh')
+        & chmod +x (Join-Path $BundleRoot 'SonnetDB')
+        & chmod +x (Join-Path $BundleRoot 'start-sonnetdb.sh')
     }
 }
 
@@ -542,8 +542,8 @@ function New-MsiInstaller
     $wixWorkDir = Join-Path $InstallerOutputDir 'wix'
     Reset-Directory $wixWorkDir
 
-    $wxsPath = Join-Path $wixWorkDir 'TSLite.Server.wxs'
-    $msiPath = Join-Path $InstallerOutputDir "tslite-server-$Version-win-x64.msi"
+    $wxsPath = Join-Path $wixWorkDir 'SonnetDB.wxs'
+    $msiPath = Join-Path $InstallerOutputDir "sonnetdb-$Version-win-x64.msi"
 
     New-WixSourceFile -ServerBundleDir $ServerBundleDir -WxsPath $wxsPath
 
@@ -611,18 +611,18 @@ function New-WixSourceFile
     $componentIndex = 0
 
     $lines.Add('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
-    $lines.Add("  <Package Name=""TSLite Server"" Manufacturer=""maikebing"" Version=""$Version"" UpgradeCode=""{7B5FA3D0-9660-4D0B-BB8B-1F293BF4F4A4}"" Language=""1033"" Scope=""perMachine"">")
-    $lines.Add('    <MajorUpgrade DowngradeErrorMessage="A newer version of TSLite Server is already installed." />')
+    $lines.Add("  <Package Name=""SonnetDB Server"" Manufacturer=""maikebing"" Version=""$Version"" UpgradeCode=""{7B5FA3D0-9660-4D0B-BB8B-1F293BF4F4A4}"" Language=""1033"" Scope=""perMachine"">")
+    $lines.Add('    <MajorUpgrade DowngradeErrorMessage="A newer version of SonnetDB Server is already installed." />')
     $lines.Add('    <MediaTemplate EmbedCab="yes" />')
     $lines.Add('    <StandardDirectory Id="ProgramFiles64Folder">')
-    $lines.Add('      <Directory Id="INSTALLFOLDER" Name="TSLite Server">')
+    $lines.Add('      <Directory Id="INSTALLFOLDER" Name="SonnetDB Server">')
 
     Add-WixFileComponents -Lines $lines -ComponentRefs $componentRefs -FilesByDirectory $filesByDirectory -DirectoryRel '' -ComponentIndex ([ref]$componentIndex)
     Add-WixDirectories -Lines $lines -ComponentRefs $componentRefs -DirEntries $dirEntries -FilesByDirectory $filesByDirectory -ParentRel '' -IndentLevel 4 -ComponentIndex ([ref]$componentIndex)
 
     $lines.Add('      </Directory>')
     $lines.Add('    </StandardDirectory>')
-    $lines.Add('    <Feature Id="MainFeature" Title="TSLite Server" Level="1">')
+    $lines.Add('    <Feature Id="MainFeature" Title="SonnetDB Server" Level="1">')
     foreach ($componentRef in $componentRefs)
     {
         $lines.Add($componentRef)
@@ -722,7 +722,7 @@ function New-LinuxInstallers
     $escapedBundlePath = ConvertTo-YamlLiteral $bundlePath
 
     $yaml = @"
-name: tslite-server
+name: sonnetdb
 arch: amd64
 platform: linux
 version: $Version
@@ -730,25 +730,25 @@ section: database
 priority: optional
 maintainer: maikebing
 description: |
-  TSLite.Server full bundle with embedded admin UI, CLI and default local bootstrap credentials.
-homepage: https://github.com/maikebing/TSLite
+  SonnetDB full bundle with embedded admin UI, CLI and default local bootstrap credentials.
+homepage: https://github.com/maikebing/SonnetDB
 license: MIT
 contents:
   - src: '$escapedBundlePath'
-    dst: /opt/tslite-server
+    dst: /opt/sonnetdb
     type: tree
-  - src: /opt/tslite-server/start-tslite-server.sh
-    dst: /usr/bin/tslite-server
+  - src: /opt/sonnetdb/start-sonnetdb.sh
+    dst: /usr/bin/sonnetdb
     type: symlink
-  - src: /opt/tslite-server/tslite
-    dst: /usr/bin/tslite
+  - src: /opt/sonnetdb/sndb
+    dst: /usr/bin/sndb
     type: symlink
 "@
 
     Set-Content -LiteralPath $configPath -Encoding utf8 -Value $yaml
 
-    $debPath = Join-Path $InstallerOutputDir "tslite-server-$Version-linux-x64.deb"
-    $rpmPath = Join-Path $InstallerOutputDir "tslite-server-$Version-linux-x64.rpm"
+    $debPath = Join-Path $InstallerOutputDir "sonnetdb-$Version-linux-x64.deb"
+    $rpmPath = Join-Path $InstallerOutputDir "sonnetdb-$Version-linux-x64.rpm"
 
     & nfpm package --config $configPath --packager deb --target $debPath
     Assert-LastExitCode 'nfpm package deb'

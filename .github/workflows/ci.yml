@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   push:
@@ -44,13 +44,13 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Restore
-        run: dotnet restore TSLite.slnx
+        run: dotnet restore SonnetDB.slnx
 
       - name: Build
-        run: dotnet build TSLite.slnx --configuration Release --no-restore /warnaserror
+        run: dotnet build SonnetDB.slnx --configuration Release --no-restore /warnaserror
 
       - name: Test
-        run: dotnet test TSLite.slnx --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage" --results-directory ./TestResults
+        run: dotnet test SonnetDB.slnx --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage" --results-directory ./TestResults
 
       - name: Upload test results
         if: always()
@@ -71,10 +71,10 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore TSLite.slnx
+        run: dotnet restore SonnetDB.slnx
 
       - name: Format check
-        run: dotnet format TSLite.slnx --verify-no-changes --no-restore --severity warn
+        run: dotnet format SonnetDB.slnx --verify-no-changes --no-restore --severity warn
 
   aot-publish:
     name: AOT Publish (${{ matrix.os }})
@@ -103,19 +103,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      - name: Publish TSLite.Cli (Native AOT)
-        run: dotnet publish src/TSLite.Cli/TSLite.Cli.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true /warnaserror
+      - name: Publish SonnetDB.Cli (Native AOT)
+        run: dotnet publish src/SonnetDB.Cli/SonnetDB.Cli.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true /warnaserror
 
-      - name: Publish TSLite.Server (Native AOT)
-        run: dotnet publish src/TSLite.Server/TSLite.Server.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true /warnaserror
+      - name: Publish SonnetDB (Native AOT)
+        run: dotnet publish src/SonnetDB/SonnetDB.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true /warnaserror
 
       - name: Show AOT artifacts
         shell: bash
         run: |
-          echo "==== TSLite.Cli ===="
-          ls -lh src/TSLite.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/ || true
-          echo "==== TSLite.Server ===="
-          ls -lh src/TSLite.Server/bin/Release/net10.0/${{ matrix.rid }}/publish/ || true
+          echo "==== SonnetDB.Cli ===="
+          ls -lh src/SonnetDB.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/ || true
+          echo "==== SonnetDB ===="
+          ls -lh src/SonnetDB/bin/Release/net10.0/${{ matrix.rid }}/publish/ || true
 
       - name: Upload AOT artifacts
         if: always()
@@ -123,5 +123,5 @@ jobs:
         with:
           name: aot-${{ matrix.rid }}
           path: |
-            src/TSLite.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/
-            src/TSLite.Server/bin/Release/net10.0/${{ matrix.rid }}/publish/
+            src/SonnetDB.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/
+            src/SonnetDB/bin/Release/net10.0/${{ matrix.rid }}/publish/
