@@ -17,7 +17,7 @@ The current persistence model is directory-based. A database is stored as a set 
 | --- | --- |
 | `src/TSLite` | Embedded engine: schema, writes, queries, deletes, WAL, MemTable, Segment, compaction, retention |
 | `src/TSLite.Data` | ADO.NET provider for both embedded and remote modes |
-| `src/TSLite.Cli` | `tslite` CLI with `version`, `sql`, and `repl` |
+| `src/TSLite.Cli` | `tslite` CLI: local/remote connections, profile management (`local`/`remote`/`connect`), and interactive REPL |
 | `src/TSLite.Server` | HTTP server, first-run setup, auth/RBAC, SSE, admin UI, `/help` docs |
 | `web/admin` | Admin frontend |
 | `docs` | JekyllNet documentation site source, bundled into the Docker image |
