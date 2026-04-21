@@ -2,6 +2,7 @@ using TSLite.Catalog;
 using TSLite.Engine;
 using TSLite.Model;
 using TSLite.Query;
+using TSLite.Query.Functions;
 using TSLite.Sql.Ast;
 using TSLite.Storage.Format;
 
@@ -13,12 +14,6 @@ namespace TSLite.Sql.Execution;
 /// </summary>
 internal static class SelectExecutor
 {
-    /// <summary>已识别的聚合函数名集合（小写）。</summary>
-    private static readonly HashSet<string> _aggregateFunctions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "count", "sum", "avg", "min", "max", "first", "last",
-    };
-
     public static SelectExecutionResult Execute(Tsdb tsdb, SelectStatement statement)
     {
         var schema = tsdb.Measurements.TryGet(statement.Measurement)
@@ -90,7 +85,7 @@ internal static class SelectExecutor
                     break;
 
                 case FunctionCallExpression fn:
-                    if (!_aggregateFunctions.Contains(fn.Name))
+                    if (!FunctionRegistry.TryGetAggregate(fn.Name, out _))
                         throw new InvalidOperationException(
                             $"未知函数 '{fn.Name}'；v1 仅支持 count/sum/avg/min/max/first/last。");
                     var aggColumnName = item.Alias ?? FormatFunctionColumnName(fn);
@@ -325,40 +320,14 @@ internal static class SelectExecutor
         FunctionCallExpression fn,
         MeasurementSchema schema)
     {
-        var agg = fn.Name.ToLowerInvariant() switch
+        if (!FunctionRegistry.TryGetAggregate(fn.Name, out var aggregate)
+            || aggregate.LegacyAggregator is not { } legacyAggregator)
         {
-            "count" => Aggregator.Count,
-            "sum" => Aggregator.Sum,
-            "avg" => Aggregator.Avg,
-            "min" => Aggregator.Min,
-            "max" => Aggregator.Max,
-            "first" => Aggregator.First,
-            "last" => Aggregator.Last,
-            _ => throw new InvalidOperationException($"未知聚合函数 '{fn.Name}'。"),
-        };
-
-        if (fn.IsStar)
-        {
-            if (agg != Aggregator.Count)
-                throw new InvalidOperationException(
-                    $"仅 count(*) 允许 '*' 作为参数，{fn.Name}(*) 非法。");
-            return (agg, null);
+            throw new InvalidOperationException($"未知聚合函数 '{fn.Name}'。");
         }
 
-        if (fn.Arguments.Count != 1 || fn.Arguments[0] is not IdentifierExpression id)
-            throw new InvalidOperationException(
-                $"{fn.Name}(...) 必须接收一个列名作为参数。");
-
-        var col = schema.TryGetColumn(id.Name)
-            ?? throw new InvalidOperationException(
-                $"聚合函数 {fn.Name}({id.Name}) 引用了未知列。");
-        if (col.Role != MeasurementColumnRole.Field)
-            throw new InvalidOperationException(
-                $"聚合函数 {fn.Name}({id.Name}) 只能作用于 FIELD 列。");
-        if (agg != Aggregator.Count && col.DataType == FieldType.String)
-            throw new InvalidOperationException(
-                $"聚合函数 {fn.Name} 不支持 String 类型字段 '{id.Name}'。");
-        return (agg, col.Name);
+        var fieldName = aggregate.ResolveFieldName(fn, schema);
+        return (legacyAggregator, fieldName);
     }
 
     private sealed record AggSpec(string ColumnName, Aggregator Aggregator, string? FieldName)

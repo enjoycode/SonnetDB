@@ -1,16 +1,19 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+  {% assign docs_baseurl = site.docs_baseurl | default: '/help' %}
+  {% assign app_link_url = site.app_link_url | default: '/admin/' %}
+  {% assign app_link_text = site.app_link_text | default: '管理' %}
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% if page.title %}{{ page.title }} | {% endif %}TSLite Docs</title>
   <meta name="description" content="{% if page.description %}{{ page.description }}{% else %}TSLite help center{% endif %}">
-  <link rel="stylesheet" href="/help/assets/docs.css">
+  <link rel="stylesheet" href="{{ docs_baseurl }}/assets/docs.css">
 </head>
 <body>
   <div class="site-shell">
     <header class="site-header">
-      <a class="brand" href="/help/">
+      <a class="brand" href="{{ docs_baseurl }}/">
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 88 88" role="img">
             <defs>
@@ -33,33 +36,35 @@
       </a>
 
       <nav class="top-nav" aria-label="Primary">
-        <a href="/help/">概览</a>
-        <a href="/help/getting-started/">开始使用</a>
-        <a href="/help/sql-reference/">SQL</a>
-        <a href="/help/ado-net/">ADO.NET</a>
-        <a href="/help/bulk-ingest/">批量写入</a>
-        <a href="/help/architecture/">架构</a>
+        <a href="{{ docs_baseurl }}/">概览</a>
+        <a href="{{ docs_baseurl }}/getting-started/">开始使用</a>
+        <a href="{{ docs_baseurl }}/sql-reference/">SQL</a>
+        <a href="{{ docs_baseurl }}/ado-net/">ADO.NET</a>
+        <a href="{{ docs_baseurl }}/bulk-ingest/">批量写入</a>
+        <a href="{{ docs_baseurl }}/architecture/">架构</a>
       </nav>
 
       <div class="header-actions">
-        <a class="ghost-link" href="/admin/">管理</a>
+        {% if app_link_url %}
+        <a class="ghost-link" href="{{ app_link_url }}">{{ app_link_text }}</a>
+        {% endif %}
       </div>
     </header>
 
     <main class="page-shell">
       <aside class="side-nav">
         <p class="side-nav-label">Documentation</p>
-        <a href="/help/">概览</a>
-        <a href="/help/getting-started/">开始使用</a>
-        <a href="/help/data-model/">数据模型</a>
-        <a href="/help/sql-reference/">SQL 参考</a>
-        <a href="/help/embedded-api/">嵌入式与 in-proc API</a>
-        <a href="/help/ado-net/">ADO.NET 参考</a>
-        <a href="/help/cli-reference/">CLI 参考</a>
-        <a href="/help/bulk-ingest/">批量写入</a>
-        <a href="/help/architecture/">架构总览</a>
-        <a href="/help/file-format/">文件格式与目录布局</a>
-        <a href="/help/releases/">发布与打包</a>
+        <a href="{{ docs_baseurl }}/">概览</a>
+        <a href="{{ docs_baseurl }}/getting-started/">开始使用</a>
+        <a href="{{ docs_baseurl }}/data-model/">数据模型</a>
+        <a href="{{ docs_baseurl }}/sql-reference/">SQL 参考</a>
+        <a href="{{ docs_baseurl }}/embedded-api/">嵌入式与 in-proc API</a>
+        <a href="{{ docs_baseurl }}/ado-net/">ADO.NET 参考</a>
+        <a href="{{ docs_baseurl }}/cli-reference/">CLI 参考</a>
+        <a href="{{ docs_baseurl }}/bulk-ingest/">批量写入</a>
+        <a href="{{ docs_baseurl }}/architecture/">架构总览</a>
+        <a href="{{ docs_baseurl }}/file-format/">文件格式与目录布局</a>
+        <a href="{{ docs_baseurl }}/releases/">发布与打包</a>
       </aside>
 
       <article class="content-card">

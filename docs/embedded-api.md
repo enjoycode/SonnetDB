@@ -136,6 +136,6 @@ WHERE host = 'server-01' AND time >= 1713676800000 AND time <= 1713677400000
 
 ## 相关页面
 
-- [SQL 参考](/help/sql-reference/)
-- [批量写入](/help/bulk-ingest/)
-- [架构总览](/help/architecture/)
+- [SQL 参考]({{ site.docs_baseurl | default: '/help' }}/sql-reference/)
+- [批量写入]({{ site.docs_baseurl | default: '/help' }}/bulk-ingest/)
+- [架构总览]({{ site.docs_baseurl | default: '/help' }}/architecture/)

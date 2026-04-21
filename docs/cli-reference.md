@@ -96,4 +96,4 @@ CLI 与 ADO.NET 使用同一套连接字符串：
 - 本地：`Data Source=./demo-data`
 - 远程：`Data Source=tslite+http://127.0.0.1:5080/metrics;Token=...`
 
-详细说明见 [ADO.NET 参考](/help/ado-net/)。
+详细说明见 [ADO.NET 参考]({{ site.docs_baseurl | default: '/help' }}/ado-net/)。

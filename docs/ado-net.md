@@ -164,4 +164,4 @@ ADO.NET 还支持 `CommandType.TableDirect` 快路径，适合：
 - JSON points
 - `INSERT INTO ... VALUES (...)` 快路径
 
-详细示例见 [批量写入](/help/bulk-ingest/)。
+详细示例见 [批量写入]({{ site.docs_baseurl | default: '/help' }}/bulk-ingest/)。

@@ -117,7 +117,7 @@ using var db = Tsdb.Open(new TsdbOptions
 SqlExecutor.Execute(db, "CREATE MEASUREMENT cpu (host TAG, usage FIELD FLOAT)");
 ```
 
-更完整的进程内示例见 [嵌入式与 in-proc API](/help/embedded-api/)。
+更完整的进程内示例见 [嵌入式与 in-proc API]({{ site.docs_baseurl | default: '/help' }}/embedded-api/)。
 
 ## 8. ADO.NET 与 CLI
 
@@ -141,8 +141,8 @@ tslite sql --connection "Data Source=./demo-data" --command "SELECT count(*) FRO
 
 详细用法分别见：
 
-- [ADO.NET 参考](/help/ado-net/)
-- [CLI 参考](/help/cli-reference/)
+- [ADO.NET 参考]({{ site.docs_baseurl | default: '/help' }}/ado-net/)
+- [CLI 参考]({{ site.docs_baseurl | default: '/help' }}/cli-reference/)
 
 ## 常用端点
 

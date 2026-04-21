@@ -239,6 +239,6 @@ curl -X POST "http://127.0.0.1:5080/v1/db/metrics/measurements/cpu/bulk?onerror=
 
 ## 相关页面
 
-- [SQL 参考](/help/sql-reference/)
-- [ADO.NET 参考](/help/ado-net/)
-- [开始使用](/help/getting-started/)
+- [SQL 参考]({{ site.docs_baseurl | default: '/help' }}/sql-reference/)
+- [ADO.NET 参考]({{ site.docs_baseurl | default: '/help' }}/ado-net/)
+- [开始使用]({{ site.docs_baseurl | default: '/help' }}/getting-started/)

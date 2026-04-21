@@ -6,6 +6,17 @@
 ## [Unreleased]
 
 ### Added
+- **PR #37b：GitHub Pages 文档自动发布**
+  - 新增 `.github/workflows/docs-pages.yml`：在 `main` 分支文档变更或手动触发时，自动执行 `dotnet tool restore` + `jekyllnet build`，并通过 GitHub Pages 官方 Actions 上传和部署静态文档站点。
+  - Pages 构建阶段会基于仓库名动态注入文档基址（例如 `/TSLite`），因此无需维护第二套独立文档源码。
+
+- **Milestone 12 — 函数注册表基础设施（`FunctionRegistry`）**：新增 `src/TSLite/Query/Functions/` 目录，承载 Tier 1~3 函数扩展（PR #51~#57）所需的注册与解析骨架，零第三方依赖。
+  - 新增公共类型 `FunctionRegistry`（静态注册表）+ `IAggregateFunction`（命名 / SQL 调用语法校验 / `LegacyAggregator` 桥接），通过 `TryGetAggregate(name, out function)` 与 `GetAggregate(Aggregator)` 双向查找内置 7 个聚合（count/sum/min/max/avg/first/last）。
+  - `BuiltInAggregateFunction.ResolveFieldName` 集中实现 `*` 形式校验（仅 `count(*)` 允许）、参数个数校验、列存在性、Tag/Field 角色与 String 类型限制。
+  - 重构 `SelectExecutor`：移除内部硬编码 `_aggregateFunctions` HashSet 与 `switch` 解析逻辑，改为统一走 `FunctionRegistry`；保留现有高性能 `Aggregator` 枚举执行路径，本 PR 不影响查询性能。
+  - 新增 `tests/TSLite.Tests/Query/Functions/FunctionRegistryTests.cs`：8 项单元测试覆盖大小写不敏感、未知函数、`count(*)` 接受 / 其他函数拒绝 `*`、Tag 列拒绝、String 字段拒绝、合法字段返回原列名等关键分支。
+  - 新增 `tests/TSLite.Tests/Sql/SqlExecutorSelectTests.cs::Select_SumStar_Throws` / `Select_AggregateLookup_IsCaseInsensitive`，验证 SelectExecutor 经注册表后的对外行为不变。
+
 - **Milestone 12 — PID 参数估算（`PidParameterEstimator`）**：新增 `src/TSLite/Query/Functions/Control/` 目录，提供从历史阶跃响应时序数据自动推算 PID 控制器参数的纯 C# 实现，零第三方依赖。
   - `PidTuningMethod` 枚举：`ZieglerNichols`（Ziegler-Nichols 阶跃响应法）/ `CohenCoon`（Cohen-Coon 法）/ `Imc`（Skogestad SIMC/IMC 法）。
   - `PidParameters` 记录类型：封装 `Kp`（比例增益）、`Ki`（积分增益）、`Kd`（微分增益）。
@@ -14,6 +25,16 @@
   - 新增 `tests/TSLite.Tests/Query/Functions/Control/PidParameterEstimatorTests.cs`：20 项单元测试，覆盖三种整定方法的数值精度验证、非零基线、DataPoint 重载、Int64 字段值、边界/错误校验、负向阶跃及三种方法正参数一致性。
 
 ### Changed
+- 文档站点模板与交叉链接支持双部署模式：
+  - `docs/_config.yml` 新增 `docs_baseurl`、`app_link_url`、`app_link_text`、`home_primary_url`、`home_primary_text` 配置项。
+  - `docs/_layouts/default.html` 与多篇文档内的站内链接改为基于配置拼接，默认继续服务于 `TSLite.Server` 的 `/help/`，同时兼容 GitHub Pages 的仓库子路径。
+- 将 `ROADMAP.md` 中的 `PR #37b` 标记为已完成，并更新 Milestone 9 的当前推进顺序。
+
+- 核查并修正 `ROADMAP.md` 中的 Milestone 9 状态：
+  - 补记已在仓库落地但路线图遗漏的 `PR #36`（`TSLite.Server` Docker 基准环境与 `ServerBenchmark`）。
+  - 将 `PR #38` 调整为已完成：仓库已具备 `eng/release.ps1`、`.github/workflows/publish.yml`、NuGet 包元数据、SDK / Server Bundle 与 `msi` / `deb` / `rpm` 打包能力。
+  - 将原 `PR #37` 拆分为 `#37a`（已完成：文档重写、JekyllNet `/help` 站点、README 与发布文档核对）和 `#37b`（现已完成：GitHub Pages 自动发布流水线），使路线图状态与当前代码一致。
+
 - **PR #50：查询元数据快路径 — Format v2 + 跨桶融合 + MemTable 增量聚合 + ExecuteMany 共享快照**（**Breaking 段文件格式变更**）
   - **Format v2**（破坏性，不兼容旧 segment 文件）：`BlockHeader` 由 64 B 扩展到 72 B，将 `AggregateMinBits` / `AggregateMaxBits` 由 `int`（4 B）升级为 `AggregateMin` / `AggregateMax`（`double`，8 B），覆盖 Float64 任意值与 ±2^53 内的 Int64。新增 `TsdbMagic.SegmentFormatVersion = 2` 常量与 `TsdbMagic.FormatVersion = 1`（用于 FileHeader/WAL/Catalog）解耦；`SegmentHeader.IsValid` 与 `SegmentReader` 拒绝读取 v1 段文件并给出明确升级提示。`SegmentWriter.TryBuildAggregateMetadata` 不再因窄类型截断而放弃 `HasMinMax`，对所有数值字段一律写入 `HasSumCount | HasMinMax`。`SegmentReader` 删除 `DecodeAggregateBoundary` 私有桥接，直接读取 8 B `double`。**升级路径：删除 `*.tslseg` 后启动可由 WAL 重放重新生成 v2 段；混用旧版本数据将抛 `SegmentCorruptedException`。**
   - **跨桶 block 元数据下推**：`QueryEngine` 新增 `CanFuseDeltaTimestampInline` + `FuseDeltaBlockToGlobal` / `FuseDeltaBlockToBuckets` 融合内联路径——对 `(delta-of-delta 时间戳 + 原始数值)` 的数值 block，仅租用一份 `ArrayPool<long>` 解码时间戳后内联走 `ReadRawNumericValue` + `AddValueToBucket`，避免 `BlockDecoder.DecodeRange` 物化 `DataPoint[]`。大 block 跨桶聚合分配显著下降。

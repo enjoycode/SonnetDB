@@ -1,4 +1,6 @@
 using TSLite.Engine;
+using TSLite.Query;
+using TSLite.Query.Functions;
 using TSLite.Sql;
 using TSLite.Sql.Execution;
 using Xunit;
@@ -161,6 +163,16 @@ public class SqlExecutorSelectTests : IDisposable
     }
 
     [Fact]
+    public void Select_SumStar_Throws()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            SqlExecutor.Execute(db, "SELECT sum(*) FROM cpu WHERE host = 'h1'"));
+    }
+
+    [Fact]
     public void Select_CountField_CountsOnlyThatField()
     {
         using var db = OpenWithSchema(Options());
@@ -240,15 +252,15 @@ public class SqlExecutorSelectTests : IDisposable
     }
 
     [Fact]
-    public void Select_AggregateAlias_RenamesColumn()
+    public void Select_AggregateLookup_IsCaseInsensitive()
     {
         using var db = OpenWithSchema(Options());
         Seed(db);
 
-        var r = Select(db, "SELECT avg(usage) AS mean FROM cpu WHERE host = 'h1'");
+        var r = Select(db, "SELECT SuM(usage), CoUnT(usage) FROM cpu WHERE host = 'h1'");
 
-        Assert.Equal(["mean"], r.Columns);
-        Assert.Equal(2.0, (double)r.Rows[0][0]!);
+        Assert.Equal(6.0, (double)r.Rows[0][0]!);
+        Assert.Equal(3L, r.Rows[0][1]);
     }
 
     [Fact]

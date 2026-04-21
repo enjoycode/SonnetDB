@@ -150,8 +150,10 @@
 | PR | 主题 | 状态 |
 |----|------|------|
 | #35 | BenchmarkDotNet：写入 / 查询 / 聚合 / Compaction 基准，编写评测 InfluxDB TDengine SQLite TSLite  TSLite.Server 等五个时序数据库的各项指标对比， 并连同机器性能都写在readme.md 里面。  | ✅|
-| #37 | 文档完善： `docs/getting-started.md` / `docs/data-model.md` / `docs/sql-reference.md` / `docs/file-format.md` 使用 jekllynet 构建github pages 文档， 编写readme.md ， 纠正过时的文件说明，把现在的功能和架构重新书写、 重新整理一遍， 核对路线图， 核对代码和功能是否一致，我们明确废弃的就删掉， 有遗漏的我们评估是否要补齐。  | 📋 |
-| #38 | 发布 NuGet 包 `TSLite 0.1.0` + `.github/workflows/publish.yml` ， 打包生唱成一套包含 tslite 和 tslite.data tslite.cil 的版本，并包含他们的使用说明， 发布linux和 windows版本， 再打包 TSLite.Server  一套编写版， 包含全部内容，包含前端，TSLite.cil tslite.data 等  能够一键启动，不需要额外设置，即可启动。 windows和linux分别打包， 再打包 windows 和linux的可安装的 msi和 dep rpm的版本。 | 📋 |
+| #36 | `TSLite.Server` Docker 性能测试：补齐 `src/TSLite.Server/Dockerfile`、基准用 `docker-compose` 环境、`ServerBenchmark`（写入 / 查询 / 聚合）与 README 中的服务端性能基线。 | ✅ |
+| #37a | 文档完善（已落地部分）：重写 `README.md` / `README.en.md`，补齐 `docs/getting-started.md` / `docs/data-model.md` / `docs/sql-reference.md` / `docs/file-format.md` 及发布文档，使用 JekyllNet 构建内置 `/help` 帮助站点，核对路线图与当前代码/功能，清理过时说明。 | ✅ |
+| #37b | 文档发布：将 JekyllNet 文档站点接入 GitHub Pages 自动构建与发布流水线，支持从同一套 `docs/` 源码同时产出服务端 `/help` 站点与 Pages 静态站点，避免文档仅内置在 `TSLite.Server` 镜像中。 | ✅ |
+| #38 | 发布 NuGet 包 `TSLite 0.1.0` + `.github/workflows/publish.yml`，打包生成一套包含 `TSLite`、`TSLite.Data`、`TSLite.Cli` 的 SDK Bundle，并附带使用说明；发布 Windows 和 Linux 版本；再打包 `TSLite.Server` 完整 Bundle，包含前端、`TSLite.Cli`、`TSLite.Data` 等，能够一键启动；同时生成 Windows `msi` 与 Linux `deb` / `rpm` 安装包。 | ✅ |
 | #39 |  docker 服务端模式的镜像到 maikebing iotsharp组织， 编写ci 等能自动发布| 📋 |
 ---
 ## Milestone 10 — 扩展和第三方
@@ -218,7 +220,7 @@
 | #51 | **Tier 1 标量函数 + SQL 函数调用表达式**：SQL Parser/AST 增加 `FunctionCallExpr`，binder 阶段查 `FunctionRegistry` 区分 标量 / 聚合 / 窗口 / TVF；落地数学 / 时间 / 逻辑 / `cast` / `time_bucket` / `date_trunc` / `extract` 等 ~20 个标量函数 | 📋 |
 | #52 | **Tier 2 扩展聚合**：`stddev` `variance` `percentile/p50/p90/p95/p99` `median` `mode` `spread` `distinct_count(HLL)` `tdigest_agg` `histogram`；`tdigest` 与 `HLL` 必须实现可合并 `Merge`，跨段聚合 / `GROUP BY time(...)` 桶聚合一致 | 📋 |
 | #53 | **Tier 3 窗口算子框架**：新增 `src/TSLite/Query/Window/WindowOperator`，支持基于点数 N 和基于时间 `RANGE INTERVAL` 的滑动窗口；落地 `derivative` `non_negative_derivative` `difference` `integral` `moving_average` `ewma` `cumulative_sum` `rate` `irate` `increase` `delta` `holt_winters` `interpolate` `fill` `locf` `state_duration` `state_changes` | 📋 |
-| #54 | **PID 内置函数 + 参数估算 + 控制回写示例**：聚合形态 `pid(value, setpoint, kp, ki, kd)` 在 `GROUP BY time(...)` 桶内输出最终 u(t)；行级窗口形态 `pid_series(...)` 输出每行 u(t) 用于回测；状态结构 `{ integral, prevError, prevTimeMs }`，跨段 `Merge` 按时间序拼接；**新增 `PidParameterEstimator.Estimate`（纯 C# 阶跃响应辨识）**：基于 Sundaresan & Krishnaswamy 35%/85% 两点法拟合 FOPDT 模型，支持 Ziegler-Nichols / Cohen-Coon / Skogestad IMC 三种整定规则，直接从历史时序数据推算 Kp / Ki / Kd；新增 `docs/pid-control.md` 端到端教程 + `INSERT … SELECT pid_series(...)` 控制回写示例 | 🚧 |
+| #54 | **PID 内置函数 + 参数估算 + 控制回写示例**：聚合形态 `pid(value, setpoint, kp, ki, kd)` 在 `GROUP BY time(...)` 桶内输出最终 u(t)；行级窗口形态 `pid_series(...)` 输出每行 u(t) 用于回测；状态结构 `{ integral, prevError, prevTimeMs }`，跨段 `Merge` 按时间序拼接；**新增 `PidParameterEstimator.Estimate`（纯 C# 阶跃响应辨识）**：基于 Sundaresan & Krishnaswamy 35%/85% 两点法拟合 FOPDT 模型，支持 Ziegler-Nichols / Cohen-Coon / Skogestad IMC 三种整定规则，直接从历史时序数据推算 Kp / Ki / Kd；当前先以嵌入式/库级 API 交付，后续再接入 `FunctionRegistry` 暴露为 SQL 可查询函数；新增 `docs/pid-control.md` 端到端教程 + `INSERT … SELECT pid_series(...)` 控制回写示例 | 🚧 |
 | #55 | **Forecast TVF + 异常 / 变点检测**：表值函数 `forecast(subquery, horizon, algo, season)` 内置 **线性外推 + Holt-Winters**（纯 C#，无外部依赖），返回 `(time, value, lower, upper)`；`anomaly(x, 'zscore|mad|iqr', threshold)` `changepoint(x, 'cusum')`；ARIMA / Prophet 留给 UDF；新增 `docs/forecast.md` | 📋 |
 | #56 | **UDF 注册 API**：`Tsdb.Functions.RegisterScalar(name, Func<...>)` / `RegisterAggregate(IAggregateFunction)` / `RegisterTableValuedFunction(...)`；嵌入式直接走委托，Server 端默认禁用 UDF（仅内置函数）以保证 AOT；新增 `docs/extending-functions.md` | 📋 |
 | #57 | **函数基准 + README 函数支持矩阵**：在 `tests/TSLite.Benchmarks` 扩展 `AggregateBenchmark`，对比 InfluxDB `derivative` / `holt_winters`、Timescale `time_weight`、TDengine `forecast`；README 新增「支持的 SQL 函数」矩阵表 | 📋 |
@@ -277,12 +279,12 @@ db.Functions.RegisterAggregate(new KalmanAggregate()); // 实现 IAggregateFunct
 | 6 | SQL 前端 + Tag 倒排索引 | #22 ~ #28 | ✅ |
 | 7 | 压缩编码（Delta / Gorilla） | #29 ~ #31 | ✅ |
 | 8 | 服务器模式（HTTP + 远端 ADO + 控制面 + Vue3 后台 + SSE） | #32 ~ #34c | ✅ |
-| 9 | 性能基准与发布 | #35 ~ #39 | 🚧（#35 已完成） |
+| 9 | 性能基准与发布 | #35 ~ #39（含 #36、#37a、#37b） | 🚧（#35 / #36 / #37a / #37b / #38 ✅，#39 📋） |
 | 10 | 扩展和第三方 | #40, #41 + #42~#45 批量入库专题 | 🚧（#42~#45 ✅） |
 | 11 | 写入快路径（PR #45 瓶颈收尾） | #46 ~ #49 | ✅ |
 | 12 | 函数与算子扩展（PID / Forecast / UDF） | #50 ~ #57 | 📋 |
 
-**当前推进顺序**：PR #37 → PR #38 → PR #39（Milestone 9 发布与发表会中间件） → PR #50（Milestone 12 函数注册表基础设施）。
+**当前推进顺序**：PR #39（Milestone 9 剩余发布工作） → PR #50（Milestone 12 函数注册表基础设施）。
 
 ---
 

@@ -31,6 +31,6 @@ http://127.0.0.1:5080
 
 ## 推荐阅读顺序
 
-1. [SDK Bundle](/help/releases/sdk-bundle/)
-2. [Server Bundle](/help/releases/server-bundle/)
-3. [安装包](/help/releases/installers/)
+1. [SDK Bundle]({{ site.docs_baseurl | default: '/help' }}/releases/sdk-bundle/)
+2. [Server Bundle]({{ site.docs_baseurl | default: '/help' }}/releases/server-bundle/)
+3. [安装包]({{ site.docs_baseurl | default: '/help' }}/releases/installers/)

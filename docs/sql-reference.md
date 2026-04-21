@@ -215,6 +215,6 @@ REVOKE TOKEN 'tok_abcdef'
 
 ## 相关页面
 
-- [批量写入](/help/bulk-ingest/)
-- [ADO.NET 参考](/help/ado-net/)
-- [CLI 参考](/help/cli-reference/)
+- [批量写入]({{ site.docs_baseurl | default: '/help' }}/bulk-ingest/)
+- [ADO.NET 参考]({{ site.docs_baseurl | default: '/help' }}/ado-net/)
+- [CLI 参考]({{ site.docs_baseurl | default: '/help' }}/cli-reference/)
