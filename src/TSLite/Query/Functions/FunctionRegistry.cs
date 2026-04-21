@@ -1,24 +1,29 @@
 using System.Diagnostics.CodeAnalysis;
 using TSLite.Catalog;
 using TSLite.Query.Functions.Aggregates;
+using TSLite.Query.Functions.Window;
 using TSLite.Sql.Ast;
 using TSLite.Storage.Format;
 
 namespace TSLite.Query.Functions;
 
 /// <summary>
-/// 内置函数注册表；当前承载聚合函数与标量函数。
+/// 内置函数注册表；当前承载聚合函数、标量函数与窗口函数。
 /// </summary>
 public static class FunctionRegistry
 {
     private static readonly IAggregateFunction[] _aggregateFunctionList = CreateAggregateFunctionList();
     private static readonly IScalarFunction[] _scalarFunctionList = CreateScalarFunctionList();
+    private static readonly IWindowFunction[] _windowFunctionList = CreateWindowFunctionList();
 
     private static readonly IReadOnlyDictionary<string, IAggregateFunction> _aggregateFunctions =
         CreateFunctionsByName(_aggregateFunctionList);
 
     private static readonly IReadOnlyDictionary<string, IScalarFunction> _scalarFunctions =
         CreateFunctionsByName(_scalarFunctionList);
+
+    private static readonly IReadOnlyDictionary<string, IWindowFunction> _windowFunctions =
+        CreateFunctionsByName(_windowFunctionList);
 
     private static readonly IReadOnlyDictionary<Aggregator, IAggregateFunction> _aggregateFunctionsByLegacy =
         CreateAggregateFunctionsByLegacy(_aggregateFunctionList);
@@ -28,6 +33,9 @@ public static class FunctionRegistry
 
     /// <summary>返回所有已注册内置标量函数。</summary>
     public static IReadOnlyCollection<IScalarFunction> ScalarFunctions => _scalarFunctionList;
+
+    /// <summary>返回所有已注册内置窗口函数。</summary>
+    public static IReadOnlyCollection<IWindowFunction> WindowFunctions => _windowFunctionList;
 
     /// <summary>按函数名查找聚合函数（大小写不敏感）。</summary>
     public static bool TryGetAggregate(string name, [MaybeNullWhen(false)] out IAggregateFunction function)
@@ -43,12 +51,20 @@ public static class FunctionRegistry
         return _scalarFunctions.TryGetValue(name, out function);
     }
 
+    /// <summary>按函数名查找窗口函数（大小写不敏感）。</summary>
+    public static bool TryGetWindow(string name, [MaybeNullWhen(false)] out IWindowFunction function)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return _windowFunctions.TryGetValue(name, out function);
+    }
+
     /// <summary>判断函数名属于哪一类内置函数。</summary>
     public static FunctionKind GetFunctionKind(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
         if (_aggregateFunctions.ContainsKey(name)) return FunctionKind.Aggregate;
         if (_scalarFunctions.ContainsKey(name)) return FunctionKind.Scalar;
+        if (_windowFunctions.ContainsKey(name)) return FunctionKind.Window;
         return FunctionKind.Unknown;
     }
 
@@ -90,6 +106,32 @@ public static class FunctionRegistry
         new BuiltInScalarFunction("sqrt", 1, 1, static args => Math.Sqrt(RequireDouble(args[0], "sqrt"))),
         new BuiltInScalarFunction("log", 1, 2, EvaluateLog),
         new BuiltInScalarFunction("coalesce", 1, int.MaxValue, EvaluateCoalesce),
+    ];
+
+    private static IWindowFunction[] CreateWindowFunctionList() =>
+    [
+        // Tier 3 — 差分类（PR #53）
+        new DifferenceFunction(),
+        new DeltaFunction(),
+        new IncreaseFunction(),
+        new DerivativeFunction(),
+        new NonNegativeDerivativeFunction(),
+        new RateFunction(),
+        new IrateFunction(),
+        // Tier 3 — 累计 / 积分
+        new CumulativeSumFunction(),
+        new IntegralFunction(),
+        // Tier 3 — 平滑 / 预测
+        new MovingAverageFunction(),
+        new EwmaFunction(),
+        new HoltWintersFunction(),
+        // Tier 3 — 缺失值处理
+        new FillFunction(),
+        new LocfFunction(),
+        new InterpolateFunction(),
+        // Tier 3 — 状态分析
+        new StateChangesFunction(),
+        new StateDurationFunction(),
     ];
 
     private static IReadOnlyDictionary<string, TFunction> CreateFunctionsByName<TFunction>(TFunction[] functions)

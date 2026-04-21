@@ -53,6 +53,7 @@ internal static class SelectExecutor
         Field,
         Aggregate,
         Scalar,
+        Window,
     }
 
     private sealed record Projection(
@@ -60,7 +61,8 @@ internal static class SelectExecutor
         ProjectionKind Kind,
         MeasurementColumn? Column,
         FunctionCallExpression? Function,
-        IScalarFunction? ScalarFunction = null);
+        IScalarFunction? ScalarFunction = null,
+        IWindowFunction? WindowFunction = null);
 
     private static IReadOnlyList<Projection> ClassifyProjections(
         IReadOnlyList<SelectItem> items,
@@ -103,7 +105,16 @@ internal static class SelectExecutor
                         break;
                     }
 
-                    if (kind is FunctionKind.Window or FunctionKind.TableValued)
+                    if (kind == FunctionKind.Window && FunctionRegistry.TryGetWindow(fn.Name, out var windowFunction))
+                    {
+                        var windowColumnName = item.Alias ?? FormatFunctionColumnName(fn);
+                        result.Add(new Projection(
+                            windowColumnName, ProjectionKind.Window, null, fn,
+                            ScalarFunction: null, WindowFunction: windowFunction));
+                        break;
+                    }
+
+                    if (kind == FunctionKind.TableValued)
                         throw new InvalidOperationException(
                             $"函数 '{fn.Name}' 已保留给后续里程碑，当前 SELECT 尚不支持。"
                         );
@@ -149,11 +160,23 @@ internal static class SelectExecutor
         IReadOnlyList<SeriesEntry> matchedSeries,
         WhereClause where)
     {
+        // 预先为每个窗口投影构造 evaluator（只构造一次：参数校验在此完成）。
+        var windowEvaluators = new IWindowEvaluator?[projections.Count];
+        for (int i = 0; i < projections.Count; i++)
+        {
+            if (projections[i].Kind == ProjectionKind.Window)
+            {
+                windowEvaluators[i] = projections[i].WindowFunction!.CreateEvaluator(
+                    projections[i].Function!, schema);
+            }
+        }
+
         // 收集 raw 模式中所有需要查询的 field 列
         var fieldCols = projections
             .Where(p => p.Kind == ProjectionKind.Field)
             .Select(p => p.Column!.Name)
             .Concat(GetScalarFieldDependencies(projections))
+            .Concat(windowEvaluators.OfType<IWindowEvaluator>().Select(e => e.FieldName))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -176,10 +199,11 @@ internal static class SelectExecutor
             }
 
             // 时间戳并集
-            var timestamps = new SortedSet<long>();
+            var timestampSet = new SortedSet<long>();
             foreach (var (_, list) in fieldData)
-                foreach (var dp in list) timestamps.Add(dp.Timestamp);
-            if (timestamps.Count == 0) continue;
+                foreach (var dp in list) timestampSet.Add(dp.Timestamp);
+            if (timestampSet.Count == 0) continue;
+            var timestamps = timestampSet.ToArray();
 
             // 每个 field 的 ts→value 字典（按需）
             var fieldLookups = new Dictionary<string, Dictionary<long, FieldValue>>(StringComparer.Ordinal);
@@ -190,8 +214,29 @@ internal static class SelectExecutor
                 fieldLookups[fname] = dict;
             }
 
-            foreach (var ts in timestamps)
+            // 为每个窗口投影预计算输出（与 timestamps 数组同长度，逐行对齐）。
+            var windowOutputs = new object?[projections.Count][];
+            for (int i = 0; i < projections.Count; i++)
             {
+                var evaluator = windowEvaluators[i];
+                if (evaluator is null) continue;
+
+                var alignedValues = new FieldValue?[timestamps.Length];
+                if (fieldLookups.TryGetValue(evaluator.FieldName, out var lookup))
+                {
+                    for (int row = 0; row < timestamps.Length; row++)
+                    {
+                        if (lookup.TryGetValue(timestamps[row], out var v))
+                            alignedValues[row] = v;
+                    }
+                }
+
+                windowOutputs[i] = evaluator.Compute(timestamps, alignedValues);
+            }
+
+            for (int rowIdx = 0; rowIdx < timestamps.Length; rowIdx++)
+            {
+                long ts = timestamps[rowIdx];
                 var row = new object?[projections.Count];
                 for (int i = 0; i < projections.Count; i++)
                 {
@@ -204,6 +249,7 @@ internal static class SelectExecutor
                             ? UnboxFieldValue(v)
                             : null,
                         ProjectionKind.Scalar => EvaluateScalarProjection(p, ts, series, fieldLookups),
+                        ProjectionKind.Window => windowOutputs[i]![rowIdx],
                         _ => throw new InvalidOperationException("内部错误：不应在 raw 模式出现聚合投影。"),
                     };
                 }

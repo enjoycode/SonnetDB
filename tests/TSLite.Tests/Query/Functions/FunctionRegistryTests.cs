@@ -51,6 +51,11 @@ public sealed class FunctionRegistryTests
     [InlineData("stddev", FunctionKind.Aggregate)]
     [InlineData("p95", FunctionKind.Aggregate)]
     [InlineData("histogram", FunctionKind.Aggregate)]
+    [InlineData("derivative", FunctionKind.Window)]
+    [InlineData("ewma", FunctionKind.Window)]
+    [InlineData("interpolate", FunctionKind.Window)]
+    [InlineData("moving_average", FunctionKind.Window)]
+    [InlineData("state_changes", FunctionKind.Window)]
     [InlineData("nonexistent_xyz", FunctionKind.Unknown)]
     public void GetFunctionKind_ReturnsRegisteredKind(string name, FunctionKind kind)
     {

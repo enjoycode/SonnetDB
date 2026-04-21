@@ -6,6 +6,18 @@
 ## [Unreleased]
 
 ### Added
+- **Milestone 12 — PR #53：Tier 3 窗口算子框架（17 个窗口函数）**
+  - 新增公共契约 `IWindowFunction` / `IWindowEvaluator`：window 函数为「行流→行流」的逐序列算子，由 `CreateEvaluator(call, schema)` 工厂在查询计划阶段完成参数解析与字段绑定，运行阶段调用 `Compute(long[] timestamps, FieldValue?[] values) → object?[]` 输出与输入等长的列结果。
+  - 落地 17 个窗口函数（位于 `src/TSLite/Query/Functions/Window/`），按语义分为 5 组：
+    - **差分类**：`difference` / `delta`（当前 − 上一行）；`increase`（仅保留正差，counter 重置返回 `null`）；`derivative` / `non_negative_derivative` / `rate` / `irate`（按时间归一化的瞬时变化率，可指定单位 `1s` / `100ms` 等）。
+    - **累计类**：`cumulative_sum`（运行总和，首个有效值前为 `null`）；`integral(field [, unit])`（梯形面积，默认按秒积分）。
+    - **平滑类**：`moving_average(field, n)`（N 点滑动平均，前 N−1 行返回 `null`）；`ewma(field, alpha)`（指数加权移动平均，校验 `alpha ∈ (0, 1]`）；`holt_winters(field, alpha, beta)`（加性 Holt 双指数平滑，无季节性，校验 `alpha`、`beta` ∈ `(0, 1]`）。
+    - **缺失值处理**：`fill(field, value)`（数值字面量填充 `null`，支持 `-1` 等带负号字面量）；`locf(field)`（last observation carried forward）；`interpolate(field)`（两遍扫描线性插值，前导/尾随 `null` 保持 `null`）。
+    - **状态分析**：`state_changes(field)`（基于 `FieldValue.Equals` 的状态切换计数，支持 string/bool）；`state_duration(field)`（当前状态持续毫秒数，状态切换时归零）。
+  - `FunctionRegistry` 新增 `WindowFunctions` 集合 + `TryGetWindow(name, out function)` API；`GetFunctionKind` 新增 `FunctionKind.Window` 分支。
+  - `SelectExecutor` 新增 `ProjectionKind.Window` 投影类别：`ClassifyProjections` 将 `Window` 函数路由到该类别；`ExecuteRaw` 在每个 series 内构造 `long[] timestamps` + 与之对齐的 `FieldValue?[]`，预计算所有 window evaluator 输出后按行下标注入结果，与 `time` / `tag` / `field` / `scalar` 投影任意组合。窗口函数与聚合函数互斥（沿用既有 `_ → 内部错误` 拒绝路径）。
+  - 新增 `tests/TSLite.Tests/Query/Functions/WindowFunctionTests.cs`（35 项，覆盖各 evaluator 的纯算法语义、`Welford` / counter 重置 / 梯形积分 / 线性插值 / EWMA 递推 / 状态分析等基线，外加全部 17 个函数的 `FunctionRegistry` 注册校验）与 `tests/TSLite.Tests/Sql/SqlExecutorWindowFunctionTests.cs`（21 项 SQL 端到端，覆盖各窗口函数典型用法、与 `time` / `field` / `tag` 投影混合、与聚合互斥、参数错误、字符串/Tag 字段拒绝等）。
+
 - **Milestone 12 — PR #52：Tier 2 扩展聚合（可合并累加器）**
   - 新增 9 个扩展聚合函数：`stddev` / `variance` / `spread` / `mode` / `median` / `percentile(field, q)` / `p50` / `p90` / `p95` / `p99` / `tdigest_agg` / `distinct_count` / `histogram(field, bin_width)`，全部走新增的 `IAggregateAccumulator` 路径，与既有 7 个 legacy 聚合并存、零性能回归。
   - 新增公共契约 `IAggregateAccumulator`（`Count` / `Add` / `Merge` / `Finalize`）与 `IAggregateFunction.CreateAccumulator(call, schema)`（默认实现返回 `null`），用于让扩展聚合声明跨段、跨桶、跨序列可合并的中间状态。
