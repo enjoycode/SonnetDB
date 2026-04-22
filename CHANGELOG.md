@@ -28,6 +28,12 @@
 - **Milestone 14 — SonnetDB Copilot：MCP 工具 + 知识库 + 智能体**：基于 Microsoft Agent Framework 新建独立项目 `src/SonnetDB.Copilot/`，复用现有 `/mcp/{db}` 工具集 + Milestone 13 的向量召回，把"用户文档 / 技能库 / 数据库 schema"统一存入 `__copilot__` 系统库（dogfooding）。Embedding/Chat 走统一 `IEmbeddingProvider` / `IChatProvider` 抽象，**本地 ONNX（bge-small-zh）** 与 **OpenAI 兼容端点（国际 / 国内任意 OpenAI-compat 网关）** 同时支持，可按部署场景切换。新增 HTTP 端点 `POST /v1/copilot/chat`（NDJSON / SSE 流式）+ Web Admin Chat Tab。详见 ROADMAP PR #63 ~ #69。
 
 ### Added
+- **InfluxDB 2.x 数据准确性对照测试项目**
+  - 新增独立测试项目 `tests/SonnetDB.Accuracy.Tests`，通过 Testcontainers 启动 InfluxDB 2.7 容器，同时在进程内启动 SonnetDB Server，向两侧写入同一批 Line Protocol 测试数据。
+  - 新增准确性对照 fixture：自动创建 SonnetDB 数据库与 measurement schema，复用同一份 LP 数据分别写入 SonnetDB 批量入库端点与 InfluxDB `/api/v2/write`，用于验证服务端真实入库与查询链路，而不是仅验证进程内对象。
+  - 新增结果归一化器与对照矩阵，覆盖 `SHOW MEASUREMENTS`、多 series 原始投影、稀疏字段查询、`LIMIT/OFFSET`、`sum/avg/min/max/count/first/last`、`GROUP BY time(...)` 桶聚合以及第二 measurement 的原始查询。
+  - 对照测试会把 SonnetDB SQL NDJSON 结果与 InfluxDB Flux 结果统一归一化后逐行比较，减少时间格式、浮点表示或列序差异带来的噪音；当 Docker / InfluxDB 环境不可用时按 skip 处理，不阻塞普通无容器环境下的基础测试运行。
+
 - **PR #58 b — Schema VECTOR(dim) 列声明 + SQL `[v0, v1, ...]` 字面量（Milestone 13 第二切片）**
   - `MeasurementColumn` 新增可选 `int? VectorDimension`；`MeasurementSchema.Create` 校验：Vector 列必须 `Field` 角色且 `dim > 0`，非 Vector 列禁止携带 dim。
   - SQL 解析层：新增 `KeywordVector` / `LeftBracket` / `RightBracket` token；`SqlLexer` 识别 `vector` 关键字与 `[` / `]` 标点；`SqlDataType.Vector` + `ColumnDefinition.VectorDimension` + `VectorLiteralExpression(IReadOnlyList<double>)` AST。
