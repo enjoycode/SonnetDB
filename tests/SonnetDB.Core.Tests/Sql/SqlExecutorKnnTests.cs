@@ -240,15 +240,37 @@ public sealed class SqlExecutorKnnTests : IDisposable
     // ── 度量别名 ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Knn_MetricAliases_Resolve()
+    public void Knn_MetricAliases_ProduceEquivalentResults()
     {
         using var db = OpenDb();
-        SqlExecutor.Execute(db, "INSERT INTO docs (source, embedding, time) VALUES ('a', [1, 0, 0], 1)");
+        SqlExecutor.Execute(db, "INSERT INTO docs (source, embedding, time) VALUES " +
+            "('a', [1, 0, 0], 1000), " +
+            "('b', [0, 1, 0], 2000)");
 
-        // 应不抛出
-        Select(db, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 1, 'cosine_distance')");
-        Select(db, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 1, 'euclidean')");
-        Select(db, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 1, 'dot')");
-        Select(db, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 1, 'ip')");
+        // cosine 别名应产生与 'cosine' 相同的结果顺序
+        var canonical = Select(db, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 2, 'cosine')");
+        var alias1 = Select(db, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 2, 'cosine_distance')");
+        Assert.Equal(canonical.Rows.Count, alias1.Rows.Count);
+        for (int i = 0; i < canonical.Rows.Count; i++)
+            Assert.Equal(canonical.Rows[i][0], alias1.Rows[i][0]); // 相同时间戳顺序
+
+        // l2 别名
+        var l2Canonical = Select(db, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 2, 'l2')");
+        var l2Alias = Select(db, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 2, 'euclidean')");
+        Assert.Equal(l2Canonical.Rows.Count, l2Alias.Rows.Count);
+        for (int i = 0; i < l2Canonical.Rows.Count; i++)
+            Assert.Equal(l2Canonical.Rows[i][0], l2Alias.Rows[i][0]);
+
+        // inner_product 别名
+        var ipCanonical = Select(db, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 2, 'inner_product')");
+        var ipAliasDot = Select(db, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 2, 'dot')");
+        var ipAliasIp = Select(db, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 2, 'ip')");
+        Assert.Equal(ipCanonical.Rows.Count, ipAliasDot.Rows.Count);
+        Assert.Equal(ipCanonical.Rows.Count, ipAliasIp.Rows.Count);
+        for (int i = 0; i < ipCanonical.Rows.Count; i++)
+        {
+            Assert.Equal(ipCanonical.Rows[i][0], ipAliasDot.Rows[i][0]);
+            Assert.Equal(ipCanonical.Rows[i][0], ipAliasIp.Rows[i][0]);
+        }
     }
 }

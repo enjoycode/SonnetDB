@@ -91,7 +91,8 @@ internal static class KnnExecutor
         if (allCandidates.Count == 0)
             return [];
 
-        // 按距离升序排序，取前 k 条
+        // 按距离升序排序，取前 k 条。
+        // TODO：候选量远大于 k 时可改用 O(N log k) 的 max-heap 维护，减少排序开销（PR #6x 优化）。
         allCandidates.Sort(static (a, b) => a.Dist.CompareTo(b.Dist));
 
         int take = Math.Min(k, allCandidates.Count);
@@ -191,7 +192,8 @@ internal static class KnnExecutor
         }
 
         if (normA2 == 0 || normB2 == 0)
-            return 1.0; // 零向量定义距离为 1（无法计算余弦）
+            // 零向量无法计算余弦相似度，返回 1.0（[0,2] 值域的中点，表示"无法比较"而非"最近/最远"）
+            return 1.0;
         return 1.0 - dot / (Math.Sqrt(normA2) * Math.Sqrt(normB2));
     }
 

@@ -267,6 +267,7 @@ internal static class TableValuedFunctionExecutor
             }
 
             // field 列（按精确时间戳查询）
+            // TODO：多字段 measurement 时每列单独查询性能不佳；后续可在一次扫描中同时收集所有字段值（PR #6x）。
             var exactRange = new TimeRange(result.Timestamp, result.Timestamp);
             for (int fi = 0; fi < fieldColumns.Count; fi++)
             {
