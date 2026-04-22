@@ -15,7 +15,7 @@ namespace SonnetDB.Benchmarks.Benchmarks;
 [Config(typeof(VectorConfig))]
 [MemoryDiagnoser]
 [BenchmarkCategory("Vector")]
-public sealed class VectorRecallBenchmark
+public class VectorRecallBenchmark
 {
     private const int _dimension = 384;
     private const int _k = 10;

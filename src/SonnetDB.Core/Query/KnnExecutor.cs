@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using SonnetDB.Catalog;
 using SonnetDB.Memory;
 using SonnetDB.Model;
@@ -165,22 +166,19 @@ internal static class KnnExecutor
                 var timestamps = BlockDecoder.DecodeTimestamps(block, data.TimestampPayload);
                 int candidateLimit = Math.Min(block.Count, Math.Max(k * 8, vectorIndex.Ef * 2));
                 var annHits = vectorIndex.Search(querySpan, data.ValuePayload, timestamps, candidateLimit, metric);
-
-                int accepted = 0;
-                foreach (var hit in annHits)
-                {
-                    if (hit.Timestamp < timeRange.FromInclusive || hit.Timestamp > timeRange.ToInclusive)
-                        continue;
-
-                    candidates.Add((hit.Distance, hit.Timestamp, seriesId));
-                    accepted++;
-                    if (accepted >= k)
-                        break;
-                }
-
-                // 当时间窗裁剪后候选不足，退回精确扫描补齐，避免在稀疏时间窗中丢结果。
-                if (accepted >= k || candidateLimit >= block.Count)
-                    continue;
+                CollectIndexedBlockCandidates(
+                    querySpan,
+                    data.ValuePayload,
+                    timestamps,
+                    annHits,
+                    block.Count,
+                    k,
+                    candidateLimit,
+                    metric,
+                    timeRange,
+                    seriesId,
+                    candidates);
+                continue;
             }
 
             var points = reader.DecodeBlockRange(block, timeRange.FromInclusive, timeRange.ToInclusive);
@@ -192,4 +190,85 @@ internal static class KnnExecutor
             }
         }
     }
+
+    /// <summary>
+    /// 合并 ANN 命中与必要的精确补扫结果。
+    /// 当 ANN 命中已足够覆盖 Top-K，或本次 ANN 已覆盖整个 block 时，直接采用 ANN 结果；
+    /// 否则对未命中的点位做一次精确补扫，避免“部分 ANN 命中 + 整块精确回退”把同一点重复计入候选。
+    /// </summary>
+    internal static void CollectIndexedBlockCandidates(
+        ReadOnlySpan<float> queryVector,
+        ReadOnlySpan<byte> valPayload,
+        ReadOnlySpan<long> timestamps,
+        IReadOnlyList<HnswAnnSearchResult> annHits,
+        int pointCount,
+        int k,
+        int candidateLimit,
+        KnnMetric metric,
+        TimeRange timeRange,
+        ulong seriesId,
+        List<(double Dist, long Ts, ulong Sid)> candidates)
+    {
+        ArgumentNullException.ThrowIfNull(annHits);
+        ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentOutOfRangeException.ThrowIfLessThan(k, 1);
+
+        var acceptedHits = new List<HnswAnnSearchResult>(Math.Min(k, annHits.Count));
+        foreach (var hit in annHits)
+        {
+            if (!timeRange.Contains(hit.Timestamp))
+                continue;
+
+            acceptedHits.Add(hit);
+            if (acceptedHits.Count >= k)
+                break;
+        }
+
+        if (acceptedHits.Count >= k || candidateLimit >= pointCount)
+        {
+            AddAnnHits(acceptedHits, seriesId, candidates);
+            return;
+        }
+
+        HashSet<int>? acceptedPointIndexes = null;
+        if (acceptedHits.Count > 0)
+        {
+            acceptedPointIndexes = new HashSet<int>(acceptedHits.Count);
+            foreach (var hit in acceptedHits)
+            {
+                candidates.Add((hit.Distance, hit.Timestamp, seriesId));
+                acceptedPointIndexes.Add(hit.PointIndex);
+            }
+        }
+
+        int dimension = queryVector.Length;
+        for (int pointIndex = 0; pointIndex < pointCount; pointIndex++)
+        {
+            if (acceptedPointIndexes?.Contains(pointIndex) == true)
+                continue;
+
+            long timestamp = timestamps[pointIndex];
+            if (!timeRange.Contains(timestamp))
+                continue;
+
+            double distance = VectorDistance.Compute(metric, queryVector, GetVector(valPayload, pointIndex, dimension));
+            candidates.Add((distance, timestamp, seriesId));
+        }
+    }
+
+    private static void AddAnnHits(
+        IReadOnlyList<HnswAnnSearchResult> hits,
+        ulong seriesId,
+        List<(double Dist, long Ts, ulong Sid)> candidates)
+    {
+        for (int i = 0; i < hits.Count; i++)
+        {
+            var hit = hits[i];
+            candidates.Add((hit.Distance, hit.Timestamp, seriesId));
+        }
+    }
+
+    private static ReadOnlySpan<float> GetVector(ReadOnlySpan<byte> valPayload, int pointIndex, int dimension)
+        => MemoryMarshal.Cast<byte, float>(
+            valPayload.Slice(pointIndex * dimension * sizeof(float), dimension * sizeof(float)));
 }

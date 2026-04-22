@@ -1,7 +1,9 @@
 ﻿using SonnetDB.Engine;
 using SonnetDB.Engine.Compaction;
+using SonnetDB.Catalog;
 using SonnetDB.Memory;
 using SonnetDB.Model;
+using SonnetDB.Query;
 using SonnetDB.Storage.Format;
 using SonnetDB.Storage.Segments;
 using Xunit;
@@ -49,6 +51,22 @@ public sealed class SegmentCompactorTests : IDisposable
             };
             mt.Append(seriesId, ts, field, v, i + 1L);
         }
+        string path = SegPath(segId);
+        _writer.WriteFrom(mt, segId, path);
+        return SegmentReader.Open(path, _readerOpts);
+    }
+
+    private SegmentReader WriteVectorSegment(
+        long segId,
+        ulong seriesId,
+        string field,
+        params (long Timestamp, float[] Vector)[] points)
+    {
+        var mt = new MemTable();
+        long lsn = 1L;
+        foreach (var point in points)
+            mt.Append(seriesId, point.Timestamp, field, FieldValue.FromVector(point.Vector), lsn++);
+
         string path = SegPath(segId);
         _writer.WriteFrom(mt, segId, path);
         return SegmentReader.Open(path, _readerOpts);
@@ -194,5 +212,70 @@ public sealed class SegmentCompactorTests : IDisposable
         // 时间戳升序
         for (int i = 1; i < points.Length; i++)
             Assert.True(points[i].Timestamp >= points[i - 1].Timestamp);
+    }
+
+    [Fact]
+    public void Execute_VectorFieldWithHnswIndex_BuildsSidecarForCompactedSegment()
+    {
+        const string measurement = "docs";
+        const string fieldName = "embedding";
+
+        var measurements = new MeasurementCatalog();
+        measurements.Add(MeasurementSchema.Create(measurement, new[]
+        {
+            new MeasurementColumn("source", MeasurementColumnRole.Tag, FieldType.String),
+            new MeasurementColumn(
+                fieldName,
+                MeasurementColumnRole.Field,
+                FieldType.Vector,
+                3,
+                VectorIndexDefinition.CreateHnsw(4, 8)),
+        }));
+
+        var seriesCatalog = new SeriesCatalog();
+        ulong seriesId = seriesCatalog.GetOrAdd(measurement, new Dictionary<string, string>
+        {
+            ["source"] = "a",
+        }).Id;
+
+        using var r1 = WriteVectorSegment(
+            1,
+            seriesId,
+            fieldName,
+            (1000L, new[] { 1f, 0f, 0f }),
+            (1002L, new[] { 0f, 1f, 0f }));
+        using var r2 = WriteVectorSegment(
+            2,
+            seriesId,
+            fieldName,
+            (1001L, new[] { 0.9f, 0.1f, 0f }),
+            (1003L, new[] { -1f, 0f, 0f }));
+
+        var plan = new CompactionPlan(0, new long[] { 1, 2 }.AsReadOnly());
+        var readerDict = new Dictionary<long, SegmentReader> { [1] = r1, [2] = r2 };
+        string outPath = Path.Combine(_tempDir, "out_vector.SDBSEG");
+
+        _compactor.Execute(
+            plan,
+            readerDict,
+            300,
+            outPath,
+            seriesCatalog: seriesCatalog,
+            measurementCatalog: measurements);
+
+        Assert.True(File.Exists(TsdbPaths.VectorIndexPathForSegment(outPath)));
+
+        using var merged = SegmentReader.Open(outPath, _readerOpts);
+        var block = Assert.Single(merged.Blocks);
+        Assert.True(merged.TryGetVectorIndex(block, out var vectorIndex));
+        Assert.Equal(block.Count, vectorIndex.Count);
+
+        var data = merged.ReadBlock(block);
+        var timestamps = BlockDecoder.DecodeTimestamps(block, data.TimestampPayload);
+        var hits = vectorIndex.Search([1f, 0f, 0f], data.ValuePayload, timestamps, 2, KnnMetric.Cosine);
+
+        Assert.Equal(2, hits.Count);
+        Assert.Equal(1000L, hits[0].Timestamp);
+        Assert.Equal(1001L, hits[1].Timestamp);
     }
 }
