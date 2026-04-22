@@ -23,8 +23,7 @@ internal sealed class SonnetDbMcpTools
         ReadOnly = true,
         Idempotent = true,
         OpenWorld = false,
-        UseStructuredContent = true,
-        OutputSchemaType = typeof(McpSqlQueryResult))]
+        UseStructuredContent = true)]
     public static CallToolResult QuerySql(
         string sql,
         int? maxRows,
@@ -77,8 +76,7 @@ internal sealed class SonnetDbMcpTools
         ReadOnly = true,
         Idempotent = true,
         OpenWorld = false,
-        UseStructuredContent = true,
-        OutputSchemaType = typeof(McpMeasurementListResult))]
+        UseStructuredContent = true)]
     public static CallToolResult ListMeasurements(
         int? maxRows,
         SonnetDbMcpContextAccessor contextAccessor)
@@ -118,8 +116,7 @@ internal sealed class SonnetDbMcpTools
         ReadOnly = true,
         Idempotent = true,
         OpenWorld = false,
-        UseStructuredContent = true,
-        OutputSchemaType = typeof(McpMeasurementSchemaResult))]
+        UseStructuredContent = true)]
     public static CallToolResult DescribeMeasurement(
         string name,
         SonnetDbMcpContextAccessor contextAccessor)
