@@ -181,6 +181,10 @@ internal static class BlockDecoder
                 ReadStringValues(valPayload, count, result, startIndex: 0, resultOffset: 0);
                 break;
 
+            case FieldType.Vector:
+                ReadVectorValues(valPayload, count, result, startIndex: 0, rangeCount: count, resultOffset: 0);
+                break;
+
             default:
                 throw new ArgumentOutOfRangeException(nameof(fieldType), fieldType, null);
         }
@@ -230,6 +234,10 @@ internal static class BlockDecoder
                 }
                 break;
 
+            case FieldType.Vector:
+                ReadVectorValues(valPayload, totalCount, result, startIndex: start, rangeCount: rangeCount, resultOffset: 0);
+                break;
+
             case FieldType.String:
                 ReadStringValues(valPayload, totalCount, result, startIndex: start, resultOffset: 0);
                 break;
@@ -271,6 +279,41 @@ internal static class BlockDecoder
                     FieldValue.FromString(s));
                 written++;
             }
+        }
+    }
+
+    private static void ReadVectorValues(
+        ReadOnlySpan<byte> valPayload,
+        int totalCount,
+        DataPoint[] result,
+        int startIndex,
+        int rangeCount,
+        int resultOffset)
+    {
+        if (rangeCount == 0 || totalCount == 0)
+            return;
+
+        // VectorRaw 编码下 totalCount 个点占满 valPayload，每点 dim×4 字节。
+        int totalBytes = valPayload.Length;
+        if (totalBytes % totalCount != 0)
+            throw new InvalidDataException(
+                $"Vector value payload 长度 {totalBytes} 不是 totalCount({totalCount}) 的整数倍。");
+        int bytesPerPoint = totalBytes / totalCount;
+        if (bytesPerPoint == 0 || bytesPerPoint % sizeof(float) != 0)
+            throw new InvalidDataException(
+                $"Vector value payload 每点字节数 {bytesPerPoint} 不是 4 的正整数倍。");
+        int dim = bytesPerPoint / sizeof(float);
+
+        for (int i = 0; i < rangeCount; i++)
+        {
+            int srcOffset = (startIndex + i) * bytesPerPoint;
+            ReadOnlySpan<byte> bytes = valPayload.Slice(srcOffset, bytesPerPoint);
+            // 拷贝出独立的 float[]，避免外部直接持有底层 valPayload 字节。
+            float[] arr = new float[dim];
+            System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(bytes).CopyTo(arr);
+            result[resultOffset + i] = new DataPoint(
+                result[resultOffset + i].Timestamp,
+                FieldValue.FromVector(arr));
         }
     }
 

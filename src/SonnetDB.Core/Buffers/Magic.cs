@@ -26,8 +26,21 @@ public static class TsdbMagic
     /// 升级为 8 字节 <see cref="double"/>，无损覆盖 Float64 / Int64 全部范围；
     /// BlockHeader 大小由 64B 增至 72B；旧 v1 段文件被 <c>SegmentReader</c> 拒绝。
     /// </para>
+    /// <para>
+    /// v3（PR #58 c）：在 <see cref="SonnetDB.Storage.Format.BlockEncoding"/> 中新增
+    /// <see cref="SonnetDB.Storage.Format.BlockEncoding.VectorRaw"/> 标记位，并允许
+    /// <see cref="SonnetDB.Storage.Format.BlockHeader.FieldType"/> 取
+    /// <see cref="SonnetDB.Storage.Format.FieldType.Vector"/>。Block 整体结构与
+    /// <see cref="SonnetDB.Storage.Format.BlockHeader"/> 大小不变；仅会在新增 VECTOR 列时实际写入。
+    /// 读取层兼容 v2（v2 段文件不会包含 Vector Block，按原路径读取）。
+    /// </para>
     /// </summary>
-    public const int SegmentFormatVersion = 2;
+    public const int SegmentFormatVersion = 3;
+
+    /// <summary>
+    /// SegmentReader 允许读取的段格式版本集合（含历史只读兼容版本）。
+    /// </summary>
+    public static ReadOnlySpan<int> SupportedSegmentFormatVersions => [2, 3];
 
     /// <summary>构造文件 magic <see cref="InlineBytes8"/>。</summary>
     /// <returns>内容为 <c>"SONNETDB"</c>（8 字节 ASCII）的 <see cref="InlineBytes8"/> 实例。</returns>

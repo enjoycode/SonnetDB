@@ -34,6 +34,17 @@
   - 新增结果归一化器与对照矩阵，覆盖 `SHOW MEASUREMENTS`、多 series 原始投影、稀疏字段查询、`LIMIT/OFFSET`、`sum/avg/min/max/count/first/last`、`GROUP BY time(...)` 桶聚合以及第二 measurement 的原始查询。
   - 对照测试会把 SonnetDB SQL NDJSON 结果与 InfluxDB Flux 结果统一归一化后逐行比较，减少时间格式、浮点表示或列序差异带来的噪音；当 Docker / InfluxDB 环境不可用时按 skip 处理，不阻塞普通无容器环境下的基础测试运行。
 
+- **PR #58 c — `BlockEncoding.VectorRaw` + Segment Header v3 升级（Milestone 13 第三切片）**
+  - `BlockEncoding` 新增 `VectorRaw = 4`：与 `DeltaValue` 互斥的值编码标志；payload 为 `count × dim × float32(LE)` 紧凑序列，dim 由列 schema 携带（不进 BlockHeader）。
+  - `TsdbMagic.SegmentFormatVersion`：`2 → 3`（**写入版本**），新增 `TsdbMagic.SupportedSegmentFormatVersions = [2, 3]` 用于读时兼容。BlockHeader 大小保持 72B 不变，旧 v2 段（无 Vector 列）仍可被新 Reader 直接打开。
+  - `SegmentHeader` / `SegmentFooter` 新增 `IsCompatibleForRead()`：magic 校验 + version ∈ `SupportedSegmentFormatVersions`；`IsValid()` 仍是严格相等（写时校验）。
+  - `SegmentReader.Open` 改为按 `IsCompatibleForRead` 校验头/尾，错误信息升级为提示当前支持的版本列表；`ValueEncoding` 抽取支持 `VectorRaw` 标志位。
+  - `SegmentWriter.WriteOneBlock`：`FieldType.Vector` 走 V1 raw 路径并在 `BlockHeader.Encoding` 上置 `VectorRaw`，禁止与 V2 `DeltaValue` 同时使用。
+  - `ValuePayloadCodec`：新增 `MeasureVectorPayload` / `WriteVectorPayload`；要求同一 block 内所有点维度一致（不一致抛 `InvalidOperationException`）。
+  - `BlockDecoder`：`ReadValues` / `ReadValuesRange` 新增 `FieldType.Vector` 分支；按 `bytesPerPoint = totalBytes/count`、`dim = bytesPerPoint/4` 反序列化，每点拷贝出独立 `float[]` 以 `FieldValue.FromVector` 包装。
+  - 测试：新增 `VectorSegmentTests` × 8（payload 度量 / LE 字节序 / 维度不一致抛异常 / 段 round-trip / 版本常量 / `IsCompatibleForRead` v2+v3 接受、其它拒绝 / Reader 接受 v2 段）；`SonnetDB.Core.Tests` 1554 全绿，`SonnetDB.Tests` 116、`SonnetDB.Accuracy.Tests` 8 全绿。
+  - 兼容性：v2 段仅可被 v3 Reader 读取（v2 Reader 无法读 v3）。Vector 列至此 WAL → MemTable → Segment 持久化链路打通；查询 / 索引 / KNN 相关能力将由 PR #59 起继续。
+
 - **PR #58 b — Schema VECTOR(dim) 列声明 + SQL `[v0, v1, ...]` 字面量（Milestone 13 第二切片）**
   - `MeasurementColumn` 新增可选 `int? VectorDimension`；`MeasurementSchema.Create` 校验：Vector 列必须 `Field` 角色且 `dim > 0`，非 Vector 列禁止携带 dim。
   - SQL 解析层：新增 `KeywordVector` / `LeftBracket` / `RightBracket` token；`SqlLexer` 识别 `vector` 关键字与 `[` / `]` 标点；`SqlDataType.Vector` + `ColumnDefinition.VectorDimension` + `VectorLiteralExpression(IReadOnlyList<double>)` AST。

@@ -18,4 +18,11 @@ public enum BlockEncoding : byte
 
     /// <summary>值列采用 XOR / Gorilla 等编码（Milestone 7 PR #30 启用）。</summary>
     DeltaValue = 2,
+
+    /// <summary>
+    /// 值列为 <see cref="FieldType.Vector"/> 的原始定长编码（Milestone 13 PR #58 c 启用）：
+    /// 每个数据点写入 <c>dim × 4</c> 字节小端 IEEE-754 float32，dim 由 schema 声明，
+    /// 同一 Block 内所有点的 dim 必须一致。该 Block 不可同时启用 <see cref="DeltaValue"/>。
+    /// </summary>
+    VectorRaw = 4,
 }

@@ -160,11 +160,12 @@ public sealed class SegmentReader : IDisposable
         // 读 SegmentHeader（offset 0）
         var header = MemoryMarshal.Read<SegmentHeader>(bytes.AsSpan(0, FormatSizes.SegmentHeaderSize));
 
-        if (!header.IsValid())
+        if (!header.IsCompatibleForRead())
             throw new SegmentCorruptedException(path, 0,
                 $"SegmentHeader Magic 或 FormatVersion 不匹配（Magic={Encoding.ASCII.GetString(header.Magic.AsReadOnlySpan())}, " +
-                $"Version={header.FormatVersion}，期望 v{TsdbMagic.SegmentFormatVersion}）。" +
+                $"Version={header.FormatVersion}，期望 v{TsdbMagic.SegmentFormatVersion}，兼容版本 v{string.Join("/v", TsdbMagic.SupportedSegmentFormatVersions.ToArray())}）。" +
                 "SonnetDB v2（PR #50）将 BlockHeader.AggregateMin/Max 升级为 8 字节 double，BlockHeader 大小由 64B 增至 72B；" +
+                "v3（PR #58 c）新增 BlockEncoding.VectorRaw 与 FieldType.Vector，仅在使用 VECTOR 列时落盘；" +
                 "旧 v1 段文件需通过重放 WAL（删除 .SDBSEG 后启动）重新生成。");
 
         if (header.HeaderSize != FormatSizes.SegmentHeaderSize)
@@ -175,7 +176,7 @@ public sealed class SegmentReader : IDisposable
         int footerStart = bytes.Length - FormatSizes.SegmentFooterSize;
         var footer = MemoryMarshal.Read<SegmentFooter>(bytes.AsSpan(footerStart, FormatSizes.SegmentFooterSize));
 
-        if (!footer.IsValid())
+        if (!footer.IsCompatibleForRead())
             throw new SegmentCorruptedException(path, footerStart,
                 "SegmentFooter Magic 或 FormatVersion 不匹配。");
 
@@ -269,7 +270,9 @@ public sealed class SegmentReader : IDisposable
                     : BlockEncoding.None,
                 ValueEncoding = (bh.Encoding & BlockEncoding.DeltaValue) != 0
                     ? BlockEncoding.DeltaValue
-                    : BlockEncoding.None,
+                    : ((bh.Encoding & BlockEncoding.VectorRaw) != 0
+                        ? BlockEncoding.VectorRaw
+                        : BlockEncoding.None),
                 FieldName = fieldName,
                 FileOffset = headerStart,
                 BlockLength = entry.BlockLength,

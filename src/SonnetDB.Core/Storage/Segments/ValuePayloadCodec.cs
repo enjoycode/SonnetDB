@@ -15,6 +15,7 @@ namespace SonnetDB.Storage.Segments;
 ///   <item><description><see cref="FieldType.Int64"/>：每个点 8 字节（int64 LE）。</description></item>
 ///   <item><description><see cref="FieldType.Boolean"/>：每个点 1 字节（0=false，1=true）。</description></item>
 ///   <item><description><see cref="FieldType.String"/>：每个点先写 int32 LE 字节长度，再写 UTF-8 字节。</description></item>
+///   <item><description><see cref="FieldType.Vector"/>：每个点 <c>dim × 4</c> 字节（dim×float32 LE，dim 由首个数据点确定，所有点必须一致；PR #58 c）。</description></item>
 /// </list>
 /// </para>
 /// </summary>
@@ -38,6 +39,7 @@ internal static class ValuePayloadCodec
             FieldType.Float64 => count * 8,
             FieldType.Int64 => count * 8,
             FieldType.Boolean => count,
+            FieldType.Vector => MeasureVectorPayload(points),
             FieldType.String => MeasureStringPayload(points),
             _ => throw new ArgumentOutOfRangeException(nameof(fieldType), fieldType, null),
         };
@@ -78,6 +80,10 @@ internal static class ValuePayloadCodec
                 WriteStringPayload(ref writer, points);
                 break;
 
+            case FieldType.Vector:
+                WriteVectorPayload(ref writer, points);
+                break;
+
             default:
                 throw new ArgumentOutOfRangeException(nameof(fieldType), fieldType, null);
         }
@@ -110,6 +116,35 @@ internal static class ValuePayloadCodec
             {
                 ArrayPool<byte>.Shared.Return(utf8Buf);
             }
+        }
+    }
+
+    private static int MeasureVectorPayload(ReadOnlyMemory<DataPoint> points)
+    {
+        var span = points.Span;
+        int dim = span[0].Value.VectorDimension;
+        for (int i = 1; i < span.Length; i++)
+        {
+            int d = span[i].Value.VectorDimension;
+            if (d != dim)
+                throw new InvalidOperationException(
+                    $"Vector block 内所有数据点的 dim 必须一致：首个点 dim={dim}，第 {i} 个点 dim={d}。");
+        }
+        return span.Length * dim * sizeof(float);
+    }
+
+    private static void WriteVectorPayload(ref SpanWriter writer, ReadOnlyMemory<DataPoint> points)
+    {
+        var span = points.Span;
+        int dim = span[0].Value.VectorDimension;
+        for (int i = 0; i < span.Length; i++)
+        {
+            ReadOnlySpan<float> components = span[i].Value.AsVector().Span;
+            if (components.Length != dim)
+                throw new InvalidOperationException(
+                    $"Vector block 内所有数据点的 dim 必须一致：首个点 dim={dim}，第 {i} 个点 dim={components.Length}。");
+            // SpanWriter.WriteBytes 接受 ReadOnlySpan<byte>，使用 MemoryMarshal.AsBytes 做安全 reinterpret。
+            writer.WriteBytes(System.Runtime.InteropServices.MemoryMarshal.AsBytes(components));
         }
     }
 }

@@ -288,7 +288,10 @@ public sealed class SegmentWriter
         ref long segMaxTs,
         ref long currentOffset)
     {
-        bool useV2Val = (_options.ValueEncoding & BlockEncoding.DeltaValue) != 0
+        // VECTOR 类型固定走 V1 raw 编码（V2 / DeltaValue 不支持 Vector），并标记 BlockEncoding.VectorRaw（PR #58 c）。
+        bool isVector = bucket.FieldType == FieldType.Vector;
+        bool useV2Val = !isVector
+            && (_options.ValueEncoding & BlockEncoding.DeltaValue) != 0
             && points.Length > 0;
         int valPayloadLen = useV2Val
             ? ValuePayloadCodecV2.Measure(bucket.FieldType, points)
@@ -326,7 +329,10 @@ public sealed class SegmentWriter
                 tsLen: tsSpan.Length,
                 valLen: valSpan.Length);
             bh.Crc32 = crc32;
-            bh.Encoding = tsEncoding | (useV2Val ? BlockEncoding.DeltaValue : BlockEncoding.None);
+            BlockEncoding valueEncodingFlag = useV2Val
+                ? BlockEncoding.DeltaValue
+                : (isVector ? BlockEncoding.VectorRaw : BlockEncoding.None);
+            bh.Encoding = tsEncoding | valueEncodingFlag;
             short aggregateFlags = TryBuildAggregateMetadata(
                 bucket.FieldType, points.Span,
                 out var aggregateSum, out var aggregateMin, out var aggregateMax);

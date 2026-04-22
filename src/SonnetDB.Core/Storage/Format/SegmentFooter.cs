@@ -82,10 +82,28 @@ public struct SegmentFooter
     }
 
     /// <summary>
-    /// 校验段文件尾部是否有效（magic 一致且版本匹配）。
+    /// 校验段文件尾部是否有效（magic 一致且版本匹配当前写入版本）。
     /// </summary>
     /// <returns>有效返回 <c>true</c>，否则返回 <c>false</c>。</returns>
     public readonly bool IsValid() =>
         Magic.AsReadOnlySpan().SequenceEqual(TsdbMagic.Segment) &&
         FormatVersion == TsdbMagic.SegmentFormatVersion;
+
+    /// <summary>
+    /// 读取兼容性校验（magic 一致且版本属于
+    /// <see cref="TsdbMagic.SupportedSegmentFormatVersions"/>）。
+    /// </summary>
+    /// <returns>段文件可被当前 SonnetDB 读取时返回 <c>true</c>。</returns>
+    public readonly bool IsCompatibleForRead()
+    {
+        if (!Magic.AsReadOnlySpan().SequenceEqual(TsdbMagic.Segment))
+            return false;
+        ReadOnlySpan<int> supported = TsdbMagic.SupportedSegmentFormatVersions;
+        for (int i = 0; i < supported.Length; i++)
+        {
+            if (supported[i] == FormatVersion)
+                return true;
+        }
+        return false;
+    }
 }
