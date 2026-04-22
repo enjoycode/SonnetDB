@@ -28,6 +28,14 @@
 - **Milestone 14 — SonnetDB Copilot：MCP 工具 + 知识库 + 智能体**：基于 Microsoft Agent Framework 新建独立项目 `src/SonnetDB.Copilot/`，复用现有 `/mcp/{db}` 工具集 + Milestone 13 的向量召回，把"用户文档 / 技能库 / 数据库 schema"统一存入 `__copilot__` 系统库（dogfooding）。Embedding/Chat 走统一 `IEmbeddingProvider` / `IChatProvider` 抽象，**本地 ONNX（bge-small-zh）** 与 **OpenAI 兼容端点（国际 / 国内任意 OpenAI-compat 网关）** 同时支持，可按部署场景切换。新增 HTTP 端点 `POST /v1/copilot/chat`（NDJSON / SSE 流式）+ Web Admin Chat Tab。详见 ROADMAP PR #63 ~ #69。
 
 ### Added
+- **PR #60 — `knn(...)` 表值函数：brute-force KNN 向量检索（Milestone 13 第五切片）**
+  - 新增内置表值函数 `knn(measurement, column, query_vector, k[, metric])`，支持 `SELECT * FROM knn(...)` SQL 语法，返回 `(time, distance, ...tags, ...fields)` 结果集。
+  - 支持三种距离度量：`'cosine'`（余弦距离，默认）、`'l2'`（欧几里得距离）、`'inner_product'`（负内积），每种度量均支持多个别名（`cosine_distance` / `euclidean` / `dot` / `ip` 等）。
+  - `KnnExecutor` 实现：段级时间窗剪枝 + `Parallel.ForEach` 多序列并行扫描（MemTable + 全量 Segment），扫描结果按距离升序排列后取前 k 条。
+  - `WHERE` 子句同时支持 tag 等值过滤与 `time` 时间范围过滤，缩减召回范围。
+  - 新增文档 `docs/vector-search.md`，包含 Schema 设计、写入、查询语法、度量说明与嵌入式 API C# 示例。
+  - 新增测试 `SqlExecutorKnnTests`（14 个用例），覆盖余弦/L2/负内积排序、k 大于数据量、tag 过滤、时间过滤、多字段输出、错误边界等路径。
+
 - **PR #59 — 向量距离函数与 `centroid` 聚合（Milestone 13 第四切片）**
   - `FunctionRegistry` 新增 4 个向量标量函数：`cosine_distance(a,b)`、`l2_distance(a,b)`、`inner_product(a,b)`、`vector_norm(a)`；均支持 `VECTOR(dim)` 列与 SQL 向量字面量 `[v0, v1, ...]` 直接混合计算，并在参数为 `NULL`、零向量或维度不一致时给出明确错误。
   - `SqlLexer` / `SqlParser` 新增 PostgreSQL/pgvector 兼容运算符 `<=>`、`<->`、`<#>`，语法层会分别重写为 `cosine_distance(...)`、`l2_distance(...)`、`inner_product(...)` 函数调用，因此现有 SELECT 标量函数执行路径与列依赖分析无需额外分支即可复用。

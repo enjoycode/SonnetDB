@@ -9,8 +9,11 @@ using SonnetDB.Storage.Format;
 namespace SonnetDB.Sql.Execution;
 
 /// <summary>
-/// FROM 子句中的表值函数（Table-Valued Function，TVF）执行器；当前仅支持
-/// PR #55 引入的 <c>forecast(measurement, field, horizon, 'algo'[, season])</c>。
+/// FROM 子句中的表值函数（Table-Valued Function，TVF）执行器；当前支持：
+/// <list type="bullet">
+///   <item><description>PR #55 引入的 <c>forecast(measurement, field, horizon, 'algo'[, season])</c>。</description></item>
+///   <item><description>PR #60 引入的 <c>knn(measurement, column, query_vector, k[, metric])</c>。</description></item>
+/// </list>
 /// </summary>
 internal static class TableValuedFunctionExecutor
 {
@@ -27,8 +30,9 @@ internal static class TableValuedFunctionExecutor
         return call.Name.ToLowerInvariant() switch
         {
             "forecast" => ExecuteForecast(tsdb, statement, call),
+            "knn" => ExecuteKnn(tsdb, statement, call),
             _ => throw new InvalidOperationException(
-                $"未知表值函数 '{call.Name}'；当前 FROM 子句仅支持 forecast(...) 及通过 Tsdb.Functions 注册的 UDF。"),
+                $"未知表值函数 '{call.Name}'；当前 FROM 子句支持 forecast(...) / knn(...) 及通过 Tsdb.Functions 注册的 UDF。"),
         };
     }
 
@@ -156,4 +160,175 @@ internal static class TableValuedFunctionExecutor
         var query = new PointQuery(seriesId, fieldName, range);
         return tsdb.Query.Execute(query).ToList();
     }
+
+    // ── knn(measurement, column, query_vector, k[, metric]) ───────────────
+
+    /// <summary>
+    /// 执行 knn 表值函数。
+    /// 语法：<c>SELECT * FROM knn(measurement, column, [f1, f2, ...], k[, 'metric']) [WHERE ...]</c>。
+    /// 返回按距离升序排列的 (time, distance, ...tag_columns, ...field_columns) 结果集。
+    /// </summary>
+    private static SelectExecutionResult ExecuteKnn(Tsdb tsdb, SelectStatement statement, FunctionCallExpression call)
+    {
+        if (call.IsStar)
+            throw new InvalidOperationException("knn(*) 非法。");
+        if (call.Arguments.Count is < 4 or > 5)
+            throw new InvalidOperationException(
+                "knn(measurement, column, query_vector, k[, metric]) 需要 4~5 个参数。");
+
+        // 第 1 个参数：measurement（已由 parser 提取到 statement.Measurement）
+        var schema = tsdb.Measurements.TryGet(statement.Measurement)
+            ?? throw new InvalidOperationException(
+                $"knn(...) 引用的 measurement '{statement.Measurement}' 不存在。");
+
+        // 第 2 个参数：向量列名
+        if (call.Arguments[1] is not IdentifierExpression columnId)
+            throw new InvalidOperationException("knn 第 2 个参数必须是向量列名标识符。");
+        var vectorCol = schema.TryGetColumn(columnId.Name)
+            ?? throw new InvalidOperationException(
+                $"knn 引用了未知列 '{columnId.Name}'。");
+        if (vectorCol.Role != MeasurementColumnRole.Field)
+            throw new InvalidOperationException(
+                $"knn 的列参数 '{columnId.Name}' 必须是 FIELD 列。");
+        if (vectorCol.DataType != FieldType.Vector)
+            throw new InvalidOperationException(
+                $"knn 的列参数 '{columnId.Name}' 必须是 VECTOR 类型，实际为 {vectorCol.DataType}。");
+        int dim = vectorCol.VectorDimension
+            ?? throw new InvalidOperationException(
+                $"VECTOR 列 '{columnId.Name}' 缺少维度声明（schema 损坏）。");
+
+        // 第 3 个参数：查询向量
+        float[] queryArray = ResolveQueryVector(call.Arguments[2], dim, columnId.Name);
+
+        // 第 4 个参数：k（正整数）
+        int k = ResolveKnnK(call.Arguments[3]);
+
+        // 第 5 个参数（可选）：距离度量
+        var metric = call.Arguments.Count == 5
+            ? ResolveKnnMetric(call.Arguments[4])
+            : KnnMetric.Cosine;
+
+        // SELECT * 校验
+        if (!IsSelectStar(statement.Projections))
+            throw new InvalidOperationException(
+                "knn(...) 表值函数当前仅支持 SELECT *；请在外层查询投影具体列。");
+
+        // WHERE 子句：tag 过滤 + 时间范围
+        var where = WhereClauseDecomposer.Decompose(statement.Where, schema);
+        var matchedSeries = tsdb.Catalog.Find(statement.Measurement, where.TagFilter).ToList();
+
+        // 建立 seriesId → SeriesEntry 查找表（供结果行填充 tag 值）
+        var seriesById = new Dictionary<ulong, SeriesEntry>(matchedSeries.Count);
+        foreach (var se in matchedSeries)
+            seriesById[se.Id] = se;
+
+        // 构建输出列名：time, distance, ...tag_columns, ...field_columns
+        var tagColumns = schema.Columns
+            .Where(c => c.Role == MeasurementColumnRole.Tag)
+            .ToList();
+        var fieldColumns = schema.Columns
+            .Where(c => c.Role == MeasurementColumnRole.Field)
+            .ToList();
+
+        var columnNames = new List<string>(2 + tagColumns.Count + fieldColumns.Count);
+        columnNames.Add("time");
+        columnNames.Add("distance");
+        foreach (var tc in tagColumns) columnNames.Add(tc.Name);
+        foreach (var fc in fieldColumns) columnNames.Add(fc.Name);
+
+        // 执行 KNN 搜索
+        var knnResults = KnnExecutor.Execute(
+            tsdb.MemTable,
+            tsdb.Segments.Readers,
+            matchedSeries,
+            vectorCol.Name,
+            queryArray.AsMemory(),
+            k,
+            metric,
+            where.TimeRange);
+
+        // 构建结果行
+        var rows = new List<IReadOnlyList<object?>>(knnResults.Count);
+        foreach (var result in knnResults)
+        {
+            seriesById.TryGetValue(result.SeriesId, out var seriesEntry);
+            var row = new object?[columnNames.Count];
+
+            row[0] = result.Timestamp;
+            row[1] = result.Distance;
+
+            // tag 列
+            for (int ti = 0; ti < tagColumns.Count; ti++)
+            {
+                row[2 + ti] = seriesEntry is not null
+                    && seriesEntry.Tags.TryGetValue(tagColumns[ti].Name, out var tv)
+                    ? tv
+                    : null;
+            }
+
+            // field 列（按精确时间戳查询）
+            var exactRange = new TimeRange(result.Timestamp, result.Timestamp);
+            for (int fi = 0; fi < fieldColumns.Count; fi++)
+            {
+                var fieldPoints = QueryPoints(tsdb, result.SeriesId, fieldColumns[fi].Name, exactRange);
+                row[2 + tagColumns.Count + fi] = fieldPoints.Count > 0
+                    ? ConvertFieldValue(fieldPoints[0].Value)
+                    : null;
+            }
+
+            rows.Add(row);
+        }
+
+        return new SelectExecutionResult(columnNames, rows);
+    }
+
+    /// <summary>把查询向量字面量解析为 float[] 并校验维度。</summary>
+    private static float[] ResolveQueryVector(SqlExpression arg, int expectedDim, string columnName)
+    {
+        if (arg is not VectorLiteralExpression vec)
+            throw new InvalidOperationException(
+                $"knn 第 3 个参数必须是向量字面量（例如 [0.1, 0.2, 0.3]）。");
+        if (vec.Components.Count != expectedDim)
+            throw new InvalidOperationException(
+                $"knn 查询向量维度 {vec.Components.Count} 与列 '{columnName}' 声明的维度 {expectedDim} 不一致。");
+        var arr = new float[expectedDim];
+        for (int i = 0; i < expectedDim; i++)
+            arr[i] = (float)vec.Components[i];
+        return arr;
+    }
+
+    /// <summary>解析 k 参数（正整数字面量）。</summary>
+    private static int ResolveKnnK(SqlExpression arg)
+    {
+        if (arg is LiteralExpression { Kind: SqlLiteralKind.Integer, IntegerValue: > 0 and <= int.MaxValue } lit)
+            return (int)lit.IntegerValue;
+        throw new InvalidOperationException("knn 参数 'k' 必须是正整数字面量。");
+    }
+
+    /// <summary>解析可选的 metric 参数字符串。</summary>
+    private static KnnMetric ResolveKnnMetric(SqlExpression arg)
+    {
+        if (arg is not LiteralExpression { Kind: SqlLiteralKind.String, StringValue: { } s })
+            throw new InvalidOperationException(
+                "knn 第 5 个参数（metric）必须是字符串字面量：'cosine' / 'l2' / 'inner_product'。");
+        return s.ToLowerInvariant() switch
+        {
+            "cosine" or "cosine_distance" => KnnMetric.Cosine,
+            "l2" or "l2_distance" or "euclidean" => KnnMetric.L2,
+            "inner_product" or "dot" or "ip" => KnnMetric.InnerProduct,
+            _ => throw new InvalidOperationException(
+                $"knn 不支持 metric '{s}'，仅支持 'cosine' / 'l2' / 'inner_product'。"),
+        };
+    }
+
+    /// <summary>把 <see cref="FieldValue"/> 转换为结果行中的 object? 表示。</summary>
+    private static object? ConvertFieldValue(FieldValue value) => value.Type switch
+    {
+        FieldType.Float64 => value.AsDouble(),
+        FieldType.Int64 => value.AsLong(),
+        FieldType.Boolean => value.AsBool(),
+        FieldType.String => value.AsString(),
+        FieldType.Vector => value.AsVector().ToArray(),
+        _ => null,
+    };
 }
