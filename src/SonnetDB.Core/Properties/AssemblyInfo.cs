@@ -1,3 +1,4 @@
 ﻿using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("SonnetDB.Core.Tests")]
+[assembly: InternalsVisibleTo("SonnetDB.Benchmarks")]

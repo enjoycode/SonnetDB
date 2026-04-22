@@ -141,6 +141,101 @@ internal sealed class HnswVectorBlockIndex
     }
 
     /// <summary>
+    /// 基于连续的向量值载荷构建 HNSW 图，避免在基准场景中额外构造 <see cref="DataPoint"/> 数组。
+    /// </summary>
+    /// <param name="blockIndex">所属 block 的序号。</param>
+    /// <param name="valPayload">连续的向量值载荷，布局为 <c>count × dimension × float32(LE)</c>。</param>
+    /// <param name="count">向量数量。</param>
+    /// <param name="dimension">向量维度。</param>
+    /// <param name="options">HNSW 参数。</param>
+    /// <returns>构建完成的图索引。</returns>
+    public static HnswVectorBlockIndex Build(
+        int blockIndex,
+        ReadOnlySpan<byte> valPayload,
+        int count,
+        int dimension,
+        HnswVectorIndexOptions options)
+    {
+        if (count <= 0)
+            throw new ArgumentOutOfRangeException(nameof(count), "HNSW 图至少需要 1 个向量点。");
+        if (dimension <= 0)
+            throw new ArgumentOutOfRangeException(nameof(dimension), "向量维度必须大于 0。");
+
+        int expectedLength = checked(count * dimension * sizeof(float));
+        if (valPayload.Length != expectedLength)
+            throw new ArgumentException(
+                $"valPayload 长度必须等于 count × dimension × 4（期望 {expectedLength}，实际 {valPayload.Length}）。",
+                nameof(valPayload));
+
+        var levels = new int[count];
+        var neighbors = new int[count][][];
+
+        ulong rngState = ComputeSeed(blockIndex, count, dimension, options.M, options.Ef);
+        for (int node = 0; node < count; node++)
+        {
+            int level = SampleLevel(ref rngState, options.M);
+            levels[node] = level;
+            neighbors[node] = new int[level + 1][];
+            for (int l = 0; l <= level; l++)
+                neighbors[node][l] = [];
+        }
+
+        int entryPoint = 0;
+        int maxLevel = levels[0];
+
+        for (int node = 1; node < count; node++)
+        {
+            int nodeLevel = levels[node];
+            int currentEntry = entryPoint;
+            double entryDistance = VectorDistance.ComputeCosine(
+                GetVector(valPayload, node, dimension),
+                GetVector(valPayload, currentEntry, dimension));
+
+            for (int level = maxLevel; level > nodeLevel; level--)
+                currentEntry = GreedySearch(valPayload, neighbors, node, currentEntry, level, dimension, ref entryDistance);
+
+            int searchDownTo = Math.Min(nodeLevel, maxLevel);
+            for (int level = searchDownTo; level >= 0; level--)
+            {
+                var candidates = SearchLayer(valPayload, neighbors, node, currentEntry, level, options.Ef, dimension);
+                int take = Math.Min(options.M, candidates.Count);
+                for (int i = 0; i < take; i++)
+                {
+                    int neighbor = candidates[i].Node;
+                    neighbors[node][level] = AddNeighbor(
+                        neighbors[node][level],
+                        neighbor,
+                        options.M,
+                        node,
+                        valPayload,
+                        dimension);
+                    neighbors[neighbor][level] = AddNeighbor(
+                        neighbors[neighbor][level],
+                        node,
+                        options.M,
+                        neighbor,
+                        valPayload,
+                        dimension);
+                }
+
+                if (candidates.Count > 0)
+                {
+                    currentEntry = candidates[0].Node;
+                    entryDistance = candidates[0].Distance;
+                }
+            }
+
+            if (nodeLevel > maxLevel)
+            {
+                entryPoint = node;
+                maxLevel = nodeLevel;
+            }
+        }
+
+        return new HnswVectorBlockIndex(blockIndex, dimension, options.M, options.Ef, entryPoint, maxLevel, neighbors);
+    }
+
+    /// <summary>
     /// 用 ANN 图对整个 block 做近邻搜索。
     /// </summary>
     /// <param name="queryVector">查询向量。</param>
@@ -347,6 +442,40 @@ internal sealed class HnswVectorBlockIndex
         return current;
     }
 
+    private static int GreedySearch(
+        ReadOnlySpan<byte> valPayload,
+        int[][][] neighbors,
+        int targetNode,
+        int entryNode,
+        int level,
+        int dimension,
+        ref double currentDistance)
+    {
+        int current = entryNode;
+        bool improved;
+        do
+        {
+            improved = false;
+            var levelNeighbors = neighbors[current][level];
+            for (int i = 0; i < levelNeighbors.Length; i++)
+            {
+                int neighbor = levelNeighbors[i];
+                double distance = VectorDistance.ComputeCosine(
+                    GetVector(valPayload, targetNode, dimension),
+                    GetVector(valPayload, neighbor, dimension));
+                if (distance < currentDistance)
+                {
+                    current = neighbor;
+                    currentDistance = distance;
+                    improved = true;
+                }
+            }
+        }
+        while (improved);
+
+        return current;
+    }
+
     private static List<NeighborCandidate> SearchLayer(
         ReadOnlySpan<DataPoint> points,
         int[][][] neighbors,
@@ -443,6 +572,58 @@ internal sealed class HnswVectorBlockIndex
         return results;
     }
 
+    private static List<NeighborCandidate> SearchLayer(
+        ReadOnlySpan<byte> valPayload,
+        int[][][] neighbors,
+        int targetNode,
+        int entryNode,
+        int level,
+        int ef,
+        int dimension)
+    {
+        int count = neighbors.Length;
+        var visited = new bool[count];
+        var candidateQueue = new PriorityQueue<int, double>();
+        var results = new List<NeighborCandidate>();
+
+        double entryDistance = VectorDistance.ComputeCosine(
+            GetVector(valPayload, targetNode, dimension),
+            GetVector(valPayload, entryNode, dimension));
+        candidateQueue.Enqueue(entryNode, entryDistance);
+        visited[entryNode] = true;
+        AddResult(results, new NeighborCandidate(entryNode, entryDistance), ef);
+
+        while (candidateQueue.Count > 0)
+        {
+            candidateQueue.TryDequeue(out int current, out double currentDistance);
+            double worstDistance = GetWorstDistance(results);
+            if (results.Count >= ef && currentDistance > worstDistance)
+                break;
+
+            var levelNeighbors = neighbors[current][level];
+            for (int i = 0; i < levelNeighbors.Length; i++)
+            {
+                int neighbor = levelNeighbors[i];
+                if (visited[neighbor])
+                    continue;
+
+                visited[neighbor] = true;
+                double distance = VectorDistance.ComputeCosine(
+                    GetVector(valPayload, targetNode, dimension),
+                    GetVector(valPayload, neighbor, dimension));
+                if (results.Count < ef || distance < worstDistance)
+                {
+                    candidateQueue.Enqueue(neighbor, distance);
+                    AddResult(results, new NeighborCandidate(neighbor, distance), ef);
+                    worstDistance = GetWorstDistance(results);
+                }
+            }
+        }
+
+        results.Sort(static (a, b) => a.Distance.CompareTo(b.Distance));
+        return results;
+    }
+
     private static int[] AddNeighbor(
         int[] existing,
         int neighbor,
@@ -466,6 +647,39 @@ internal sealed class HnswVectorBlockIndex
             ranked[i] = (expanded[i], VectorDistance.ComputeCosine(
                 points[ownerNode].Value.AsVector().Span,
                 points[expanded[i]].Value.AsVector().Span));
+        }
+        Array.Sort(ranked, static (left, right) => left.Distance.CompareTo(right.Distance));
+
+        var trimmed = new int[maxNeighbors];
+        for (int i = 0; i < trimmed.Length; i++)
+            trimmed[i] = ranked[i].Node;
+        return trimmed;
+    }
+
+    private static int[] AddNeighbor(
+        int[] existing,
+        int neighbor,
+        int maxNeighbors,
+        int ownerNode,
+        ReadOnlySpan<byte> valPayload,
+        int dimension)
+    {
+        if (existing.AsSpan().Contains(neighbor))
+            return existing;
+
+        var expanded = new int[existing.Length + 1];
+        existing.CopyTo(expanded, 0);
+        expanded[^1] = neighbor;
+
+        if (expanded.Length <= maxNeighbors)
+            return expanded;
+
+        var ranked = new (int Node, double Distance)[expanded.Length];
+        for (int i = 0; i < expanded.Length; i++)
+        {
+            ranked[i] = (expanded[i], VectorDistance.ComputeCosine(
+                GetVector(valPayload, ownerNode, dimension),
+                GetVector(valPayload, expanded[i], dimension)));
         }
         Array.Sort(ranked, static (left, right) => left.Distance.CompareTo(right.Distance));
 

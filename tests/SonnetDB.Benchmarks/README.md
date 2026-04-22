@@ -36,6 +36,9 @@ dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --fi
 
 # 仅运行压缩（Compaction）基准
 dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --filter *Compaction*
+
+# 仅运行向量召回基准
+dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --filter *Vector*
 ```
 
 ### 2. 单独管理 Docker 环境
@@ -77,6 +80,9 @@ dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *Aggregate
 
 # 仅运行压缩（Compaction）基准
 dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *Compaction*
+
+# 仅运行向量召回基准
+dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *Vector*
 ```
 
 ### 4. 停止外部数据库
@@ -121,6 +127,29 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 
 预先写入多个 `.SDBSEG` 段，然后执行一次 `4 -> 1` 的段合并，
 用于度量 SonnetDB 引擎在真实段文件上的 Compaction 耗时与内存分配。
+
+### VectorRecallBenchmark（向量召回）
+
+- 向量维度：**384**
+- Top-K：**10**
+- Query 批次：每次基准固定 **10 个 query**
+- 度量方式：`cosine`
+- 数据分布：随机生成后做 L2 归一化的 `float32` 向量
+- 默认规模：**10k / 100k**
+- 可选规模：设置环境变量 `SONNETDB_VECTOR_BENCH_INCLUDE_1M=1` 后追加 **1M**
+
+基准方法：
+
+| 方法 | 说明 |
+|------|------|
+| `BruteForce_Top10` | 顺扫全量向量，计算精确 Top10 作为延迟基线 |
+| `Hnsw_Top10` | 使用 `HnswVectorBlockIndex` 做 ANN Top10 查询 |
+| `Hnsw_RecallAt10` | 对同批 query 重新执行 HNSW 查询，并与精确 Top10 计算平均 Recall@10 |
+
+说明：
+
+- 当前实现优先覆盖 **SonnetDB 自身的 brute-force vs HNSW** 算法对比，便于持续回归。
+- `sqlite-vec`、`pgvector (IVF/HNSW)` 的同机粗略对比需要额外外部环境，本仓库先预留结果区，后续补数时统一刷新。
 
 ---
 
@@ -195,7 +224,19 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 |----------------------------- |----------:|----------:|
 | SonnetDB Server Query (10%)    |  88.40 ms |  16.07 MB |
 | SonnetDB Server Aggregate 1Min |  88.82 ms |   2.47 MB |
+
+// VectorRecallBenchmark（PR #62，结果待实测补数）
+| Method                           | Dataset | Mean | Recall@10 |
+|--------------------------------- |--------:|-----:|----------:|
+| BruteForce_Top10                 |   10k   |  TBD |   1.000   |
+| Hnsw_Top10                       |   10k   |  TBD |    TBD    |
+| Hnsw_RecallAt10 (batch average)  |   10k   |  TBD |    TBD    |
+| BruteForce_Top10                 |  100k   |  TBD |   1.000   |
+| Hnsw_Top10                       |  100k   |  TBD |    TBD    |
+| Hnsw_RecallAt10 (batch average)  |  100k   |  TBD |    TBD    |
 ```
+
+> PR #62 当前已把 `VectorRecallBenchmark` 代码、运行入口和结果占位接入仓库；待在具备足够内存的基准机上跑完 `10k / 100k / 1M` 后，再把真实数字与 `sqlite-vec` / `pgvector` 同机粗略对比一并写回此处。
 
 ### PR #49 关键结论
 

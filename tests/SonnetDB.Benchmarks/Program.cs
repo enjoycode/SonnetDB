@@ -6,6 +6,7 @@
 //   dotnet run -c Release -- --filter *Query*
 //   dotnet run -c Release -- --filter *Aggregate*
 //   dotnet run -c Release -- --filter *Compaction*
+//   dotnet run -c Release -- --filter *Vector*
 //   dotnet run -c Release -- --filter *         （运行所有基准）
 //
 // 运行前请先启动外部数据库（见 docker/docker-compose.yml）：
