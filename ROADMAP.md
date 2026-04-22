@@ -276,7 +276,7 @@ db.Functions.RegisterAggregate(new KalmanAggregate()); // 实现 IAggregateFunct
 > **背景**：Milestone 14 的 SonnetDB Copilot（智能体）需要一个"零外部依赖"的向量召回能力。我们已经决定 **dogfooding——把向量库做到 SonnetDB 自己里**，而不是引入 SQLite/sqlite-vec / Qdrant 等外部组件。这样既能复用 WAL/Segment/Compaction 的存储栈，也能成为 SonnetDB 的对外差异化能力（"时序 + 向量"二合一）。
 >
 > **设计原则**：
-> 1. **Safe-only 仍生效**：向量距离计算优先使用 `System.Numerics.Tensors.TensorPrimitives`（.NET 10 已内置 SIMD，零 `unsafe`）。
+> 1. **Safe-only 仍生效**：首版距离计算保持 `unsafe`-free；当前以安全的 `Span<float>` / `for` 循环实现，后续可在不破坏 Safe-only 的前提下演进到 `System.Numerics.Tensors.TensorPrimitives` 等 SIMD 加速路径。
 > 2. **零破坏**：新增 `VECTOR(dim)` 字段类型，复用 `FieldValue` 的 union 结构（新增 `Vector` 分支），现有 schema / 写入 / 查询路径保持兼容。
 > 3. **AOT 友好**：内置距离函数 + 索引算子均为 `sealed class`，不引入反射或动态代码生成。
 > 4. **可演进**：第一版用 brute-force 顺扫 + 段内裁剪，足够覆盖 Copilot 知识库（< 50k 切片）；HNSW 留到 PR #61 按需追加。
@@ -287,11 +287,11 @@ db.Functions.RegisterAggregate(new KalmanAggregate()); // 实现 IAggregateFunct
 |----|------|------|
 | #58 | **`VECTOR(dim)` 数据类型 + 编解码**：`FieldValue` 新增 `Vector` 分支（`ReadOnlyMemory<float>` + dim 校验）；`SegmentWriter` / `SegmentReader` 新增 `BlockEncoding.VectorRaw`（dim×4 字节定长）；schema 在 `CREATE MEASUREMENT` 中支持 `embedding VECTOR(384)` 列；INSERT 支持 `[0.1,0.2,...]` 字面量与参数化 `float[]`；`SegmentFormatVersion` 升级到 v3 并保留对 v2 的只读回退。<br/>**进度**：a) `FieldType.Vector` + `FieldValue.Vector` + WAL `WritePoint` 编解码 ✅；b) Schema VECTOR(dim) 列 + SQL 字面量 ✅；c) `BlockEncoding.VectorRaw` + Segment Header v3 升级 ✅。 | ✅ |
 | #59 | **向量距离函数（Tier 1 标量 + Tier 2 聚合）**：实现 `cosine_distance(a,b)` `l2_distance(a,b)` `inner_product(a,b)` `vector_norm(a)`；新增聚合 `centroid(vec)`（按维度求均值，可合并）；`SqlParser` 支持 `<=>` `<->` `<#>` 三个 PostgreSQL/pgvector 兼容运算符（解析为对应函数调用） | ✅ |
-| #60 | **`KNN` 表值函数 + 段内 brute-force 召回**：新增 `knn(measurement, column, query_vector, k[, metric])` TVF，返回 `(time, distance, ...tags, ...fields)`；执行器在 `SegmentManager` 上做"段级时间窗剪枝 → 段内顺扫 + 维护大小为 k 的最小堆"；MemTable 也参与召回；首版无 ANN，仅靠并行 + SIMD；`docs/vector-search.md` 给出端到端用法示例 | 📋 |
+| #60 | **`KNN` 表值函数 + brute-force 召回**：新增 `knn(measurement, column, query_vector, k[, metric])` TVF，返回 `(time, distance, ...tags, ...fields)`；`KnnExecutor` 对 MemTable + 全量 Segment 做段级时间窗剪枝后的顺扫，使用 `Parallel.ForEach` 并行扫描候选序列并在最终阶段按距离升序取 Top-K；`WHERE` 支持 tag 等值过滤与时间范围过滤；`docs/vector-search.md` 给出端到端用法示例 | ✅ |
 | #61 | **HNSW 段内 ANN 索引（可选构建）**：`SegmentWriter` 在 flush/compaction 阶段对 `VECTOR` 列可选构建 HNSW 图（`SDBVIDX` 边表 sidecar 文件，不污染 `.SDBSEG`）；`SegmentReader` 检测到 `.SDBVIDX` 自动启用 ANN，否则降级为 brute-force；通过 `CREATE MEASUREMENT (... embedding VECTOR(384) WITH INDEX hnsw(m=16, ef=200))` 声明 | 📋 |
 | #62 | **向量基准 + 对比**：`tests/SonnetDB.Benchmarks` 新增 `VectorRecallBenchmark`，10k / 100k / 1M 384-dim 向量的 brute-force 顺扫 vs HNSW 召回延迟 + Recall@10；与 sqlite-vec、pgvector（IVF/HNSW）粗略同机对比写入 README | 📋 |
 
-**推进顺序**：PR #58（类型）→ #59（距离函数）→ #60（KNN 表值函数）→ Milestone 14 可以开始；#61（HNSW）与 #62（基准）允许与 Milestone 14 并行推进。
+**推进顺序**：PR #58 ✅ → #59 ✅ → #60 ✅，Milestone 14 的向量检索前置已满足；#61（HNSW）与 #62（基准）可继续与 Milestone 14 并行推进。
 
 ---
 
@@ -460,11 +460,11 @@ PR #70（GEOPOINT 类型）
 | 10 | 扩展和第三方 | #40, #41 + #42~#45 批量入库专题 | 🚧（#42~#45 ✅） |
 | 11 | 写入快路径（PR #45 瓶颈收尾） | #46 ~ #49 | ✅ |
 | 12 | 函数与算子扩展（PID / Forecast / UDF） | #50 ~ #57 | ✅ |
-| 13 | 向量类型与嵌入式向量索引（Copilot 知识库底座） | #58 ~ #62 | 📋 |
+| 13 | 向量类型与嵌入式向量索引（Copilot 知识库底座） | #58 ~ #62 | 🚧（#58~#60 ✅） |
 | 14 | SonnetDB Copilot：MCP 工具 + 知识库 + 智能体 | #63 ~ #69 | 📋 |
 | 15 | 地理空间类型与轨迹分析 | #70 ~ #77 | 📋 |
 
-**当前推进顺序**：Milestone 13（向量类型）→ Milestone 14（Copilot），其中 PR #58→#59→#60 是 Copilot 知识库的硬前置；PR #61（HNSW）/ #62（向量基准）允许与 Milestone 14 并行推进。Milestone 15（地理空间）无硬性前置，可与 Milestone 13/14 并行启动，建议在 PR #70（GEOPOINT 类型）合并后跟进后续 PR。
+**当前推进顺序**：Milestone 13（向量类型）已完成 PR #58 ~ #60，Copilot 知识库所需的 `VECTOR` / 距离函数 / `knn(...)` 前置已具备；剩余 PR #61（HNSW）/ #62（向量基准）可与 Milestone 14（Copilot）并行推进。Milestone 15（地理空间）无硬性前置，可与 Milestone 13/14 并行启动，建议在 PR #70（GEOPOINT 类型）合并后跟进后续 PR。
 
 ---
 
@@ -479,6 +479,6 @@ PR #70（GEOPOINT 类型）
 7. **执行顺序前置**：PR #21（Retention TTL）与 PR #35（嵌入式 Benchmark 基线）必须先于 M8 完成。
 8. **发布顺延到 Milestone 9。**
 9. **新增 Milestone 12 — 函数与算子扩展**：将 `enum Aggregator` 重构为 `FunctionRegistry` + `IAggregateFunction`，引入 Tier 1–5 共 ~50 个函数；以 **PID 与 Forecast** 作为内置差异化能力，并开放 UDF 注册 API 给嵌入式生态。该里程碑独立于原路线图，定位为 SonnetDB 在工业 / IoT / 可观测性场景的横向扩展层。
-10. **新增 Milestone 13 — 向量类型与嵌入式向量索引**：引入 `VECTOR(dim)` 数据类型与 `cosine_distance` / `l2_distance` / `inner_product` 标量函数 + `knn(...)` 表值函数，第一版以 brute-force + SIMD 实现，HNSW 作为可选段内 sidecar 索引（`SDBVIDX`）。定位为 Milestone 14 Copilot 知识库的存储底座，同时让 SonnetDB 形成"时序 + 向量"二合一的对外差异化能力。距离计算全部走 `System.Numerics.Tensors.TensorPrimitives`，继续遵守 Safe-only 原则。
+10. **新增 Milestone 13 — 向量类型与嵌入式向量索引**：引入 `VECTOR(dim)` 数据类型与 `cosine_distance` / `l2_distance` / `inner_product` 标量函数 + `knn(...)` 表值函数，第一版以 brute-force + 并行顺扫实现，HNSW 作为可选段内 sidecar 索引（`SDBVIDX`）。定位为 Milestone 14 Copilot 知识库的存储底座，同时让 SonnetDB 形成"时序 + 向量"二合一的对外差异化能力；后续可在继续遵守 Safe-only 原则的前提下演进到 `System.Numerics.Tensors.TensorPrimitives` 等 SIMD 加速路径。
 11. **新增 Milestone 14 — SonnetDB Copilot**：基于 Microsoft Agent Framework 的智能体层，复用现有 `/mcp/{db}` 工具集 + Milestone 13 的向量召回，把"用户文档 / 技能库 / 数据库 schema"全部 dogfood 到 `__copilot__` 系统库中。Embedding/Chat 走统一 `IEmbeddingProvider` / `IChatProvider` 抽象，**本地 ONNX（bge-small-zh）** 与 **OpenAI 兼容端点（国际版 / 国内版任意 OpenAI-compat 网关）** 同时支持，可按部署场景切换。**不新增项目**，在现有 `SonnetDB.Core` / `SonnetDB.Server` 程序集内新增 `SonnetDB.Copilot` 命名空间；测试位于 `tests/SonnetDB.Tests/Copilot/`；服务端默认启用，可通过配置关闭。
 12. **新增 Milestone 15 — 地理空间类型与轨迹分析**：引入原生 `GEOPOINT` 字段类型（`FieldType.GeoPoint = 6`，lat/lon 各 8 字节 little-endian，`SegmentFormatVersion` v4）；Tier 1 地理标量函数（`geo_distance` / `geo_bearing` / `geo_within` / `geo_bbox` / `geo_speed`，含 PostGIS 兼容别名）；Tier 2 轨迹聚合函数（`trajectory_length` / `trajectory_centroid` / `trajectory_bbox` / 速度统计）；GeoJSON 序列化 + `GET /v1/db/{db}/geo/{measurement}/trajectory` 端点；Vue3 Web Admin 轨迹地图标签页（MapLibre GL + ECharts 时间轴联动）；SQL 控制台三视图（表格 / 图表 / 地图）；Geohash 段内剪枝索引（`SegmentFormatVersion` v5）。全程遵守 Safe-only 与零第三方运行时依赖原则。
