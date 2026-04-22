@@ -29,6 +29,12 @@ public enum TokenKind
     NotEqual,
     LessThan,
     LessThanOrEqual,
+    /// <summary><c>&lt;=&gt;</c>：pgvector 兼容余弦距离运算符（PR #59）。</summary>
+    VectorCosineDistance,
+    /// <summary><c>&lt;-&gt;</c>：pgvector 兼容 L2 距离运算符（PR #59）。</summary>
+    VectorL2Distance,
+    /// <summary><c>&lt;#&gt;</c>：pgvector 兼容内积运算符（PR #59）。</summary>
+    VectorInnerProduct,
     GreaterThan,
     GreaterThanOrEqual,
     Plus,

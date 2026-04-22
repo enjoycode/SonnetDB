@@ -16,6 +16,7 @@ public sealed class FunctionRegistryTests
             new MeasurementColumn("host", MeasurementColumnRole.Tag, FieldType.String),
             new MeasurementColumn("usage", MeasurementColumnRole.Field, FieldType.Float64),
             new MeasurementColumn("label", MeasurementColumnRole.Field, FieldType.String),
+            new MeasurementColumn("embedding", MeasurementColumnRole.Field, FieldType.Vector, 3),
         });
 
     [Theory]
@@ -39,6 +40,10 @@ public sealed class FunctionRegistryTests
     [InlineData("sqrt")]
     [InlineData("log")]
     [InlineData("coalesce")]
+    [InlineData("cosine_distance")]
+    [InlineData("l2_distance")]
+    [InlineData("inner_product")]
+    [InlineData("vector_norm")]
     public void TryGetScalar_ResolvesBuiltIns(string name)
     {
         Assert.True(FunctionRegistry.TryGetScalar(name.ToUpperInvariant(), out var function));
@@ -48,7 +53,9 @@ public sealed class FunctionRegistryTests
     [Theory]
     [InlineData("count", FunctionKind.Aggregate)]
     [InlineData("sqrt", FunctionKind.Scalar)]
+    [InlineData("cosine_distance", FunctionKind.Scalar)]
     [InlineData("stddev", FunctionKind.Aggregate)]
+    [InlineData("centroid", FunctionKind.Aggregate)]
     [InlineData("p95", FunctionKind.Aggregate)]
     [InlineData("histogram", FunctionKind.Aggregate)]
     [InlineData("derivative", FunctionKind.Window)]
@@ -145,10 +152,38 @@ public sealed class FunctionRegistryTests
     }
 
     [Fact]
+    public void ScalarFunction_VectorFunctions_ReturnExpectedResults()
+    {
+        var cosine = GetScalar("cosine_distance");
+        var l2 = GetScalar("l2_distance");
+        var inner = GetScalar("inner_product");
+        var norm = GetScalar("vector_norm");
+
+        var a = new float[] { 1, 0, 0 };
+        var b = new float[] { 0, 1, 0 };
+        var c = new float[] { 3, 4 };
+
+        Assert.Equal(1.0, (double)cosine.Evaluate(new object?[] { a, b })!, 6);
+        Assert.Equal(Math.Sqrt(2.0), Convert.ToDouble(l2.Evaluate(new object?[] { a, b })), 6);
+        Assert.Equal(0.0, Convert.ToDouble(inner.Evaluate(new object?[] { a, b })), 6);
+        Assert.Equal(5.0, Convert.ToDouble(norm.Evaluate(new object?[] { c })), 6);
+    }
+
+    [Fact]
     public void ScalarFunction_InvalidArgumentCount_Throws()
     {
         var abs = GetScalar("abs");
         Assert.Throws<InvalidOperationException>(() => abs.Evaluate([]));
+    }
+
+    [Fact]
+    public void ResolveFieldName_Centroid_VectorField_ReturnsColumnName()
+    {
+        Assert.True(FunctionRegistry.TryGetAggregate("centroid", out var function));
+        var fieldName = function.ResolveFieldName(
+            new FunctionCallExpression("centroid", new[] { new IdentifierExpression("embedding") }),
+            _schema);
+        Assert.Equal("embedding", fieldName);
     }
 
     private static IScalarFunction GetScalar(string name)

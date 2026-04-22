@@ -155,6 +155,21 @@ public sealed class SqlLexer
                 if (Peek(1) == '=') { _position += 2; return new Token(TokenKind.NotEqual, "!=", start); }
                 throw new SqlParseException("无法识别的字符 '!'", start);
             case '<':
+                if (Peek(1) == '=' && Peek(2) == '>')
+                {
+                    _position += 3;
+                    return new Token(TokenKind.VectorCosineDistance, "<=>", start);
+                }
+                if (Peek(1) == '-' && Peek(2) == '>')
+                {
+                    _position += 3;
+                    return new Token(TokenKind.VectorL2Distance, "<->", start);
+                }
+                if (Peek(1) == '#' && Peek(2) == '>')
+                {
+                    _position += 3;
+                    return new Token(TokenKind.VectorInnerProduct, "<#>", start);
+                }
                 if (Peek(1) == '=') { _position += 2; return new Token(TokenKind.LessThanOrEqual, "<=", start); }
                 if (Peek(1) == '>') { _position += 2; return new Token(TokenKind.NotEqual, "<>", start); }
                 _position++;

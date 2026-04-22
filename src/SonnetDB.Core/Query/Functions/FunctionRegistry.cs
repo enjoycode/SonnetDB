@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.CodeAnalysis;
 using SonnetDB.Catalog;
 using SonnetDB.Query.Functions.Aggregates;
 using SonnetDB.Query.Functions.Control;
@@ -115,6 +115,7 @@ public static class FunctionRegistry
         new TDigestAggFunction(),
         new DistinctCountFunction(),
         new HistogramFunction(),
+        new CentroidFunction(),
         // Tier 4 — PID 控制律（PR #54）
         new PidAggregateFunction(),
         new PidEstimateFunction(),
@@ -127,6 +128,10 @@ public static class FunctionRegistry
         new BuiltInScalarFunction("sqrt", 1, 1, static args => Math.Sqrt(RequireDouble(args[0], "sqrt"))),
         new BuiltInScalarFunction("log", 1, 2, EvaluateLog),
         new BuiltInScalarFunction("coalesce", 1, int.MaxValue, EvaluateCoalesce),
+        new BuiltInScalarFunction("cosine_distance", 2, 2, EvaluateCosineDistance),
+        new BuiltInScalarFunction("l2_distance", 2, 2, EvaluateL2Distance),
+        new BuiltInScalarFunction("inner_product", 2, 2, EvaluateInnerProduct),
+        new BuiltInScalarFunction("vector_norm", 1, 1, EvaluateVectorNorm),
     ];
 
     private static IWindowFunction[] CreateWindowFunctionList() =>
@@ -213,6 +218,63 @@ public static class FunctionRegistry
         return null;
     }
 
+    private static object? EvaluateCosineDistance(IReadOnlyList<object?> args)
+    {
+        var left = RequireVector(args[0], "cosine_distance");
+        var right = RequireVector(args[1], "cosine_distance");
+        EnsureSameVectorDimension(left, right, "cosine_distance");
+        double leftNormSquared = 0;
+        double rightNormSquared = 0;
+        double dot = 0;
+        for (int i = 0; i < left.Length; i++)
+        {
+            dot += left[i] * right[i];
+            leftNormSquared += left[i] * left[i];
+            rightNormSquared += right[i] * right[i];
+        }
+
+        if (leftNormSquared == 0 || rightNormSquared == 0)
+            throw new InvalidOperationException("函数 cosine_distance 不接受零向量参数。");
+
+        double cosineSimilarity = dot / (Math.Sqrt(leftNormSquared) * Math.Sqrt(rightNormSquared));
+        return 1.0 - cosineSimilarity;
+    }
+
+    private static object? EvaluateL2Distance(IReadOnlyList<object?> args)
+    {
+        var left = RequireVector(args[0], "l2_distance");
+        var right = RequireVector(args[1], "l2_distance");
+        EnsureSameVectorDimension(left, right, "l2_distance");
+        double sumSquared = 0;
+        for (int i = 0; i < left.Length; i++)
+        {
+            double delta = left[i] - right[i];
+            sumSquared += delta * delta;
+        }
+
+        return Math.Sqrt(sumSquared);
+    }
+
+    private static object? EvaluateInnerProduct(IReadOnlyList<object?> args)
+    {
+        var left = RequireVector(args[0], "inner_product");
+        var right = RequireVector(args[1], "inner_product");
+        EnsureSameVectorDimension(left, right, "inner_product");
+        double dot = 0;
+        for (int i = 0; i < left.Length; i++)
+            dot += left[i] * right[i];
+        return dot;
+    }
+
+    private static object? EvaluateVectorNorm(IReadOnlyList<object?> args)
+    {
+        var vector = RequireVector(args[0], "vector_norm");
+        double sumSquared = 0;
+        for (int i = 0; i < vector.Length; i++)
+            sumSquared += vector[i] * vector[i];
+        return Math.Sqrt(sumSquared);
+    }
+
     private static double RequireDouble(object? value, string functionName)
     {
         return value switch
@@ -231,6 +293,27 @@ public static class FunctionRegistry
             null => throw new InvalidOperationException($"函数 {functionName} 不接受 NULL 参数。"),
             _ => throw new InvalidOperationException($"函数 {functionName} 需要数值参数。"),
         };
+    }
+
+    private static ReadOnlySpan<float> RequireVector(object? value, string functionName)
+    {
+        return value switch
+        {
+            float[] vector when vector.Length > 0 => vector,
+            float[] => throw new InvalidOperationException($"函数 {functionName} 不接受空向量。"),
+            null => throw new InvalidOperationException($"函数 {functionName} 不接受 NULL 参数。"),
+            _ => throw new InvalidOperationException($"函数 {functionName} 需要 VECTOR 参数。"),
+        };
+    }
+
+    private static void EnsureSameVectorDimension(
+        ReadOnlySpan<float> left, ReadOnlySpan<float> right, string functionName)
+    {
+        if (left.Length != right.Length)
+        {
+            throw new InvalidOperationException(
+                $"函数 {functionName} 的两个向量参数维度必须一致：left={left.Length}, right={right.Length}。");
+        }
     }
 
     private sealed class BuiltInAggregateFunction : IAggregateFunction
@@ -271,9 +354,9 @@ public static class FunctionRegistry
             if (col.Role != MeasurementColumnRole.Field)
                 throw new InvalidOperationException(
                     $"聚合函数 {call.Name}({id.Name}) 只能作用于 FIELD 列。");
-            if (LegacyAggregator != Aggregator.Count && col.DataType == FieldType.String)
+            if (LegacyAggregator != Aggregator.Count && col.DataType is FieldType.String or FieldType.Vector)
                 throw new InvalidOperationException(
-                    $"聚合函数 {call.Name} 不支持 String 类型字段 '{id.Name}'。");
+                    $"聚合函数 {call.Name} 仅支持数值字段，'{id.Name}' 的类型为 {col.DataType}。");
             return col.Name;
         }
     }
