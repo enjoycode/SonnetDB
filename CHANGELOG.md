@@ -28,6 +28,12 @@
 - **Milestone 14 — SonnetDB Copilot：MCP 工具 + 知识库 + 智能体**：基于 Microsoft Agent Framework 新建独立项目 `src/SonnetDB.Copilot/`，复用现有 `/mcp/{db}` 工具集 + Milestone 13 的向量召回，把"用户文档 / 技能库 / 数据库 schema"统一存入 `__copilot__` 系统库（dogfooding）。Embedding/Chat 走统一 `IEmbeddingProvider` / `IChatProvider` 抽象，**本地 ONNX（bge-small-zh）** 与 **OpenAI 兼容端点（国际 / 国内任意 OpenAI-compat 网关）** 同时支持，可按部署场景切换。新增 HTTP 端点 `POST /v1/copilot/chat`（NDJSON / SSE 流式）+ Web Admin Chat Tab。详见 ROADMAP PR #63 ~ #69。
 
 ### Added
+- **PR #59 — 向量距离函数与 `centroid` 聚合（Milestone 13 第四切片）**
+  - `FunctionRegistry` 新增 4 个向量标量函数：`cosine_distance(a,b)`、`l2_distance(a,b)`、`inner_product(a,b)`、`vector_norm(a)`；均支持 `VECTOR(dim)` 列与 SQL 向量字面量 `[v0, v1, ...]` 直接混合计算，并在参数为 `NULL`、零向量或维度不一致时给出明确错误。
+  - `SqlLexer` / `SqlParser` 新增 PostgreSQL/pgvector 兼容运算符 `<=>`、`<->`、`<#>`，语法层会分别重写为 `cosine_distance(...)`、`l2_distance(...)`、`inner_product(...)` 函数调用，因此现有 SELECT 标量函数执行路径与列依赖分析无需额外分支即可复用。
+  - 扩展聚合新增 `centroid(vec)`：按维度累计向量和并在最终阶段输出 `float[]` 均值；`IAggregateAccumulator` / `SelectExecutor` 同步扩展了向量累加入口，使 `GROUP BY time(...)` 与跨桶/跨段合并场景都能复用同一套聚合实现。
+  - 测试补齐：新增/扩展 `FunctionRegistryTests`、`ExtendedAggregateAccumulatorTests`、`SqlLexerTests`、`SqlParserVectorTests`、`SqlExecutorVectorTests`，覆盖函数注册、pgvector 运算符改写、标量执行、`centroid` 聚合与维度校验路径。
+
 - **InfluxDB 2.x 数据准确性对照测试项目**
   - 新增独立测试项目 `tests/SonnetDB.Accuracy.Tests`，通过 Testcontainers 启动 InfluxDB 2.7 容器，同时在进程内启动 SonnetDB Server，向两侧写入同一批 Line Protocol 测试数据。
   - 新增准确性对照 fixture：自动创建 SonnetDB 数据库与 measurement schema，复用同一份 LP 数据分别写入 SonnetDB 批量入库端点与 InfluxDB `/api/v2/write`，用于验证服务端真实入库与查询链路，而不是仅验证进程内对象。
