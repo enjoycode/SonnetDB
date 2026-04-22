@@ -121,11 +121,12 @@ public class SqlLexerTests
     [Fact]
     public void Tokenize_OperatorsAreLexedDistinctly()
     {
-        var tokens = SqlLexer.Tokenize("= != <> < <= > >= + - * / %");
+        var tokens = SqlLexer.Tokenize("= != <> < <= <=> <-> <#> > >= + - * / %");
         var kinds = new[]
         {
             TokenKind.Equal, TokenKind.NotEqual, TokenKind.NotEqual,
             TokenKind.LessThan, TokenKind.LessThanOrEqual,
+            TokenKind.VectorCosineDistance, TokenKind.VectorL2Distance, TokenKind.VectorInnerProduct,
             TokenKind.GreaterThan, TokenKind.GreaterThanOrEqual,
             TokenKind.Plus, TokenKind.Minus, TokenKind.Star, TokenKind.Slash, TokenKind.Percent,
             TokenKind.EndOfFile,

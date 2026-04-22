@@ -32,9 +32,9 @@ internal static class ExtendedAggregateBinder
         if (col.Role != MeasurementColumnRole.Field)
             throw new InvalidOperationException(
                 $"{functionName} 只能作用于 FIELD 列（'{id.Name}' 是 {col.Role}）。");
-        if (col.DataType == FieldType.String)
+        if (col.DataType is FieldType.String or FieldType.Vector)
             throw new InvalidOperationException(
-                $"{functionName} 不支持 String 字段 '{id.Name}'。");
+                $"{functionName} 仅支持数值字段，'{id.Name}' 的类型为 {col.DataType}。");
         return col.Name;
     }
 
@@ -61,9 +61,9 @@ internal static class ExtendedAggregateBinder
         if (col.Role != MeasurementColumnRole.Field)
             throw new InvalidOperationException(
                 $"{functionName} 只能作用于 FIELD 列（'{id.Name}' 是 {col.Role}）。");
-        if (col.DataType == FieldType.String)
+        if (col.DataType is FieldType.String or FieldType.Vector)
             throw new InvalidOperationException(
-                $"{functionName} 不支持 String 字段 '{id.Name}'。");
+                $"{functionName} 仅支持数值字段，'{id.Name}' 的类型为 {col.DataType}。");
 
         double numeric = call.Arguments[1] switch
         {
@@ -73,5 +73,34 @@ internal static class ExtendedAggregateBinder
                 $"{functionName}(...) 第二个参数必须是数值常量。"),
         };
         return (col.Name, numeric);
+    }
+
+    /// <summary>
+    /// 校验 <c>fn(field)</c> 形式（单参数、字段必须为向量列），返回字段名。
+    /// </summary>
+    public static string ResolveSingleVectorField(
+        FunctionCallExpression call, MeasurementSchema schema, string functionName)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+        ArgumentNullException.ThrowIfNull(schema);
+
+        if (call.IsStar)
+            throw new InvalidOperationException($"{functionName}(*) 非法。");
+        if (call.Arguments.Count != 1)
+            throw new InvalidOperationException(
+                $"{functionName}(...) 需要 1 个参数（字段名），实际 {call.Arguments.Count}。");
+        if (call.Arguments[0] is not IdentifierExpression id)
+            throw new InvalidOperationException(
+                $"{functionName}(...) 第一个参数必须是字段名。");
+
+        var col = schema.TryGetColumn(id.Name)
+            ?? throw new InvalidOperationException($"{functionName}({id.Name}) 引用了未知列。");
+        if (col.Role != MeasurementColumnRole.Field)
+            throw new InvalidOperationException(
+                $"{functionName} 只能作用于 FIELD 列（'{id.Name}' 是 {col.Role}）。");
+        if (col.DataType != FieldType.Vector)
+            throw new InvalidOperationException(
+                $"{functionName} 仅支持 VECTOR 字段，'{id.Name}' 的类型为 {col.DataType}。");
+        return col.Name;
     }
 }

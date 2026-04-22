@@ -17,6 +17,7 @@ public sealed class ExtendedAggregateAccumulatorTests
             new MeasurementColumn("host", MeasurementColumnRole.Tag, FieldType.String),
             new MeasurementColumn("usage", MeasurementColumnRole.Field, FieldType.Float64),
             new MeasurementColumn("label", MeasurementColumnRole.Field, FieldType.String),
+            new MeasurementColumn("embedding", MeasurementColumnRole.Field, FieldType.Vector, 3),
         });
 
     [Fact]
@@ -171,6 +172,31 @@ public sealed class ExtendedAggregateAccumulatorTests
     }
 
     [Fact]
+    public void CentroidAccumulator_Merge_ProducesPerDimensionMean()
+    {
+        var a = new CentroidAccumulator();
+        var b = new CentroidAccumulator();
+        a.Add(new float[] { 1, 2, 3 });
+        a.Add(new float[] { 3, 4, 5 });
+        b.Add(new float[] { 5, 6, 7 });
+        a.Merge(b);
+
+        var centroid = Assert.IsType<float[]>(a.Finalize());
+        Assert.Equal(new[] { 3f, 4f, 5f }, centroid);
+        Assert.Equal(3L, a.Count);
+    }
+
+    [Fact]
+    public void CentroidFunction_RejectsNonVectorField()
+    {
+        var fn = new CentroidFunction();
+        var call = new FunctionCallExpression(
+            "centroid",
+            new SqlExpression[] { new IdentifierExpression("usage") });
+        Assert.Throws<InvalidOperationException>(() => fn.ResolveFieldName(call, _schema));
+    }
+
+    [Fact]
     public void PercentileFunction_RejectsOutOfRangeQ()
     {
         var fn = new PercentileFunction();
@@ -195,10 +221,10 @@ public sealed class ExtendedAggregateAccumulatorTests
     {
         foreach (var name in new[]
                  {
-                     "stddev", "variance", "spread", "mode",
-                     "median", "percentile", "p50", "p90", "p95", "p99",
-                     "tdigest_agg", "distinct_count", "histogram",
-                 })
+                      "stddev", "variance", "spread", "mode",
+                      "median", "percentile", "p50", "p90", "p95", "p99",
+                      "tdigest_agg", "distinct_count", "histogram", "centroid",
+                  })
         {
             Assert.True(FunctionRegistry.TryGetAggregate(name, out var fn),
                 $"未注册扩展聚合 '{name}'。");

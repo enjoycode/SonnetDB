@@ -463,11 +463,25 @@ public sealed class SqlParser
     private SqlExpression ParseComparison()
     {
         var left = ParseAdditive();
-        while (TryMapComparison(Current.Kind, out var op))
+        while (true)
         {
-            Advance();
-            var right = ParseAdditive();
-            left = new BinaryExpression(op, left, right);
+            if (TryMapComparison(Current.Kind, out var op))
+            {
+                Advance();
+                var right = ParseAdditive();
+                left = new BinaryExpression(op, left, right);
+                continue;
+            }
+
+            if (TryMapVectorDistance(Current.Kind, out var functionName))
+            {
+                Advance();
+                var right = ParseAdditive();
+                left = new FunctionCallExpression(functionName, new[] { left, right });
+                continue;
+            }
+
+            break;
         }
         return left;
     }
@@ -483,6 +497,25 @@ public sealed class SqlParser
             case TokenKind.GreaterThan: op = SqlBinaryOperator.GreaterThan; return true;
             case TokenKind.GreaterThanOrEqual: op = SqlBinaryOperator.GreaterThanOrEqual; return true;
             default: op = default; return false;
+        }
+    }
+
+    private static bool TryMapVectorDistance(TokenKind kind, out string functionName)
+    {
+        switch (kind)
+        {
+            case TokenKind.VectorCosineDistance:
+                functionName = "cosine_distance";
+                return true;
+            case TokenKind.VectorL2Distance:
+                functionName = "l2_distance";
+                return true;
+            case TokenKind.VectorInnerProduct:
+                functionName = "inner_product";
+                return true;
+            default:
+                functionName = string.Empty;
+                return false;
         }
     }
 

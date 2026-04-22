@@ -396,3 +396,87 @@ internal sealed class HistogramAccumulator : IAggregateAccumulator
         return sb.ToString();
     }
 }
+
+// ── centroid ───────────────────────────────────────────────────────────────
+
+internal sealed class CentroidFunction : ExtendedAggregateFunction
+{
+    public override string Name => "centroid";
+
+    public override string? ResolveFieldName(FunctionCallExpression call, MeasurementSchema schema)
+        => ExtendedAggregateBinder.ResolveSingleVectorField(call, schema, Name);
+
+    public override IAggregateAccumulator CreateAccumulator(
+        FunctionCallExpression call, MeasurementSchema schema) => new CentroidAccumulator();
+}
+
+internal sealed class CentroidAccumulator : IAggregateAccumulator
+{
+    private double[]? _sums;
+
+    public long Count { get; private set; }
+
+    public void Add(double value)
+        => throw new InvalidOperationException("centroid(...) 需要 VECTOR 参数。");
+
+    public void Add(ReadOnlyMemory<float> vector)
+    {
+        var span = vector.Span;
+        if (span.Length == 0)
+            throw new InvalidOperationException("centroid(...) 不接受空向量。");
+
+        if (_sums is null)
+        {
+            _sums = new double[span.Length];
+        }
+        else if (_sums.Length != span.Length)
+        {
+            throw new InvalidOperationException(
+                $"centroid(...) 向量维度不一致：期望 {_sums.Length}，实际 {span.Length}。");
+        }
+
+        for (int i = 0; i < span.Length; i++)
+            _sums[i] += span[i];
+
+        Count++;
+    }
+
+    public void Merge(IAggregateAccumulator other)
+    {
+        if (other is not CentroidAccumulator c)
+            throw new ArgumentException($"Cannot merge {other.GetType().Name} into CentroidAccumulator.", nameof(other));
+        if (c.Count == 0)
+            return;
+        if (c._sums is null)
+            throw new InvalidOperationException("待合并的 centroid 累加器缺少向量状态。");
+
+        if (_sums is null)
+        {
+            _sums = c._sums.ToArray();
+            Count = c.Count;
+            return;
+        }
+
+        if (_sums.Length != c._sums.Length)
+        {
+            throw new InvalidOperationException(
+                $"centroid(...) 向量维度不一致：期望 {_sums.Length}，实际 {c._sums.Length}。");
+        }
+
+        for (int i = 0; i < _sums.Length; i++)
+            _sums[i] += c._sums[i];
+
+        Count += c.Count;
+    }
+
+    public object? Finalize()
+    {
+        if (Count == 0 || _sums is null)
+            return null;
+
+        var result = new float[_sums.Length];
+        for (int i = 0; i < _sums.Length; i++)
+            result[i] = (float)(_sums[i] / Count);
+        return result;
+    }
+}

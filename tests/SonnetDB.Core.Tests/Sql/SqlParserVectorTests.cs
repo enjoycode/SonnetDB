@@ -116,4 +116,20 @@ public class SqlParserVectorTests
         Assert.Throws<SqlParseException>(() =>
             SqlParser.Parse("INSERT INTO docs (e) VALUES ([1, 'x', 3])"));
     }
+
+    [Theory]
+    [InlineData("<->", "l2_distance")]
+    [InlineData("<=>", "cosine_distance")]
+    [InlineData("<#>", "inner_product")]
+    public void Parse_Select_VectorOperator_RewritesToFunctionCall(string op, string functionName)
+    {
+        var stmt = (SelectStatement)SqlParser.Parse(
+            $"SELECT embedding {op} [1, 2, 3] FROM docs");
+
+        var fn = Assert.IsType<FunctionCallExpression>(stmt.Projections[0].Expression);
+        Assert.Equal(functionName, fn.Name);
+        Assert.Equal(new IdentifierExpression("embedding"), fn.Arguments[0]);
+        var vector = Assert.IsType<VectorLiteralExpression>(fn.Arguments[1]);
+        Assert.Equal(new double[] { 1, 2, 3 }, vector.Components);
+    }
 }

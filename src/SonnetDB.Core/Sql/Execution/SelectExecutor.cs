@@ -362,6 +362,7 @@ internal static class SelectExecutor
             LiteralExpression literal => EvaluateLiteral(literal),
             UnaryExpression unary => EvaluateUnaryExpression(unary, timestamp, series, fieldLookups),
             BinaryExpression binary => EvaluateBinaryExpression(binary, timestamp, series, fieldLookups),
+            VectorLiteralExpression vector => EvaluateVectorLiteral(vector),
             FunctionCallExpression nested when FunctionRegistry.TryGetScalar(nested.Name, out var scalarFunction)
                 => EvaluateNestedScalarFunction(nested, scalarFunction, timestamp, series, fieldLookups),
             FunctionCallExpression nested
@@ -396,6 +397,14 @@ internal static class SelectExecutor
         SqlLiteralKind.String => literal.StringValue,
         _ => throw new InvalidOperationException($"不支持的字面量类型 {literal.Kind}。"),
     };
+
+    private static float[] EvaluateVectorLiteral(VectorLiteralExpression vector)
+    {
+        var result = new float[vector.Components.Count];
+        for (int i = 0; i < result.Length; i++)
+            result[i] = checked((float)vector.Components[i]);
+        return result;
+    }
 
     private static object? EvaluateUnaryExpression(
         UnaryExpression expression,
@@ -558,8 +567,14 @@ internal static class SelectExecutor
                         // count(*) 不需要数值；其他聚合需要把字段值转为 double
                         bool needsValue = !(spec.IsCountStar
                             || spec.LegacyAggregator == Aggregator.Count);
-                        double value = needsValue ? FieldValueToDouble(dp.Value, col) : 0.0;
-                        slots[specIdx].Update(dp.Timestamp, value);
+                        if (!needsValue)
+                        {
+                            slots[specIdx].UpdateCount(dp.Timestamp);
+                        }
+                        else
+                        {
+                            slots[specIdx].Update(dp.Timestamp, dp.Value, col);
+                        }
                     }
                 }
             }
@@ -582,7 +597,7 @@ internal static class SelectExecutor
     {
         if (v.TryGetNumeric(out var d)) return d;
         throw new InvalidOperationException(
-            $"聚合不支持 String 字段（列 '{col?.Name ?? "?"}'）。");
+            $"聚合仅支持数值字段（列 '{col?.Name ?? "?"}' 的类型为 {v.Type}）。");
     }
 
     private static object ComputeLegacyAggregateValue(Aggregator agg, BucketState st) => agg switch
@@ -652,12 +667,27 @@ internal static class SelectExecutor
             return new AggSlot(spec, accumulator);
         }
 
-        public void Update(long timestamp, double value)
+        public void UpdateCount(long timestamp)
+        {
+            if (_extended is not null)
+                throw new InvalidOperationException("扩展聚合不支持 count-only 更新路径。");
+            _legacy = _legacy.Update(timestamp, 0.0);
+        }
+
+        public void Update(long timestamp, FieldValue value, MeasurementColumn? col)
         {
             if (_extended is null)
-                _legacy = _legacy.Update(timestamp, value);
+            {
+                _legacy = _legacy.Update(timestamp, FieldValueToDouble(value, col));
+            }
+            else if (value.Type == FieldType.Vector)
+            {
+                _extended.Add(timestamp, value.AsVector());
+            }
             else
-                _extended.Add(timestamp, value);
+            {
+                _extended.Add(timestamp, FieldValueToDouble(value, col));
+            }
         }
 
         public object? Finalize()

@@ -129,4 +129,66 @@ public class SqlExecutorVectorTests : IDisposable
         Assert.Equal(FieldType.Vector, col.DataType);
         Assert.Equal(384, col.VectorDimension);
     }
+
+    [Fact]
+    public void Select_VectorScalarFunctions_ReturnExpectedValues()
+    {
+        using var db = Tsdb.Open(Options());
+        SqlExecutor.Execute(db,
+            "CREATE MEASUREMENT docs (source TAG, embedding FIELD VECTOR(3))");
+        SqlExecutor.Execute(db,
+            "INSERT INTO docs (time, source, embedding) VALUES " +
+            "(1000, 'a', [1, 0, 0]), (2000, 'b', [0, 1, 0])");
+
+        var result = Assert.IsType<SelectExecutionResult>(SqlExecutor.Execute(db,
+            "SELECT cosine_distance(embedding, [1,0,0]), l2_distance(embedding, [1,0,0]), " +
+            "inner_product(embedding, [1,0,0]), vector_norm(embedding) FROM docs"));
+
+        Assert.Equal(2, result.Rows.Count);
+
+        Assert.Equal(0.0, Convert.ToDouble(result.Rows[0][0]), 6);
+        Assert.Equal(0.0, Convert.ToDouble(result.Rows[0][1]), 6);
+        Assert.Equal(1.0, Convert.ToDouble(result.Rows[0][2]), 6);
+        Assert.Equal(1.0, Convert.ToDouble(result.Rows[0][3]), 6);
+
+        Assert.Equal(1.0, Convert.ToDouble(result.Rows[1][0]), 6);
+        Assert.Equal(Math.Sqrt(2.0), Convert.ToDouble(result.Rows[1][1]), 6);
+        Assert.Equal(0.0, Convert.ToDouble(result.Rows[1][2]), 6);
+        Assert.Equal(1.0, Convert.ToDouble(result.Rows[1][3]), 6);
+    }
+
+    [Fact]
+    public void Select_VectorOperators_ArePgVectorCompatibleAliases()
+    {
+        using var db = Tsdb.Open(Options());
+        SqlExecutor.Execute(db,
+            "CREATE MEASUREMENT docs (source TAG, embedding FIELD VECTOR(3))");
+        SqlExecutor.Execute(db,
+            "INSERT INTO docs (time, source, embedding) VALUES (1000, 'a', [1, 0, 0])");
+
+        var result = Assert.IsType<SelectExecutionResult>(SqlExecutor.Execute(db,
+            "SELECT embedding <=> [1,0,0], embedding <-> [0,1,0], embedding <#> [1,0,0] FROM docs"));
+
+        Assert.Single(result.Rows);
+        Assert.Equal(0.0, Convert.ToDouble(result.Rows[0][0]), 6);
+        Assert.Equal(Math.Sqrt(2.0), Convert.ToDouble(result.Rows[0][1]), 6);
+        Assert.Equal(1.0, Convert.ToDouble(result.Rows[0][2]), 6);
+    }
+
+    [Fact]
+    public void Select_Centroid_ReturnsPerDimensionMean()
+    {
+        using var db = Tsdb.Open(Options());
+        SqlExecutor.Execute(db,
+            "CREATE MEASUREMENT docs (source TAG, embedding FIELD VECTOR(3))");
+        SqlExecutor.Execute(db,
+            "INSERT INTO docs (time, source, embedding) VALUES " +
+            "(1000, 'a', [1, 2, 3]), (2000, 'a', [3, 4, 5]), (3000, 'a', [5, 6, 7])");
+
+        var result = Assert.IsType<SelectExecutionResult>(SqlExecutor.Execute(db,
+            "SELECT centroid(embedding) FROM docs"));
+
+        var centroid = Assert.IsType<float[]>(result.Rows[0][0]);
+        Assert.Equal(new[] { 3f, 4f, 5f }, centroid);
+    }
 }
