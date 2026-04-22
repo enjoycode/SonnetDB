@@ -370,6 +370,79 @@ PR #63（骨架 + Provider 抽象）→ #64（文档摄入）→ #65（技能库
 
 ---
 
+## Milestone 15 — 地理空间类型与轨迹分析
+
+> **背景**：IoT / 车联网 / 户外运动等场景大量产生带时间戳的经纬度序列（轨迹）。SonnetDB 已有时序存储底座与 SQL 函数扩展能力（Milestone 12），在此之上引入原生 `GEOPOINT` 字段类型，可以用一句 `INSERT` 写入轨迹点、一句 `SELECT` 做地理围栏过滤或总里程聚合，并在 Web Admin 地图页上实时回放。
+>
+> **设计原则**：
+> 1. **新增 `GEOPOINT` 字段类型**（纬度 lat + 经度 lon，各 8 字节 float64，little-endian），存为 `FieldType.GeoPoint = 6`；`BlockEncoding.GeoPointRaw` = 16 字节定长编码，`SegmentFormatVersion` 升级到 v4，保留对 v3 只读回退。
+> 2. **轨迹 = 带时间戳的 GEOPOINT 序列**，无需新增专用存储层——直接用现有 Measurement + time 列建模即可（`CREATE MEASUREMENT vehicle (time, device TAG, position GEOPOINT, altitude FLOAT64)`）。
+> 3. **Safe-only 继续遵守**：Haversine 等地理计算全部用普通 C# double 运算；可选 `System.Numerics.Tensors.TensorPrimitives` 做 SIMD 批量距离计算（向量化 lat/lon 数组）。
+> 4. **零第三方运行时依赖**：不引入 NetTopologySuite / GeoJSON.Net；GeoJSON 序列化在服务端 JSON 层手写 `GeoJsonConverter`（~100 行）。
+> 5. **UI 地图层零破坏**：Vue3 Web Admin 新增独立"轨迹地图"标签页，复用现有 Naive UI 框架 + MapLibre GL（前端 npm 依赖，不影响 core 库）。
+
+### PR 列表
+
+| PR | 主题 | 状态 |
+|----|------|------|
+| #70 | **`GEOPOINT` 数据类型 + 编解码**：`FieldType.GeoPoint = 6`；`FieldValue` 新增 `GeoPoint` 分支（`struct { double Lat; double Lon }`）；`BlockEncoding.GeoPointRaw`：lat(8) + lon(8) = 16 字节定长，little-endian；`SegmentFormatVersion` v4，保留 v3 只读回退；WAL 编解码 round-trip；SQL `POINT(lat, lon)` 字面量 + 参数化 `GeoPoint` 结构体；`lat(field)` / `lon(field)` 标量提取函数 | 📋 |
+| #71 | **地理空间标量函数（Tier 1）**：`geo_distance(p1,p2)→FLOAT64`（Haversine，米）、`geo_bearing(p1,p2)→FLOAT64`（方位角 0–360°）、`geo_within(p,lat,lon,radius_m)→BOOLEAN`（圆形围栏）、`geo_bbox(p,lat_min,lon_min,lat_max,lon_max)→BOOLEAN`（矩形框）、`geo_speed(p1,p2,elapsed_ms)→FLOAT64`（m/s）；`ST_Distance` / `ST_Within` / `ST_DWithin` 作为 PostGIS 兼容别名；`FunctionRegistry` 注册 | 📋 |
+| #72 | **轨迹聚合函数（Tier 2）**：`trajectory_length(position)→FLOAT64`（累加 Haversine 总路程，可合并 Merge）、`trajectory_bbox(position)`（轨迹外包矩形，表值）、`trajectory_centroid(position)→GEOPOINT`（重心）、`trajectory_speed_max/avg/p95(position,time)→FLOAT64`；`GROUP BY time(...)` 窗口内跨段 Merge 兼容 | 📋 |
+| #73 | **GeoJSON 序列化 + REST 端点扩展**：`GeoJsonConverter` 将 GEOPOINT 字段序列化为 `{"type":"Point","coordinates":[lon,lat]}`（GeoJSON 标准经纬顺序）；查询结果 ndjson 流自动输出 GeoJSON；新增 `GET /v1/db/{db}/geo/{measurement}/trajectory?device=...&from=...&to=...`，返回 GeoJSON `FeatureCollection`（每行为 `Feature/Point`）或 `?format=linestring`（单个 `LineString Feature`）；ADO.NET `DbDataReader` 对 GEOPOINT 列返回 `GeoPoint` struct | 📋 |
+| #74 | **Web Admin 轨迹地图标签页（Vue3 + MapLibre GL）**：引入前端依赖 `maplibre-gl`（Apache-2.0）；新增 `TrajectoryMap.vue`：左侧筛选面板（数据库 / Measurement / 时间范围 / TAG）→ 调用轨迹端点；右侧 MapLibre GL 底图（OSM 瓦片）+ 轨迹 LineString 叠加层 + 起终点标记；底部时间轴播放器（逐帧动画回放）；ECharts 折线图联动展示速度 / 海拔等数值字段；多设备轨迹对比（不同颜色） | 📋 |
+| #75 | **SQL 控制台地图渲染集成**：查询结果检测到 GEOPOINT 字段时自动在结果表下方展示 `ResultMapPreview.vue`；支持"表格 / 图表 / 地图"三视图切换；地图视图：散点图（多点）或带时间排序的轨迹连线；曲线视图增强：x 轴支持 `time`，y 轴自动识别数值字段，可叠加多 series | 📋 |
+| #76 | **地理空间索引（Geohash 段内过滤）**：`BlockHeader` 新增 `GeoHashMin` / `GeoHashMax`（32-bit Geohash 前缀），`SegmentWriter` flush 时写入每 block 的 GEOPOINT 范围；`SegmentReader` 执行 `geo_within` / `geo_bbox` 时做 block 级 Geohash 剪枝（稀疏轨迹典型加速 10–20×）；`SegmentFormatVersion` v5，保留 v4 只读回退；`docs/geo-spatial.md` | 📋 |
+| #77 | **地理空间基准 + 文档完善**：`GeoQueryBenchmark`（100k / 1M 轨迹点 `geo_within` 过滤 + `trajectory_length` 聚合，与 PostGIS 粗略对比）；README 新增"地理空间 & 轨迹"功能矩阵；`docs/geo-spatial.md` 补齐端到端示例（车辆追踪 / 户外运动 / IoT 地理围栏告警） | 📋 |
+
+### SQL 用法预览
+
+```sql
+-- 车辆轨迹查询（返回 GeoJSON 用于前端地图渲染）
+SELECT time, device, position,
+       geo_speed(position, LAG(position) OVER w, 1000) AS speed
+FROM vehicle
+WHERE device = 'truck-01' AND time > now() - 6h
+WINDOW w AS (PARTITION BY device ORDER BY time);
+
+-- 地理围栏：查找进入北京五环内的车辆
+SELECT DISTINCT device
+FROM vehicle
+WHERE geo_within(position, 39.9042, 116.4074, 18500)   -- 北京中心 18.5km 近似五环
+  AND time > now() - 1h;
+
+-- 各设备今日总里程
+SELECT device,
+       trajectory_length(position)          AS distance_m,
+       trajectory_speed_max(position, time) AS max_speed_ms
+FROM vehicle
+WHERE time >= today()
+GROUP BY device;
+
+-- 户外运动：海拔 + 速度曲线（前端双轴折线图）
+SELECT time,
+       lat(position) AS lat, lon(position) AS lon,
+       altitude,
+       geo_speed(position, LAG(position) OVER (ORDER BY time), 1000) AS speed
+FROM workout WHERE session_id = 'run-2026-04-22';
+```
+
+### 推进顺序
+
+```
+PR #70（GEOPOINT 类型）
+  → PR #71（标量地理函数）
+    → PR #72（轨迹聚合）
+    → PR #73（GeoJSON 序列化 + REST 端点）
+      → PR #74（Web Admin 地图页）
+        → PR #75（SQL 控制台地图集成）
+  → PR #76（Geohash 段内索引）   ← 可与 #74/#75 并行
+  → PR #77（基准 + 文档）        ← 最后收尾
+```
+
+**前置依赖**：无硬性前置，Milestone 13/14 不需要完成即可开始 Milestone 15。但若 PR #58（VECTOR 类型 + SegmentFormatVersion v3）已合并，本 Milestone PR #70 需在其基础上升级到 v4。
+
+---
+
 ## 里程碑总览
 
 | Milestone | 主题 | PR 范围 | 状态 |
@@ -389,8 +462,9 @@ PR #63（骨架 + Provider 抽象）→ #64（文档摄入）→ #65（技能库
 | 12 | 函数与算子扩展（PID / Forecast / UDF） | #50 ~ #57 | ✅ |
 | 13 | 向量类型与嵌入式向量索引（Copilot 知识库底座） | #58 ~ #62 | 📋 |
 | 14 | SonnetDB Copilot：MCP 工具 + 知识库 + 智能体 | #63 ~ #69 | 📋 |
+| 15 | 地理空间类型与轨迹分析 | #70 ~ #77 | 📋 |
 
-**当前推进顺序**：Milestone 13（向量类型）→ Milestone 14（Copilot），其中 PR #58→#59→#60 是 Copilot 知识库的硬前置；PR #61（HNSW）/ #62（向量基准）允许与 Milestone 14 并行推进。
+**当前推进顺序**：Milestone 13（向量类型）→ Milestone 14（Copilot），其中 PR #58→#59→#60 是 Copilot 知识库的硬前置；PR #61（HNSW）/ #62（向量基准）允许与 Milestone 14 并行推进。Milestone 15（地理空间）无硬性前置，可与 Milestone 13/14 并行启动，建议在 PR #70（GEOPOINT 类型）合并后跟进后续 PR。
 
 ---
 
@@ -407,3 +481,4 @@ PR #63（骨架 + Provider 抽象）→ #64（文档摄入）→ #65（技能库
 9. **新增 Milestone 12 — 函数与算子扩展**：将 `enum Aggregator` 重构为 `FunctionRegistry` + `IAggregateFunction`，引入 Tier 1–5 共 ~50 个函数；以 **PID 与 Forecast** 作为内置差异化能力，并开放 UDF 注册 API 给嵌入式生态。该里程碑独立于原路线图，定位为 SonnetDB 在工业 / IoT / 可观测性场景的横向扩展层。
 10. **新增 Milestone 13 — 向量类型与嵌入式向量索引**：引入 `VECTOR(dim)` 数据类型与 `cosine_distance` / `l2_distance` / `inner_product` 标量函数 + `knn(...)` 表值函数，第一版以 brute-force + SIMD 实现，HNSW 作为可选段内 sidecar 索引（`SDBVIDX`）。定位为 Milestone 14 Copilot 知识库的存储底座，同时让 SonnetDB 形成"时序 + 向量"二合一的对外差异化能力。距离计算全部走 `System.Numerics.Tensors.TensorPrimitives`，继续遵守 Safe-only 原则。
 11. **新增 Milestone 14 — SonnetDB Copilot**：基于 Microsoft Agent Framework 的智能体层，复用现有 `/mcp/{db}` 工具集 + Milestone 13 的向量召回，把"用户文档 / 技能库 / 数据库 schema"全部 dogfood 到 `__copilot__` 系统库中。Embedding/Chat 走统一 `IEmbeddingProvider` / `IChatProvider` 抽象，**本地 ONNX（bge-small-zh）** 与 **OpenAI 兼容端点（国际版 / 国内版任意 OpenAI-compat 网关）** 同时支持，可按部署场景切换。**不新增项目**，在现有 `SonnetDB.Core` / `SonnetDB.Server` 程序集内新增 `SonnetDB.Copilot` 命名空间；测试位于 `tests/SonnetDB.Tests/Copilot/`；服务端默认启用，可通过配置关闭。
+12. **新增 Milestone 15 — 地理空间类型与轨迹分析**：引入原生 `GEOPOINT` 字段类型（`FieldType.GeoPoint = 6`，lat/lon 各 8 字节 little-endian，`SegmentFormatVersion` v4）；Tier 1 地理标量函数（`geo_distance` / `geo_bearing` / `geo_within` / `geo_bbox` / `geo_speed`，含 PostGIS 兼容别名）；Tier 2 轨迹聚合函数（`trajectory_length` / `trajectory_centroid` / `trajectory_bbox` / 速度统计）；GeoJSON 序列化 + `GET /v1/db/{db}/geo/{measurement}/trajectory` 端点；Vue3 Web Admin 轨迹地图标签页（MapLibre GL + ECharts 时间轴联动）；SQL 控制台三视图（表格 / 图表 / 地图）；Geohash 段内剪枝索引（`SegmentFormatVersion` v5）。全程遵守 Safe-only 与零第三方运行时依赖原则。
