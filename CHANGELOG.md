@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Fixed
+- 重写首页欢迎页为产品介绍页：去掉安装/帮助导向叙述，改为展示数据库简介、核心功能、产品形态和路线图对应能力，并保留进入后台入口。
 - 修复 Production 模式下 `GET /admin/` 自重定向死循环（`ERR_TOO_MANY_REDIRECTS`）：原 `UseDefaultFiles({ RequestPath = "/admin" })` 未提供针对 `wwwroot/admin` 的 `FileProvider`，与 `MapGet("/admin")` / `MapFallbackToFile` 共同作用导致 Vite 构建产物无法被正确解析；现改为使用专用 `PhysicalFileProvider(wwwroot/admin)` 的 `UseStaticFiles`，并显式 `MapGet("/admin/")` 直接返回 `index.html`。
 - 修复访问根路径 `/`（产品宣传首页）被 Bearer 认证中间件拦截返回 `401`：将 `/`、`/favicon.ico`、`/robots.txt` 加入匿名白名单，使 `MapHomePage()` 渲染的官网首页可直接访问。
 

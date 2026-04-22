@@ -1,121 +1,130 @@
 ﻿<template>
   <div class="welcome-page">
     <header class="hero-header">
-      <BrandLogo />
-      <nav class="hero-nav">
-        <button type="button" class="nav-link" @click="scrollToSection('overview')">产品</button>
-        <button type="button" class="nav-link" @click="openHelp">帮助</button>
-        <button type="button" class="nav-cta" @click="goManage">{{ manageLabel }}</button>
+      <div class="brand-lockup" aria-label="SonnetDB">
+        <div class="brand-mark" aria-hidden="true">
+          <span class="brand-mark-core" />
+        </div>
+        <div class="brand-copy">
+          <span class="brand-name">SonnetDB</span>
+          <span class="brand-tagline">AI-Powered Time-Series Database</span>
+        </div>
+      </div>
+      <nav class="hero-nav" aria-label="页面导航">
+        <button type="button" class="nav-link" @click="scrollToSection('overview')">产品概览</button>
+        <button type="button" class="nav-link" @click="scrollToSection('database')">功能体系</button>
+        <button type="button" class="nav-link" @click="scrollToSection('capabilities')">核心功能</button>
+        <button type="button" class="nav-link" @click="scrollToSection('roadmap')">路线图</button>
+        <button type="button" class="nav-cta" @click="goManage">进入后台</button>
       </nav>
     </header>
 
     <main class="hero-main">
       <section id="overview" class="hero-panel">
         <div class="hero-copy">
-          <div class="hero-eyebrow">{{ heroEyebrow }}</div>
-          <h1>让时序数据库像一个可交付产品，而不是一组零散接口。</h1>
-          <p>
-            SonnetDB 把单文件时序引擎、SQL 写入查询、嵌入式管理后台和首次安装向导收束成一套完整体验。
-            你可以先完成初始化，再通过管理控制台接管数据库、用户、权限与实时事件流。
+          <div class="hero-eyebrow">产品定位</div>
+          <h1>面向采集、查询、治理与智能协作的一体化时序数据库。</h1>
+          <p class="hero-subtitle">
+            SonnetDB 面向真实的时序业务场景，帮助团队用一套产品完成数据写入、SQL 查询、实时事件、权限治理和 AI 辅助分析。
           </p>
 
           <div class="hero-actions">
-            <button type="button" class="primary-action" @click="goManage">{{ primaryActionLabel }}</button>
-            <button type="button" class="secondary-action" @click="openHelp">查看帮助</button>
+            <button type="button" class="primary-action" @click="scrollToSection('capabilities')">查看核心功能</button>
+            <button type="button" class="secondary-action" @click="scrollToSection('database')">看功能体系</button>
           </div>
 
-          <div class="hero-status-grid">
-            <article class="status-tile status-highlight">
-              <span class="tile-label">安装状态</span>
-              <strong>{{ setup.needsSetup ? '等待首次安装' : '已完成初始化' }}</strong>
-              <p>
-                <template v-if="setup.needsSetup">
-                  建议服务器 ID：<code>{{ setup.suggestedServerId }}</code>
-                </template>
-                <template v-else>
-                  组织：<code>{{ setup.organization ?? '未命名组织' }}</code>
-                </template>
-              </p>
-            </article>
-            <article class="status-tile">
-              <span class="tile-label">服务器 ID</span>
-              <strong>{{ setup.serverId ?? setup.suggestedServerId }}</strong>
-              <p>{{ setup.needsSetup ? '将在首次安装时写入 installation.json。' : '已固定为当前实例身份标识。' }}</p>
-            </article>
-            <article class="status-tile">
-              <span class="tile-label">控制方式</span>
-              <strong>用户名密码 + Bearer Token</strong>
-              <p>首次安装会同时创建管理员账号与初始 API Token，后续可在后台继续签发和回收。</p>
+          <div class="hero-badges" aria-label="产品要点">
+            <article v-for="item in heroHighlights" :key="item.title" class="hero-badge">
+              <span>{{ item.title }}</span>
+              <strong>{{ item.description }}</strong>
             </article>
           </div>
         </div>
 
         <div class="hero-stage">
           <div class="stage-window">
-            <div class="window-topbar">
+            <div class="window-topbar" aria-hidden="true">
               <span class="window-dot" />
               <span class="window-dot" />
               <span class="window-dot" />
             </div>
             <div class="stage-grid">
               <section class="stage-card stage-card-large">
-                <span class="stage-kicker">Overview</span>
-                <strong>{{ setup.needsSetup ? '准备进入首次安装' : '管理面板已就绪' }}</strong>
+                <span class="stage-kicker">功能总览</span>
+                <strong>用一套数据库产品打通时序写入、查询分析、运维治理和 AI 协作。</strong>
                 <p>
-                  {{ setup.needsSetup
-                    ? '先完成服务器标识、组织、管理员与首个 Bearer Token 的初始化，再进入控制台。'
-                    : '数据库、用户、Token 与事件流已统一收束到 /admin 管理入口。'
-                  }}
+                  SonnetDB 面向设备遥测、业务指标和日志序列等场景，把 SQL Console、数据库管理、事件流和 SNDBCopilot 放在统一工作台里。
                 </p>
-                <div class="stage-sparkline" aria-hidden="true">
-                  <span v-for="bar in sparkBars" :key="bar" :style="{ height: `${bar}%` }" />
-                </div>
+                <ul class="stage-list">
+                  <li>从写入到查询都围绕时序场景设计，优先解决时间窗、聚合和过滤问题。</li>
+                  <li>数据库、用户、权限、Token 和实时事件集中在后台统一管理。</li>
+                  <li>AI 能力可以直接贴近日常排障、分析和运维协作，而不是做成外围附属。</li>
+                </ul>
               </section>
               <section class="stage-card">
-                <span class="stage-kicker">Identity</span>
-                <strong>{{ setup.serverId ?? setup.suggestedServerId }}</strong>
-                <p>{{ setup.organization ?? '等待输入组织名称' }}</p>
+                <span class="stage-kicker">数据接入</span>
+                <strong>SQL 写入 + 时序采集</strong>
+                <p>让指标、日志和设备数据先顺畅进入系统，再围绕时序负载做后续分析与治理。</p>
               </section>
               <section class="stage-card">
-                <span class="stage-kicker">Access</span>
-                <strong>{{ setup.needsSetup ? '创建管理员' : auth.isAuthenticated ? '已登录管理员' : '准备登录' }}</strong>
-                <p>{{ auth.isAuthenticated ? auth.username : '使用管理入口进入控制台。' }}</p>
+                <span class="stage-kicker">数据分析</span>
+                <strong>时间窗 + 聚合 + 过滤</strong>
+                <p>以时间范围、tag 条件和聚合计算为中心，让 SQL 查询更适合时序业务。</p>
               </section>
               <section class="stage-card stage-card-accent">
-                <span class="stage-kicker">Realtime</span>
-                <strong>SSE / Metrics / SQL</strong>
-                <p>从首页进入后台后，可以直接查看数据库状态、慢查询和实时事件流。</p>
+                <span class="stage-kicker">智能协作</span>
+                <strong>SNDBCopilot + 实时事件</strong>
+                <p>把 AI 助手和事件流接进同一工作流，帮助团队更快定位问题、理解数据和处理运维任务。</p>
               </section>
             </div>
           </div>
         </div>
       </section>
 
-      <section class="feature-strip">
-        <article v-for="feature in features" :key="feature.title" class="feature-card">
-          <span class="feature-index">{{ feature.index }}</span>
-          <h2>{{ feature.title }}</h2>
-          <p>{{ feature.description }}</p>
-        </article>
+      <section id="database" class="section-panel">
+        <div class="section-heading">
+          <span class="hero-eyebrow">功能体系</span>
+          <h2>首页优先讲清楚你能用 SonnetDB 做什么。</h2>
+          <p>
+            我们把首页重点从实现细节转向产品能力本身，让访问者一眼看到接入、查询、管理和 AI 协作这些真正有价值的功能模块。
+          </p>
+        </div>
+
+        <div class="info-grid">
+          <article v-for="item in databaseCards" :key="item.title" class="info-card">
+            <span class="info-kicker">{{ item.kicker }}</span>
+            <h3>{{ item.title }}</h3>
+            <p>{{ item.description }}</p>
+          </article>
+        </div>
       </section>
 
-      <section id="help" class="help-panel">
-        <div class="help-heading">
-          <span class="hero-eyebrow">Help</span>
-          <h2>首次使用建议按这三个步骤走</h2>
+      <section id="capabilities" class="section-panel">
+        <div class="section-heading">
+          <span class="hero-eyebrow">核心功能</span>
+          <h2>围绕使用场景组织功能，而不是围绕底层实现组织文案。</h2>
         </div>
-        <div class="help-grid">
-          <article class="help-card">
-            <strong>1. 先完成安装</strong>
-            <p>设置服务器 ID、组织名称、管理员用户名、密码和第一枚 Bearer Token。</p>
+
+        <div class="feature-grid">
+          <article v-for="feature in capabilityCards" :key="feature.title" class="feature-card">
+            <span class="feature-index">{{ feature.index }}</span>
+            <h3>{{ feature.title }}</h3>
+            <p>{{ feature.description }}</p>
           </article>
-          <article class="help-card">
-            <strong>2. 进入管理后台</strong>
-            <p>安装完成后可以直接登录，后续数据库创建、用户授权、Token 管理都在同一套后台里完成。</p>
-          </article>
-          <article class="help-card">
-            <strong>3. 再接入业务流量</strong>
-            <p>数据写入和查询依旧走 SQL 与 HTTP API；前台首页只负责把产品体验和安装入口做清楚。</p>
+        </div>
+      </section>
+
+      <section id="roadmap" class="section-panel section-panel-tight">
+        <div class="section-heading">
+          <span class="hero-eyebrow">路线图映射</span>
+          <h2>当前首页的内容，来自路线图里已经落地的核心能力。</h2>
+        </div>
+
+        <div class="roadmap-grid">
+          <article v-for="item in roadmapCards" :key="item.title" class="roadmap-card">
+            <span class="roadmap-kicker">{{ item.milestone }}</span>
+            <h3>{{ item.title }}</h3>
+            <p>{{ item.description }}</p>
           </article>
         </div>
       </section>
@@ -124,72 +133,116 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import BrandLogo from '@/components/BrandLogo.vue';
-import { useAuthStore } from '@/stores/auth';
-import { useSetupStore } from '@/stores/setup';
+import { useAuthStore } from '../stores/auth';
+import { useSetupStore } from '../stores/setup';
 
 const router = useRouter();
 const auth = useAuthStore();
 const setup = useSetupStore();
 
-const sparkBars = [28, 42, 36, 58, 48, 72, 66, 82];
-const features = [
+const heroHighlights = [
   {
-    index: '01',
-    title: '首次安装而不是空白页',
-    description: '当 .system 为空时，/admin 会先引导用户完成初始化，而不是直接丢给一个不能登录的后台入口。',
+    title: 'SQL 写查',
+    description: '围绕时序数据的写入、过滤、聚合和时间范围查询设计',
   },
   {
-    index: '02',
-    title: '服务器身份一次讲清楚',
-    description: '服务器 ID、组织、管理员账号和初始 Bearer Token 在同一页完成设置，后续首页也能持续展示这些身份信息。',
+    title: '统一管理',
+    description: '数据库、用户、权限、Token 和事件流集中在一个后台里',
   },
   {
-    index: '03',
-    title: '产品首页和管理后台分层',
-    description: '首页负责介绍产品、引导安装和承接帮助信息；真正的数据库、用户与权限管理进入 /app 后再展开。',
+    title: 'AI 傍身',
+    description: 'SNDBCopilot 为分析、排障和运维协作提供智能辅助',
   },
 ];
 
-const heroEyebrow = computed(() => (setup.needsSetup ? 'First Install' : 'SonnetDB Control Surface'));
-const primaryActionLabel = computed(() => {
-  if (setup.loading) return '加载中...';
-  if (setup.needsSetup) return '开始首次安装';
-  return auth.isAuthenticated ? '进入管理后台' : '进入管理控制台';
-});
-const manageLabel = computed(() => {
-  if (setup.needsSetup) return '管理';
-  return auth.isAuthenticated ? '进入后台' : '管理';
-});
+const databaseCards = [
+  {
+    kicker: '接入',
+    title: 'SQL 写入与时序数据落库',
+    description: '围绕指标、设备和日志序列的接入体验组织能力，让数据尽快写入并进入可查询状态。',
+  },
+  {
+    kicker: '查询',
+    title: '时间范围、聚合与过滤优先',
+    description: '把时间窗、tag 条件、聚合分析和 SQL Console 作为第一层体验，而不是放在深处。',
+  },
+  {
+    kicker: '治理',
+    title: '数据库与权限管理同台协作',
+    description: '数据库列表、用户、权限与 Token 都放在统一后台里，方便团队日常维护与分工。',
+  },
+  {
+    kicker: '智能',
+    title: 'AI 助手和实时事件直接可用',
+    description: 'SNDBCopilot 与事件流入口直接面向运营和排障流程，让系统更像一个会协作的数据库产品。',
+  },
+];
+
+const capabilityCards = [
+  {
+    index: '01',
+    title: 'SQL Console',
+    description: '直接执行时序 SQL，快速完成查询验证、数据排查和结果确认。',
+  },
+  {
+    index: '02',
+    title: '数据库管理',
+    description: '集中查看数据库状态与配置，让数据资产管理和日常维护更清楚。',
+  },
+  {
+    index: '03',
+    title: '权限与 Token',
+    description: '用用户、授权和 Token 管理把访问控制做进产品，而不是留给外围系统补齐。',
+  },
+  {
+    index: '04',
+    title: 'SNDBCopilot 与事件流',
+    description: '把 AI 辅助和实时事件放进同一后台，让分析、诊断和协作动作更连贯。',
+  },
+];
+
+const roadmapCards = [
+  {
+    milestone: 'M1-M4',
+    title: '数据底座',
+    description: '先把时序写入、查询和基本管理能力做稳，为上层产品体验打好基础。',
+  },
+  {
+    milestone: 'M5-M7',
+    title: '稳定运行',
+    description: '继续补齐保留策略、压缩、删除与索引能力，让数据库在长期运行中更可靠。',
+  },
+  {
+    milestone: 'M8-M12',
+    title: '智能与扩展',
+    description: '把控制台、事件流、AI 协作和更多高阶能力串起来，形成完整的产品闭环。',
+  },
+];
 
 function scrollToSection(id: string): void {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function goManage(): void {
+async function goManage(): Promise<void> {
+  try {
+    await setup.ensureLoaded();
+  } catch {
+    // 如果健康检查或安装状态暂时不可达，仍然继续走管理入口的默认路由。
+  }
+
   if (setup.needsSetup) {
-    router.push({ name: 'setup' });
+    await router.push({ name: 'setup' });
     return;
   }
+
   if (auth.isAuthenticated) {
-    router.push({ name: 'dashboard' });
+    await router.push({ name: 'dashboard' });
     return;
   }
-  router.push({ name: 'login' });
-}
 
-function openHelp(): void {
-  const popup = window.open('/help/', '_blank', 'noopener,noreferrer');
-  if (!popup) {
-    window.location.assign('/help/');
-  }
+  await router.push({ name: 'login' });
 }
-
-onMounted(async () => {
-  await setup.ensureLoaded();
-});
 </script>
 
 <style scoped>
@@ -210,10 +263,57 @@ onMounted(async () => {
   padding: 28px clamp(24px, 5vw, 56px) 12px;
 }
 
+.brand-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-mark {
+  width: 52px;
+  height: 52px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #0d3b66 0%, #146c94 55%, #18a058 100%);
+  box-shadow: 0 16px 30px rgba(13, 59, 102, 0.16);
+}
+
+.brand-mark-core {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 4px solid rgba(248, 251, 255, 0.94);
+  box-shadow: inset 0 0 0 2px rgba(248, 251, 255, 0.12);
+}
+
+.brand-copy {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.brand-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0.03em;
+  color: var(--sndb-ink-strong);
+}
+
+.brand-tagline {
+  font-size: 0.78rem;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sndb-ink-soft);
+}
+
 .hero-nav {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .nav-link,
@@ -272,7 +372,7 @@ onMounted(async () => {
 
 .hero-copy,
 .hero-stage,
-.help-panel {
+.section-panel {
   border: 1px solid rgba(13, 59, 102, 0.08);
   border-radius: 28px;
   background: rgba(248, 251, 255, 0.84);
@@ -284,35 +384,44 @@ onMounted(async () => {
   padding: clamp(28px, 4vw, 42px);
 }
 
-.hero-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
-  color: #146c94;
+.hero-eyebrow,
+.roadmap-kicker,
+.stage-kicker,
+.info-kicker,
+.feature-index {
+  display: block;
+  color: var(--sndb-ink-soft);
   font-size: 0.78rem;
-  font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
+.hero-eyebrow {
+  margin-bottom: 16px;
+  color: #146c94;
+  font-weight: 700;
+}
+
 .hero-copy h1,
-.help-heading h2 {
+.section-heading h2 {
   margin: 0;
-  font-size: clamp(2.4rem, 5vw, 4.4rem);
+  font-size: clamp(2.3rem, 5vw, 4.3rem);
   line-height: 1.02;
   letter-spacing: -0.04em;
 }
 
-.help-heading h2 {
+.section-heading h2 {
   font-size: clamp(1.8rem, 4vw, 2.8rem);
 }
 
-.hero-copy p {
+.hero-subtitle,
+.section-heading p,
+.stage-card p,
+.info-card p,
+.feature-card p,
+.roadmap-card p {
   margin: 18px 0 0;
-  max-width: 56ch;
   color: var(--sndb-ink-soft);
-  font-size: 1.03rem;
   line-height: 1.75;
 }
 
@@ -332,21 +441,23 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.hero-status-grid,
-.feature-strip,
-.help-grid {
+.hero-badges,
+.info-grid,
+.feature-grid,
+.roadmap-grid {
   display: grid;
   gap: 16px;
 }
 
-.hero-status-grid {
+.hero-badges {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 30px;
+  margin-top: 28px;
 }
 
-.status-tile,
+.hero-badge,
+.info-card,
 .feature-card,
-.help-card,
+.roadmap-card,
 .stage-card {
   border-radius: 22px;
   border: 1px solid rgba(13, 59, 102, 0.08);
@@ -354,23 +465,11 @@ onMounted(async () => {
   box-shadow: 0 14px 34px rgba(13, 59, 102, 0.06);
 }
 
-.status-tile {
-  padding: 18px;
+.hero-badge {
+  padding: 16px 18px;
 }
 
-.status-highlight {
-  background: linear-gradient(135deg, rgba(13, 59, 102, 0.98), rgba(20, 108, 148, 0.92));
-  color: #f8fbff;
-}
-
-.status-highlight p,
-.status-highlight .tile-label {
-  color: rgba(248, 251, 255, 0.82);
-}
-
-.tile-label,
-.stage-kicker,
-.feature-index {
+.hero-badge span {
   display: block;
   color: var(--sndb-ink-soft);
   font-size: 0.78rem;
@@ -378,25 +477,11 @@ onMounted(async () => {
   text-transform: uppercase;
 }
 
-.status-tile strong,
-.stage-card strong,
-.help-card strong {
+.hero-badge strong {
   display: block;
   margin-top: 10px;
-  font-size: 1.08rem;
-}
-
-.status-tile p,
-.stage-card p,
-.feature-card p,
-.help-card p {
-  margin: 10px 0 0;
-  color: var(--sndb-ink-soft);
-  line-height: 1.65;
-}
-
-.status-tile code {
-  font-size: 0.94em;
+  font-size: 1.02rem;
+  line-height: 1.45;
 }
 
 .hero-stage {
@@ -451,54 +536,70 @@ onMounted(async () => {
   background: linear-gradient(135deg, rgba(24, 160, 88, 0.24), rgba(20, 108, 148, 0.16));
 }
 
-.stage-sparkline {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  height: 92px;
-  margin-top: 18px;
+.stage-card strong,
+.info-card h3,
+.feature-card h3,
+.roadmap-card h3 {
+  display: block;
+  margin-top: 10px;
+  font-size: 1.08rem;
 }
 
-.stage-sparkline span {
-  flex: 1;
-  border-radius: 999px 999px 10px 10px;
-  background: linear-gradient(180deg, rgba(248, 251, 255, 0.9), rgba(24, 160, 88, 0.6));
+.stage-list {
+  margin: 16px 0 0;
+  padding-left: 18px;
+  color: rgba(248, 251, 255, 0.82);
 }
 
-.feature-strip {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.stage-list li + li {
+  margin-top: 8px;
 }
 
-.feature-card,
-.help-card {
-  padding: 22px;
+.section-panel {
+  padding: clamp(26px, 4vw, 38px);
 }
 
-.feature-card h2 {
-  margin: 14px 0 0;
-  font-size: 1.14rem;
+.section-panel-tight {
+  margin-bottom: 4px;
 }
 
-.help-panel {
-  padding: clamp(28px, 4vw, 36px);
-}
-
-.help-heading {
+.section-heading {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-bottom: 22px;
 }
 
-.help-grid {
+.info-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.info-card,
+.feature-card,
+.roadmap-card {
+  padding: 22px;
+}
+
+.info-card p,
+.feature-card p,
+.roadmap-card p {
+  margin-top: 12px;
+}
+
+.feature-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.roadmap-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 24px;
 }
 
 @media (max-width: 1100px) {
   .hero-panel,
-  .feature-strip,
-  .help-grid,
-  .hero-status-grid {
+  .info-grid,
+  .feature-grid,
+  .roadmap-grid,
+  .hero-badges {
     grid-template-columns: 1fr;
   }
 
@@ -517,12 +618,8 @@ onMounted(async () => {
     align-items: flex-start;
   }
 
-  .hero-nav {
-    flex-wrap: wrap;
-  }
-
   .hero-copy h1,
-  .help-heading h2 {
+  .section-heading h2 {
     font-size: 2rem;
   }
 }
