@@ -159,16 +159,28 @@ internal static class KnnExecutor
                 || block.MinTimestamp > timeRange.ToInclusive)
                 continue;
 
-            bool fullCover = block.MinTimestamp >= timeRange.FromInclusive
-                && block.MaxTimestamp <= timeRange.ToInclusive;
-            if (fullCover && metric == KnnMetric.Cosine && reader.TryGetVectorIndex(block, out var vectorIndex))
+            if (metric == KnnMetric.Cosine && reader.TryGetVectorIndex(block, out var vectorIndex))
             {
                 var data = reader.ReadBlock(block);
                 var timestamps = BlockDecoder.DecodeTimestamps(block, data.TimestampPayload);
-                var annHits = vectorIndex.Search(querySpan, data.ValuePayload, timestamps, k, metric);
+                int candidateLimit = Math.Min(block.Count, Math.Max(k * 8, vectorIndex.Ef * 2));
+                var annHits = vectorIndex.Search(querySpan, data.ValuePayload, timestamps, candidateLimit, metric);
+
+                int accepted = 0;
                 foreach (var hit in annHits)
+                {
+                    if (hit.Timestamp < timeRange.FromInclusive || hit.Timestamp > timeRange.ToInclusive)
+                        continue;
+
                     candidates.Add((hit.Distance, hit.Timestamp, seriesId));
-                continue;
+                    accepted++;
+                    if (accepted >= k)
+                        break;
+                }
+
+                // 当时间窗裁剪后候选不足，退回精确扫描补齐，避免在稀疏时间窗中丢结果。
+                if (accepted >= k || candidateLimit >= block.Count)
+                    continue;
             }
 
             var points = reader.DecodeBlockRange(block, timeRange.FromInclusive, timeRange.ToInclusive);

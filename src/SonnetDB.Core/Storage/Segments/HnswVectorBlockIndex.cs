@@ -153,13 +153,16 @@ internal sealed class HnswVectorBlockIndex
         ReadOnlySpan<float> queryVector,
         ReadOnlySpan<byte> valPayload,
         ReadOnlySpan<long> timestamps,
-        int k,
+        int resultLimit,
         KnnMetric metric)
     {
-        if (k <= 0 || Count == 0 || metric != KnnMetric.Cosine || queryVector.Length != Dimension)
+        if (resultLimit <= 0 || Count == 0 || metric != KnnMetric.Cosine || queryVector.Length != Dimension)
             return [];
 
-        int efSearch = Math.Min(Count, Math.Max(k, Ef));
+        if (resultLimit >= Count)
+            return ExactSearch(queryVector, valPayload, timestamps, Count, metric);
+
+        int efSearch = Math.Min(Count, Math.Max(resultLimit, Ef));
         int entry = EntryPoint;
         double currentDistance = VectorDistance.Compute(metric, queryVector, GetVector(valPayload, entry, Dimension));
 
@@ -167,7 +170,7 @@ internal sealed class HnswVectorBlockIndex
             entry = GreedySearch(valPayload, queryVector, entry, level, metric, ref currentDistance);
 
         var layer = SearchLayer(valPayload, queryVector, entry, 0, efSearch, metric);
-        int take = Math.Min(k, layer.Count);
+        int take = Math.Min(resultLimit, layer.Count);
         var result = new HnswAnnSearchResult[take];
         for (int i = 0; i < take; i++)
         {
@@ -176,6 +179,29 @@ internal sealed class HnswVectorBlockIndex
         }
 
         return result;
+    }
+
+    private IReadOnlyList<HnswAnnSearchResult> ExactSearch(
+        ReadOnlySpan<float> queryVector,
+        ReadOnlySpan<byte> valPayload,
+        ReadOnlySpan<long> timestamps,
+        int resultLimit,
+        KnnMetric metric)
+    {
+        var result = new HnswAnnSearchResult[Count];
+        for (int i = 0; i < Count; i++)
+        {
+            double distance = VectorDistance.Compute(metric, queryVector, GetVector(valPayload, i, Dimension));
+            result[i] = new HnswAnnSearchResult(i, timestamps[i], distance);
+        }
+
+        Array.Sort(result, static (left, right) => left.Distance.CompareTo(right.Distance));
+        if (resultLimit == Count)
+            return result;
+
+        var trimmed = new HnswAnnSearchResult[resultLimit];
+        Array.Copy(result, trimmed, resultLimit);
+        return trimmed;
     }
 
     /// <summary>

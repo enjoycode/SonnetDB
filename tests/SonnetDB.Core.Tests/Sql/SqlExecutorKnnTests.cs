@@ -187,6 +187,28 @@ public sealed class SqlExecutorKnnTests : IDisposable
     }
 
     [Fact]
+    public void Knn_WithFlushedHnswSegment_AndTimeFilter_ReturnsFilteredNearestNeighbor()
+    {
+        using (var db = OpenDbWithHnsw())
+        {
+            SqlExecutor.Execute(db, "INSERT INTO docs (source, embedding, time) VALUES " +
+                "('a', [1, 0, 0], 1000), " +
+                "('b', [0.9, 0.1, 0], 2000), " +
+                "('c', [0, 1, 0], 3000), " +
+                "('d', [-1, 0, 0], 4000)");
+            Assert.NotNull(db.FlushNow());
+        }
+
+        using var reopened = Tsdb.Open(new TsdbOptions { RootDirectory = _root });
+        var result = Select(reopened,
+            "SELECT * FROM knn(docs, embedding, [1, 0, 0], 1) WHERE time >= 3000");
+
+        Assert.Single(result.Rows);
+        Assert.Equal(3000L, (long)result.Rows[0][0]!);
+        Assert.Equal("c", result.Rows[0][2]);
+    }
+
+    [Fact]
     public void Knn_NoMatchedSeries_ReturnsEmpty()
     {
         using var db = OpenDb();
