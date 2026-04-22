@@ -27,6 +27,25 @@ public class SqlParserVectorTests
     }
 
     [Fact]
+    public void Parse_CreateMeasurement_VectorColumnWithHnswIndex_ReturnsAstWithIndex()
+    {
+        var stmt = (CreateMeasurementStatement)SqlParser.Parse(
+            "CREATE MEASUREMENT docs (source TAG, embedding FIELD VECTOR(384) WITH INDEX hnsw(m=16, ef=200))");
+
+        var column = stmt.Columns[1];
+        var index = Assert.IsType<HnswVectorIndexSpec>(column.VectorIndex);
+        Assert.Equal(16, index.M);
+        Assert.Equal(200, index.Ef);
+    }
+
+    [Fact]
+    public void Parse_CreateMeasurement_NonVectorWithIndex_Throws()
+    {
+        Assert.Throws<SqlParseException>(() =>
+            SqlParser.Parse("CREATE MEASUREMENT m (score FIELD FLOAT WITH INDEX hnsw(m=16, ef=200))"));
+    }
+
+    [Fact]
     public void Parse_CreateMeasurement_VectorWithoutDim_Throws()
     {
         Assert.Throws<SqlParseException>(() =>

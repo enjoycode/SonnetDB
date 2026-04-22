@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
+using SonnetDB.Catalog;
 using SonnetDB.Engine;
 using SonnetDB.Memory;
 using SonnetDB.Model;
@@ -40,6 +41,8 @@ public sealed class SegmentCompactor
     /// <param name="newSegmentId">新段的 SegmentId。</param>
     /// <param name="newSegmentPath">新段的输出文件路径。</param>
     /// <param name="tombstones">可选的墓碑集合；若非 null，合并时过滤被墓碑覆盖的数据点（物理删除）。</param>
+    /// <param name="seriesCatalog">可选的 Series 目录；提供时会按 schema 为声明了向量索引的字段构建 sidecar。</param>
+    /// <param name="measurementCatalog">可选的 measurement schema 目录；需与 <paramref name="seriesCatalog"/> 一起提供。</param>
     /// <returns>Compaction 执行结果统计。</returns>
     /// <exception cref="ArgumentNullException">任何必选参数为 null 时抛出。</exception>
     /// <exception cref="InvalidOperationException">同 (SeriesId, FieldName) 的 FieldType 不一致时抛出。</exception>
@@ -48,7 +51,9 @@ public sealed class SegmentCompactor
         IReadOnlyDictionary<long, SegmentReader> readers,
         long newSegmentId,
         string newSegmentPath,
-        TombstoneTable? tombstones = null)
+        TombstoneTable? tombstones = null,
+        SeriesCatalog? seriesCatalog = null,
+        MeasurementCatalog? measurementCatalog = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(readers);
@@ -73,7 +78,10 @@ public sealed class SegmentCompactor
         }
 
         // 3. 写入新段
-        var buildResult = _writer.Write(seriesList, newSegmentId, newSegmentPath);
+        IReadOnlyDictionary<SeriesFieldKey, VectorIndexDefinition>? vectorIndexes = null;
+        if (seriesCatalog is not null && measurementCatalog is not null)
+            vectorIndexes = VectorIndexBuildMap.Build(seriesList, seriesCatalog, measurementCatalog);
+        var buildResult = _writer.Write(seriesList, newSegmentId, newSegmentPath, vectorIndexes);
 
         sw.Stop();
         long durationMicros = sw.ElapsedTicks * 1_000_000L / Stopwatch.Frequency;

@@ -31,6 +31,14 @@
 - 回填 `ROADMAP.md` 的 PR #60 状态与 Milestone 13 进度，统一为与现有代码、测试和 `docs/vector-search.md` 一致的已实现状态。
 
 ### Added
+- **PR #61 — HNSW 段内 ANN sidecar 索引（Milestone 13 第六切片）**
+  - `CREATE MEASUREMENT` 新增向量索引声明语法：`embedding FIELD VECTOR(384) WITH INDEX hnsw(m=16, ef=200)`；AST、`SqlParser`、`SqlExecutor`、`MeasurementSchema` 与 `MeasurementSchemaCodec` 已贯通，schema 文件格式升级到 v3 并兼容读取 v1/v2。
+  - 新增 `VectorIndexDefinition` / `HnswVectorIndexOptions` 元数据模型，按列持久化 HNSW 参数 `m` / `ef`，并在 schema 校验阶段拒绝“非 VECTOR 列声明索引”或非法参数组合。
+  - `SegmentWriter` 在 flush / compaction 写段时，按 schema 为声明了 HNSW 索引的 `VECTOR` block 生成 `.SDBVIDX` sidecar；`SegmentReader.Open` 会自动探测并加载 sidecar，段文件本体 `.SDBSEG` 保持不变。
+  - 新增 `HnswVectorBlockIndex` 与 `SegmentVectorIndexFile`：实现段内 HNSW 图构建、sidecar 序列化/反序列化，以及 block 级 ANN 搜索入口。
+  - `KnnExecutor` 现可在“整块时间窗全覆盖 + cosine 度量 + 存在 `.SDBVIDX`”时优先走 ANN；sidecar 缺失、度量不匹配或存在时间窗裁剪时自动回退现有 brute-force 路径。
+  - 新增测试覆盖：`SqlParserVectorTests`、`MeasurementSchemaVectorTests`、`SqlExecutorVectorTests`、`VectorSegmentTests`、`SqlExecutorKnnTests`，覆盖索引语法解析、schema 持久化、sidecar 写读与 flush 后 KNN 查询闭环。
+
 - **PR #60 — `knn(...)` 表值函数：brute-force KNN 向量检索（Milestone 13 第五切片）**
   - 新增内置表值函数 `knn(measurement, column, query_vector, k[, metric])`，支持 `SELECT * FROM knn(...)` SQL 语法，返回 `(time, distance, ...tags, ...fields)` 结果集。
   - 支持三种距离度量：`'cosine'`（余弦距离，默认）、`'l2'`（欧几里得距离）、`'inner_product'`（负内积），每种度量均支持多个别名（`cosine_distance` / `euclidean` / `dot` / `ip` 等）。

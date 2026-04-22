@@ -1,4 +1,5 @@
-﻿using SonnetDB.Memory;
+using SonnetDB.Catalog;
+using SonnetDB.Memory;
 using SonnetDB.Storage.Segments;
 using SonnetDB.Wal;
 
@@ -39,11 +40,19 @@ public sealed class FlushCoordinator
     /// <param name="walSet">当前活跃的 WAL segment 集合管理器。</param>
     /// <param name="segmentId">本次生成 Segment 的唯一标识符（单调递增）。</param>
     /// <param name="tombstones">可选的 <see cref="TombstoneTable"/>；若非 null，Flush 前先持久化墓碑清单。</param>
+    /// <param name="seriesCatalog">可选的 Series 目录；提供时会按 schema 为声明了向量索引的字段构建 sidecar。</param>
+    /// <param name="measurementCatalog">可选的 measurement schema 目录；需与 <paramref name="seriesCatalog"/> 一起提供。</param>
     /// <returns>
     /// Segment 构建结果；若 MemTable 为空则返回 null（不触碰 WAL，不创建 Segment）。
     /// </returns>
     /// <exception cref="ArgumentNullException">任何必选参数为 null 时抛出。</exception>
-    public SegmentBuildResult? Flush(MemTable memTable, WalSegmentSet walSet, long segmentId, TombstoneTable? tombstones = null)
+    public SegmentBuildResult? Flush(
+        MemTable memTable,
+        WalSegmentSet walSet,
+        long segmentId,
+        TombstoneTable? tombstones = null,
+        SeriesCatalog? seriesCatalog = null,
+        MeasurementCatalog? measurementCatalog = null)
     {
         ArgumentNullException.ThrowIfNull(memTable);
         ArgumentNullException.ThrowIfNull(walSet);
@@ -67,7 +76,10 @@ public sealed class FlushCoordinator
         // 步骤 2：写 Segment（临时文件 + 原子 rename，由 SegmentWriter 保证）
         string segPath = TsdbPaths.SegmentPath(_options.RootDirectory, segmentId);
         var segWriter = new SegmentWriter(_options.SegmentWriterOptions);
-        var result = segWriter.WriteFrom(memTable, segmentId, segPath);
+        IReadOnlyDictionary<Model.SeriesFieldKey, VectorIndexDefinition>? vectorIndexes = null;
+        if (seriesCatalog is not null && measurementCatalog is not null)
+            vectorIndexes = VectorIndexBuildMap.Build(memTable.SnapshotAll(), seriesCatalog, measurementCatalog);
+        var result = segWriter.WriteFrom(memTable, segmentId, segPath, vectorIndexes);
 
         // 步骤 3：追加 WAL Checkpoint + Sync
         long checkpointRecordLsn = walSet.AppendCheckpoint(lastLsnBeforeFlush);

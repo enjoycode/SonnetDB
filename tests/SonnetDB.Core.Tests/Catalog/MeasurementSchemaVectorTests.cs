@@ -25,6 +25,41 @@ public class MeasurementSchemaVectorTests
     }
 
     [Fact]
+    public void Create_VectorFieldWithHnswIndex_Succeeds()
+    {
+        var schema = MeasurementSchema.Create("docs", new[]
+        {
+            new MeasurementColumn("source", MeasurementColumnRole.Tag, FieldType.String),
+            new MeasurementColumn(
+                "embedding",
+                MeasurementColumnRole.Field,
+                FieldType.Vector,
+                384,
+                VectorIndexDefinition.CreateHnsw(16, 200)),
+        });
+
+        var col = schema.TryGetColumn("embedding")!;
+        Assert.NotNull(col.VectorIndex);
+        Assert.Equal(VectorIndexKind.Hnsw, col.VectorIndex!.Kind);
+        Assert.Equal(16, col.VectorIndex.Hnsw.M);
+        Assert.Equal(200, col.VectorIndex.Hnsw.Ef);
+    }
+
+    [Fact]
+    public void Create_VectorIndexOnNonVector_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => MeasurementSchema.Create("m", new[]
+        {
+            new MeasurementColumn(
+                "v",
+                MeasurementColumnRole.Field,
+                FieldType.Float64,
+                null,
+                VectorIndexDefinition.CreateHnsw(16, 200)),
+        }));
+    }
+
+    [Fact]
     public void Create_VectorWithoutDim_Throws()
     {
         Assert.Throws<ArgumentException>(() => MeasurementSchema.Create("m", new[]
@@ -87,6 +122,7 @@ public class MeasurementSchemaVectorTests
             var emb = s.TryGetColumn("embedding")!;
             Assert.Equal(FieldType.Vector, emb.DataType);
             Assert.Equal(384, emb.VectorDimension);
+            Assert.Null(emb.VectorIndex);
 
             var score = s.TryGetColumn("score")!;
             Assert.Equal(FieldType.Float64, score.DataType);
@@ -123,6 +159,38 @@ public class MeasurementSchemaVectorTests
             Assert.Equal(2, loaded.Count);
             Assert.Equal(3, loaded[0].TryGetColumn("e")!.VectorDimension);
             Assert.Equal(1024, loaded[1].TryGetColumn("e")!.VectorDimension);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Codec_VectorColumnWithHnswIndex_RoundTripsThroughFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "sndb-vec-hnsw-" + Guid.NewGuid().ToString("N") + ".tslschema");
+        try
+        {
+            var original = MeasurementSchema.Create("docs", new[]
+            {
+                new MeasurementColumn("source", MeasurementColumnRole.Tag, FieldType.String),
+                new MeasurementColumn(
+                    "embedding",
+                    MeasurementColumnRole.Field,
+                    FieldType.Vector,
+                    384,
+                    VectorIndexDefinition.CreateHnsw(16, 200)),
+            });
+
+            MeasurementSchemaCodec.Save(path, new[] { original });
+            var loaded = MeasurementSchemaCodec.Load(path);
+
+            var emb = loaded[0].TryGetColumn("embedding")!;
+            Assert.NotNull(emb.VectorIndex);
+            Assert.Equal(VectorIndexKind.Hnsw, emb.VectorIndex!.Kind);
+            Assert.Equal(16, emb.VectorIndex.Hnsw.M);
+            Assert.Equal(200, emb.VectorIndex.Hnsw.Ef);
         }
         finally
         {

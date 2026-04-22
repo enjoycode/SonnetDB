@@ -88,10 +88,14 @@ public sealed class SegmentWriter
     /// <param name="path">目标文件路径（扩展名通常为 <c>.SDBSEG</c>）。</param>
     /// <returns>构建结果，含文件路径、Block 数量、时间范围、偏移等信息。</returns>
     /// <exception cref="ArgumentNullException"><paramref name="memTable"/> 或 <paramref name="path"/> 为 null。</exception>
-    public SegmentBuildResult WriteFrom(MemTable memTable, long segmentId, string path)
+    public SegmentBuildResult WriteFrom(
+        MemTable memTable,
+        long segmentId,
+        string path,
+        IReadOnlyDictionary<SeriesFieldKey, SonnetDB.Catalog.VectorIndexDefinition>? vectorIndexes = null)
     {
         ArgumentNullException.ThrowIfNull(memTable);
-        return Write(memTable.SnapshotAll(), segmentId, path);
+        return Write(memTable.SnapshotAll(), segmentId, path, vectorIndexes);
     }
 
     /// <summary>
@@ -103,7 +107,11 @@ public sealed class SegmentWriter
     /// <returns>构建结果，含文件路径、Block 数量、时间范围、偏移等信息。</returns>
     /// <exception cref="ArgumentNullException"><paramref name="series"/> 或 <paramref name="path"/> 为 null。</exception>
     /// <exception cref="IOException">临时文件已存在（路径冲突）或 IO 错误时抛出。</exception>
-    public SegmentBuildResult Write(IReadOnlyList<MemTableSeries> series, long segmentId, string path)
+    public SegmentBuildResult Write(
+        IReadOnlyList<MemTableSeries> series,
+        long segmentId,
+        string path,
+        IReadOnlyDictionary<SeriesFieldKey, SonnetDB.Catalog.VectorIndexDefinition>? vectorIndexes = null)
     {
         ArgumentNullException.ThrowIfNull(series);
         ArgumentNullException.ThrowIfNull(path);
@@ -130,7 +138,10 @@ public sealed class SegmentWriter
         long indexOffset = 0L;
         long footerOffset = 0L;
         var indexEntries = new List<BlockIndexEntry>(sorted.Count);
+        var vectorIndexBlocks = new List<HnswVectorBlockIndex>();
         bool tempFileCreated = false;
+        string tempVectorIndexPath = SonnetDB.Engine.TsdbPaths.VectorIndexPathForSegment(tempPath);
+        string vectorIndexPath = SonnetDB.Engine.TsdbPaths.VectorIndexPathForSegment(path);
 
         try
         {
@@ -181,7 +192,8 @@ public sealed class SegmentWriter
                                     TimestampCodec.WriteDeltaOfDelta(tsArr.AsSpan(0, points.Length), tsBuf.AsSpan(0, tsPayloadLen));
                                 ReadOnlySpan<byte> tsSpan = tsBuf.AsSpan(0, tsPayloadLen);
                                 WriteOneBlock(bs, bucket, points, fieldNameSpan, tsSpan, BlockEncoding.DeltaTimestamp,
-                                    blockOffset, indexEntries, ref segMinTs, ref segMaxTs, ref currentOffset);
+                                    blockOffset, indexEntries, vectorIndexBlocks, vectorIndexes,
+                                    ref segMinTs, ref segMaxTs, ref currentOffset);
                             }
                             finally { ArrayPool<byte>.Shared.Return(tsBuf); }
                         }
@@ -203,7 +215,8 @@ public sealed class SegmentWriter
 
                         ReadOnlySpan<byte> tsSpan = tsBufV1.AsSpan(0, tsPayloadLen);
                         WriteOneBlock(bs, bucket, points, fieldNameSpan, tsSpan, BlockEncoding.None,
-                            blockOffset, indexEntries, ref segMinTs, ref segMaxTs, ref currentOffset);
+                            blockOffset, indexEntries, vectorIndexBlocks, vectorIndexes,
+                            ref segMinTs, ref segMaxTs, ref currentOffset);
                     }
                     finally { ArrayPool<byte>.Shared.Return(tsBufV1); }
                 }
@@ -238,6 +251,9 @@ public sealed class SegmentWriter
             if (_options.FsyncOnCommit)
                 fs.Flush(true);
 
+            if (vectorIndexBlocks.Count > 0)
+                SegmentVectorIndexFile.Write(tempVectorIndexPath, vectorIndexBlocks);
+
             bs.Dispose();
             // using var fs ensures fs is disposed when the try block exits (idempotent if bs already closed it)
         }
@@ -246,11 +262,28 @@ public sealed class SegmentWriter
             // 仅删除我们创建的临时文件，不删除原本已存在的文件
             if (tempFileCreated)
                 try { File.Delete(tempPath); } catch { }
+            try { File.Delete(tempVectorIndexPath); } catch { }
             throw;
         }
 
         // 原子替换：临时文件 → 目标文件
         File.Move(tempPath, path, overwrite: true);
+
+        if (vectorIndexBlocks.Count > 0)
+        {
+            try
+            {
+                File.Move(tempVectorIndexPath, vectorIndexPath, overwrite: true);
+            }
+            catch
+            {
+                try { File.Delete(tempVectorIndexPath); } catch { }
+            }
+        }
+        else if (File.Exists(vectorIndexPath))
+        {
+            try { File.Delete(vectorIndexPath); } catch { }
+        }
 
         // 崩溃注入钩子（仅测试使用）：rename 完成后、Checkpoint 写入之前
         _options.PostRenameAction?.Invoke();
@@ -284,6 +317,8 @@ public sealed class SegmentWriter
         BlockEncoding tsEncoding,
         long blockOffset,
         List<BlockIndexEntry> indexEntries,
+        List<HnswVectorBlockIndex> vectorIndexBlocks,
+        IReadOnlyDictionary<SeriesFieldKey, SonnetDB.Catalog.VectorIndexDefinition>? vectorIndexes,
         ref long segMinTs,
         ref long segMaxTs,
         ref long currentOffset)
@@ -352,6 +387,7 @@ public sealed class SegmentWriter
             if (bucket.MinTimestamp < segMinTs) segMinTs = bucket.MinTimestamp;
             if (bucket.MaxTimestamp > segMaxTs) segMaxTs = bucket.MaxTimestamp;
 
+            int blockIndex = indexEntries.Count;
             indexEntries.Add(new BlockIndexEntry
             {
                 SeriesId = bucket.Key.SeriesId,
@@ -361,6 +397,17 @@ public sealed class SegmentWriter
                 BlockLength = blockLength,
                 FieldNameHash = fieldNameHash,
             });
+
+            if (isVector
+                && vectorIndexes is not null
+                && vectorIndexes.TryGetValue(bucket.Key, out var vectorIndex)
+                && vectorIndex.Kind == SonnetDB.Catalog.VectorIndexKind.Hnsw)
+            {
+                vectorIndexBlocks.Add(HnswVectorBlockIndex.Build(
+                    blockIndex,
+                    points.Span,
+                    vectorIndex.Hnsw));
+            }
 
             currentOffset += blockLength;
         }

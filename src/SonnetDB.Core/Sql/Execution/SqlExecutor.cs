@@ -268,7 +268,14 @@ public static class SqlExecutor
 
         var columns = new List<MeasurementColumn>(statement.Columns.Count);
         foreach (var col in statement.Columns)
-            columns.Add(new MeasurementColumn(col.Name, MapRole(col.Kind), MapType(col.DataType), col.VectorDimension));
+        {
+            columns.Add(new MeasurementColumn(
+                col.Name,
+                MapRole(col.Kind),
+                MapType(col.DataType),
+                col.VectorDimension,
+                MapVectorIndex(col.VectorIndex)));
+        }
 
         var schema = MeasurementSchema.Create(statement.Name, columns);
         return tsdb.CreateMeasurement(schema);
@@ -290,6 +297,14 @@ public static class SqlExecutor
         SqlDataType.Vector => FieldType.Vector,
         _ => throw new NotSupportedException($"未知数据类型 {type}。"),
     };
+
+    private static VectorIndexDefinition? MapVectorIndex(VectorIndexSpec? vectorIndex)
+        => vectorIndex switch
+        {
+            null => null,
+            HnswVectorIndexSpec hnsw => VectorIndexDefinition.CreateHnsw(hnsw.M, hnsw.Ef),
+            _ => throw new NotSupportedException($"未知向量索引声明 {vectorIndex.GetType().Name}。"),
+        };
 
     /// <summary>
     /// 执行 <c>INSERT INTO measurement (col, ...) VALUES (...) [, (...)]*</c> 语句。

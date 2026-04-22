@@ -41,6 +41,24 @@ public class SqlExecutorVectorTests : IDisposable
     }
 
     [Fact]
+    public void CreateMeasurement_WithVectorHnswIndex_PersistsAcrossReopen()
+    {
+        using (var db = Tsdb.Open(Options()))
+        {
+            SqlExecutor.Execute(db,
+                "CREATE MEASUREMENT docs (source TAG, embedding FIELD VECTOR(384) WITH INDEX hnsw(m=16, ef=200))");
+        }
+
+        using var db2 = Tsdb.Open(Options());
+        var schema = db2.Measurements.TryGet("docs")!;
+        var col = schema.TryGetColumn("embedding")!;
+        Assert.NotNull(col.VectorIndex);
+        Assert.Equal(VectorIndexKind.Hnsw, col.VectorIndex!.Kind);
+        Assert.Equal(16, col.VectorIndex.Hnsw.M);
+        Assert.Equal(200, col.VectorIndex.Hnsw.Ef);
+    }
+
+    [Fact]
     public void Insert_VectorLiteral_RoundTripsThroughEngine()
     {
         using var db = Tsdb.Open(Options());

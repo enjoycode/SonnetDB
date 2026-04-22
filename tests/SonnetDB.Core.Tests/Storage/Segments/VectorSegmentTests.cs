@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using SonnetDB.Buffers;
+using SonnetDB.Catalog;
+using SonnetDB.Engine;
 using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Storage.Format;
@@ -117,6 +119,37 @@ public sealed class VectorSegmentTests : IDisposable
             Assert.Equal(expected[i].Timestamp, decoded[i].Timestamp);
             Assert.True(expected[i].Value.AsVector().Span.SequenceEqual(decoded[i].Value.AsVector().Span));
         }
+    }
+
+    [Fact]
+    public void Segment_WriteWithHnswVectorIndex_CreatesSidecarAndReaderLoadsIt()
+    {
+        ulong seriesId = 4242UL;
+        const string fieldName = "embedding";
+
+        var mt = new MemTable();
+        long lsn = 1L;
+        for (int i = 0; i < 8; i++)
+            mt.Append(seriesId, 1_000L + i, fieldName, FieldValue.FromVector(new[] { (float)i, 0f, 0f }), lsn++);
+
+        string path = Path.Combine(_tempDir, "vector-index.SDBSEG");
+        var vectorIndexes = new Dictionary<SeriesFieldKey, VectorIndexDefinition>
+        {
+            [new SeriesFieldKey(seriesId, fieldName)] = VectorIndexDefinition.CreateHnsw(4, 8),
+        };
+
+        var writer = new SegmentWriter(new SegmentWriterOptions { FsyncOnCommit = false });
+        writer.WriteFrom(mt, segmentId: 7L, path, vectorIndexes);
+
+        string sidecarPath = TsdbPaths.VectorIndexPathForSegment(path);
+        Assert.True(File.Exists(sidecarPath));
+
+        using var reader = SegmentReader.Open(path);
+        var block = Assert.Single(reader.FindBySeries(seriesId));
+        Assert.True(reader.TryGetVectorIndex(block, out var vectorIndex));
+        Assert.Equal(block.Index, vectorIndex.BlockIndex);
+        Assert.Equal(8, vectorIndex.Count);
+        Assert.Equal(3, vectorIndex.Dimension);
     }
 
     // ── Segment 文件头：版本号升级到 v3 + v2 只读兼容 ──────────────────────

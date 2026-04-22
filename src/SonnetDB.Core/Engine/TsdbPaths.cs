@@ -32,6 +32,9 @@ public static class TsdbPaths
     /// <summary>Segment 文件扩展名。</summary>
     public const string SegmentFileExtension = ".SDBSEG";
 
+    /// <summary>向量索引 sidecar 文件扩展名。</summary>
+    public const string VectorIndexFileExtension = ".SDBVIDX";
+
     /// <summary>墓碑清单文件名（相对于根目录）。</summary>
     public const string TombstoneManifestFileName = "tombstones.tslmanifest";
 
@@ -95,6 +98,27 @@ public static class TsdbPaths
     /// <returns>段文件路径。</returns>
     public static string SegmentPath(string root, long segmentId) =>
         Path.Combine(root, SegmentsDirName, $"{segmentId:X16}{SegmentFileExtension}");
+
+    /// <summary>
+    /// 返回指定 SegmentId 对应的向量索引 sidecar 文件完整路径：
+    /// <c>{root}/segments/{segmentId:X16}.SDBVIDX</c>。
+    /// </summary>
+    /// <param name="root">数据库根目录路径。</param>
+    /// <param name="segmentId">段唯一标识符。</param>
+    /// <returns>向量索引 sidecar 文件路径。</returns>
+    public static string VectorIndexPath(string root, long segmentId) =>
+        Path.Combine(root, SegmentsDirName, $"{segmentId:X16}{VectorIndexFileExtension}");
+
+    /// <summary>
+    /// 根据段文件路径推导对应的向量索引 sidecar 文件路径。
+    /// </summary>
+    /// <param name="segmentPath">段文件完整路径。</param>
+    /// <returns>对应的 sidecar 文件路径。</returns>
+    public static string VectorIndexPathForSegment(string segmentPath)
+    {
+        ArgumentNullException.ThrowIfNull(segmentPath);
+        return Path.ChangeExtension(segmentPath, VectorIndexFileExtension);
+    }
 
     /// <summary>
     /// 尝试从文件名中解析 SegmentId（16 位十六进制 + .SDBSEG 扩展名）。

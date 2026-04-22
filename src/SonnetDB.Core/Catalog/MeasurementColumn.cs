@@ -12,8 +12,12 @@ namespace SonnetDB.Catalog;
 /// 向量列的维度（仅当 <see cref="DataType"/> 为 <see cref="FieldType.Vector"/> 时非 <c>null</c>，且必须 &gt; 0）；
 /// 其他类型恒为 <c>null</c>。
 /// </param>
+/// <param name="VectorIndex">
+/// 向量列的可选索引定义；仅当 <see cref="DataType"/> 为 <see cref="FieldType.Vector"/> 时允许非 <c>null</c>。
+/// </param>
 public sealed record MeasurementColumn(
     string Name,
     MeasurementColumnRole Role,
     FieldType DataType,
-    int? VectorDimension = null);
+    int? VectorDimension = null,
+    VectorIndexDefinition? VectorIndex = null);

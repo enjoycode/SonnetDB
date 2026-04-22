@@ -123,13 +123,23 @@ internal sealed class CompactionWorker : IDisposable
                     var newId = _owner.AllocateSegmentId();
                     var newPath = TsdbPaths.SegmentPath(_owner.RootDirectory, newId);
                     var readerDict = readers.ToDictionary(static r => r.Header.SegmentId);
-                    var result = _compactor.Execute(plan, readerDict, newId, newPath, _owner.Tombstones);
+                    var result = _compactor.Execute(
+                        plan,
+                        readerDict,
+                        newId,
+                        newPath,
+                        _owner.Tombstones,
+                        _owner.Catalog,
+                        _owner.Measurements);
 
                     _owner.Segments.SwapSegments(plan.SourceSegmentIds, newPath);
 
                     // SwapSegments 已 Dispose 旧 reader；删除旧文件（失败不抛）
                     foreach (long oldId in plan.SourceSegmentIds)
+                    {
                         TryDelete(TsdbPaths.SegmentPath(_owner.RootDirectory, oldId));
+                        TryDelete(TsdbPaths.VectorIndexPath(_owner.RootDirectory, oldId));
+                    }
 
                     // 回收已被消化的墓碑（不再覆盖任何活段的墓碑可以丢弃）
                     RecycleDiscardedTombstones();

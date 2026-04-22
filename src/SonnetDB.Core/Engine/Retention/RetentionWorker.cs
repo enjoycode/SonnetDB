@@ -103,7 +103,10 @@ public sealed class RetentionWorker : IDisposable
 
             // 删除磁盘文件（与 Compaction 同步骤：Swap 后 Delete，失败仅记录）
             foreach (var reader in dropped)
+            {
                 TryDelete(reader.Path);
+                TryDelete(TsdbPaths.VectorIndexPathForSegment(reader.Path));
+            }
         }
 
         sw.Stop();

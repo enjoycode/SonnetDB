@@ -501,7 +501,13 @@ public sealed class Tsdb : IDisposable
                     {
                         try
                         {
-                            var result = _flushCoordinator.Flush(MemTable, walSetToDispose, _nextSegmentId++, Tombstones);
+                            var result = _flushCoordinator.Flush(
+                                MemTable,
+                                walSetToDispose,
+                                _nextSegmentId++,
+                                Tombstones,
+                                Catalog,
+                                Measurements);
                             if (result != null)
                                 _checkpointLsn = MemTable.LastLsn;
                         }
@@ -559,7 +565,13 @@ public sealed class Tsdb : IDisposable
 
         long lsnBeforeFlush = MemTable.LastLsn;
         long segId = _nextSegmentId++;
-        var result = _flushCoordinator.Flush(MemTable, _walSet, segId, Tombstones);
+        var result = _flushCoordinator.Flush(
+            MemTable,
+            _walSet,
+            segId,
+            Tombstones,
+            Catalog,
+            Measurements);
 
         // Flush 成功后，向新 WAL 重写所有 catalog 条目的 CreateSeries 记录，
         // 确保在 .SDBCAT 未落盘的情况下崩溃恢复仍能从 WAL 重建 catalog。

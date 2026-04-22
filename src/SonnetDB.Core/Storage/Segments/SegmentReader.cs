@@ -28,6 +28,7 @@ public sealed class SegmentReader : IDisposable
     private byte[]? _bytes;
     private readonly SegmentReaderOptions _options;
     private readonly BlockDescriptor[] _blocks;
+    private readonly IReadOnlyDictionary<int, HnswVectorBlockIndex> _vectorIndexesByBlock;
 
     /// <summary>段文件路径。</summary>
     public string Path { get; }
@@ -115,6 +116,7 @@ public sealed class SegmentReader : IDisposable
         SegmentHeader header,
         SegmentFooter footer,
         BlockDescriptor[] blocks,
+        IReadOnlyDictionary<int, HnswVectorBlockIndex> vectorIndexesByBlock,
         SegmentReaderOptions options)
     {
         Path = path;
@@ -122,6 +124,7 @@ public sealed class SegmentReader : IDisposable
         Header = header;
         Footer = footer;
         _blocks = blocks;
+        _vectorIndexesByBlock = vectorIndexesByBlock;
         FileLength = bytes.Length;
         _options = options;
 
@@ -288,7 +291,8 @@ public sealed class SegmentReader : IDisposable
             };
         }
 
-        return new SegmentReader(path, bytes, header, footer, blocks, options);
+        var vectorIndexes = SegmentVectorIndexFile.TryLoad(path, blocks);
+        return new SegmentReader(path, bytes, header, footer, blocks, vectorIndexes, options);
     }
 
     /// <summary>
@@ -415,6 +419,15 @@ public sealed class SegmentReader : IDisposable
         var data = ReadBlock(descriptor);
         return BlockDecoder.DecodeRange(descriptor, data.TimestampPayload, data.ValuePayload, from, toInclusive);
     }
+
+    /// <summary>
+    /// 尝试获取指定 block 对应的 HNSW 向量索引。
+    /// </summary>
+    /// <param name="descriptor">目标 block。</param>
+    /// <param name="index">命中时返回的索引实例。</param>
+    /// <returns>存在索引返回 true，否则返回 false。</returns>
+    internal bool TryGetVectorIndex(in BlockDescriptor descriptor, out HnswVectorBlockIndex index)
+        => _vectorIndexesByBlock.TryGetValue(descriptor.Index, out index!);
 
     /// <summary>
     /// 释放内部 <c>byte[]</c> 引用以便 GC 回收。调用后不可再调用其他方法。

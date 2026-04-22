@@ -73,11 +73,13 @@ public sealed class MeasurementSchema
                     throw new ArgumentException(
                         $"VECTOR 列 '{col.Name}' 必须声明正的维度（VectorDimension > 0），实际为 {(col.VectorDimension?.ToString() ?? "null")}。",
                         nameof(columns));
+                if (col.VectorIndex is not null)
+                    ValidateVectorIndex(col.Name, col.VectorIndex, nameof(columns));
             }
-            else if (col.VectorDimension is not null)
+            else if (col.VectorDimension is not null || col.VectorIndex is not null)
             {
                 throw new ArgumentException(
-                    $"列 '{col.Name}' 的类型为 {col.DataType}，不应声明 VectorDimension。", nameof(columns));
+                    $"列 '{col.Name}' 的类型为 {col.DataType}，不应声明向量维度或向量索引。", nameof(columns));
             }
             if (col.Role == MeasurementColumnRole.Field)
                 fieldCount++;
@@ -109,4 +111,31 @@ public sealed class MeasurementSchema
     /// <summary>枚举所有 Field 列（按声明顺序）。</summary>
     public IEnumerable<MeasurementColumn> FieldColumns
         => Columns.Where(c => c.Role == MeasurementColumnRole.Field);
+
+    private static void ValidateVectorIndex(string columnName, VectorIndexDefinition vectorIndex, string paramName)
+    {
+        ArgumentNullException.ThrowIfNull(vectorIndex);
+
+        switch (vectorIndex.Kind)
+        {
+            case VectorIndexKind.Hnsw:
+                if (vectorIndex.Hnsw.M < 2)
+                    throw new ArgumentException(
+                        $"VECTOR 列 '{columnName}' 的 HNSW 参数 m 必须 >= 2，实际为 {vectorIndex.Hnsw.M}。",
+                        paramName);
+                if (vectorIndex.Hnsw.Ef <= 0)
+                    throw new ArgumentException(
+                        $"VECTOR 列 '{columnName}' 的 HNSW 参数 ef 必须 > 0，实际为 {vectorIndex.Hnsw.Ef}。",
+                        paramName);
+                if (vectorIndex.Hnsw.Ef < vectorIndex.Hnsw.M)
+                    throw new ArgumentException(
+                        $"VECTOR 列 '{columnName}' 的 HNSW 参数 ef({vectorIndex.Hnsw.Ef}) 必须 >= m({vectorIndex.Hnsw.M})。",
+                        paramName);
+                break;
+
+            default:
+                throw new ArgumentException(
+                    $"VECTOR 列 '{columnName}' 使用了未知索引类型 {vectorIndex.Kind}。", paramName);
+        }
+    }
 }

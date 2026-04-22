@@ -119,6 +119,7 @@ public sealed class SqlParser
         ColumnKind kind;
         SqlDataType dataType;
         int? vectorDim = null;
+        VectorIndexSpec? vectorIndex = null;
         switch (Current.Kind)
         {
             case TokenKind.KeywordTag:
@@ -140,12 +141,16 @@ public sealed class SqlParser
                 Advance();
                 kind = ColumnKind.Field;
                 (dataType, vectorDim) = ParseFieldDataType();
+                if (dataType == SqlDataType.Vector)
+                    vectorIndex = ParseOptionalVectorIndex();
+                else if (Current.Kind == TokenKind.KeywordWith)
+                    throw Error("只有 VECTOR 列支持 WITH INDEX 声明");
                 break;
 
             default:
                 throw Error("期望 TAG 或 FIELD");
         }
-        return new ColumnDefinition(columnName, kind, dataType, vectorDim);
+        return new ColumnDefinition(columnName, kind, dataType, vectorDim, vectorIndex);
     }
 
     private SqlDataType ParseDataType()
@@ -187,6 +192,61 @@ public sealed class SqlParser
         => kind is TokenKind.KeywordFloat or TokenKind.KeywordInt
                 or TokenKind.KeywordBool or TokenKind.KeywordString
                 or TokenKind.KeywordVector;
+
+    private VectorIndexSpec? ParseOptionalVectorIndex()
+    {
+        if (Current.Kind != TokenKind.KeywordWith)
+            return null;
+
+        Advance();
+        ExpectIdentifier("index", "WITH 后面期望 INDEX");
+
+        if (!IsIdentifier("hnsw"))
+            throw Error("当前仅支持 WITH INDEX hnsw(...)");
+        Advance();
+        Expect(TokenKind.LeftParen);
+
+        int? m = null;
+        int? ef = null;
+        while (true)
+        {
+            string parameterName = ExpectIdentifierName();
+            Expect(TokenKind.Equal);
+            int value = ExpectPositiveInt($"HNSW 参数 '{parameterName}' 后面期望正整数");
+
+            if (string.Equals(parameterName, "m", StringComparison.OrdinalIgnoreCase))
+            {
+                if (m is not null)
+                    throw Error("HNSW 参数 m 重复声明");
+                m = value;
+            }
+            else if (string.Equals(parameterName, "ef", StringComparison.OrdinalIgnoreCase))
+            {
+                if (ef is not null)
+                    throw Error("HNSW 参数 ef 重复声明");
+                ef = value;
+            }
+            else
+            {
+                throw Error($"未知的 HNSW 参数 '{parameterName}'，仅支持 m / ef");
+            }
+
+            if (Current.Kind == TokenKind.Comma)
+            {
+                Advance();
+                continue;
+            }
+
+            break;
+        }
+
+        Expect(TokenKind.RightParen);
+
+        if (m is null || ef is null)
+            throw Error("HNSW 索引声明必须同时提供 m 与 ef，例如 hnsw(m=16, ef=200)");
+
+        return new HnswVectorIndexSpec(m.Value, ef.Value);
+    }
 
     // ── INSERT INTO ────────────────────────────────────────────────────────
 
@@ -744,9 +804,24 @@ public sealed class SqlParser
         return (int)value;
     }
 
+    private int ExpectPositiveInt(string errorMessage)
+    {
+        int value = ExpectNonNegativeInt(errorMessage);
+        if (value <= 0)
+            throw Error(errorMessage);
+        return value;
+    }
+
     private bool IsIdentifier(string text)
         => Current.Kind == TokenKind.IdentifierLiteral
            && string.Equals(Current.Text, text, StringComparison.OrdinalIgnoreCase);
+
+    private void ExpectIdentifier(string text, string errorMessage)
+    {
+        if (!IsIdentifier(text))
+            throw Error(errorMessage);
+        Advance();
+    }
 
     /// <summary>
     /// 期望一个列名 token：普通标识符；或者 <see cref="TokenKind.KeywordTime"/>（保留字 <c>time</c> 在列名上下文中

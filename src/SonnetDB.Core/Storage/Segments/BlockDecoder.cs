@@ -35,6 +35,29 @@ internal static class BlockDecoder
     }
 
     /// <summary>
+    /// 仅解码时间戳序列。
+    /// </summary>
+    /// <param name="d">Block 描述符。</param>
+    /// <param name="tsPayload">时间戳载荷字节视图。</param>
+    /// <returns>按点位顺序排列的时间戳数组。</returns>
+    internal static long[] DecodeTimestamps(in BlockDescriptor d, ReadOnlySpan<byte> tsPayload)
+    {
+        if (d.Count == 0)
+            return [];
+
+        var result = new long[d.Count];
+        if ((d.TimestampEncoding & BlockEncoding.DeltaTimestamp) != 0)
+        {
+            TimestampCodec.ReadDeltaOfDelta(tsPayload, result);
+            return result;
+        }
+
+        for (int i = 0; i < result.Length; i++)
+            result[i] = ReadRawTimestamp(tsPayload, i);
+        return result;
+    }
+
+    /// <summary>
     /// 解码 Block 内 [<paramref name="from"/>, <paramref name="toInclusive"/>] 时间范围的 DataPoint。
     /// </summary>
     /// <param name="d">Block 描述符。</param>

@@ -12,6 +12,18 @@ public sealed record CreateMeasurementStatement(
     string Name,
     IReadOnlyList<ColumnDefinition> Columns) : SqlStatement;
 
+/// <summary>
+/// 向量索引声明抽象基类。
+/// </summary>
+public abstract record VectorIndexSpec;
+
+/// <summary>
+/// HNSW 向量索引声明：<c>WITH INDEX hnsw(m=16, ef=200)</c>。
+/// </summary>
+/// <param name="M">每个节点在每层保留的最大邻接数。</param>
+/// <param name="Ef">建图与查询默认使用的候选规模。</param>
+public sealed record HnswVectorIndexSpec(int M, int Ef) : VectorIndexSpec;
+
 /// <summary>列定义。</summary>
 /// <param name="Name">列名。</param>
 /// <param name="Kind">Tag 或 Field。</param>
@@ -19,11 +31,15 @@ public sealed record CreateMeasurementStatement(
 /// <param name="VectorDimension">
 /// 向量列的维度（仅当 <see cref="DataType"/> 为 <see cref="SqlDataType.Vector"/> 时非 <c>null</c>，且 &gt; 0）。
 /// </param>
+/// <param name="VectorIndex">
+/// 向量列的可选索引声明；仅当 <see cref="DataType"/> 为 <see cref="SqlDataType.Vector"/> 时允许非 <c>null</c>。
+/// </param>
 public sealed record ColumnDefinition(
     string Name,
     ColumnKind Kind,
     SqlDataType DataType,
-    int? VectorDimension = null);
+    int? VectorDimension = null,
+    VectorIndexSpec? VectorIndex = null);
 
 /// <summary>
 /// <c>INSERT INTO measurement (col, ...) VALUES (v, ...), (...)</c>。

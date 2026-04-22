@@ -74,7 +74,7 @@ internal static class KnnExecutor
                         || reader.MinTimestamp > timeRange.ToInclusive)
                         continue;
 
-                    ScanSegment(reader, series.Id, vectorField, queryVector, metric, timeRange, localCandidates);
+                    ScanSegment(reader, series.Id, vectorField, queryVector, k, metric, timeRange, localCandidates);
                 }
 
                 return localCandidates;
@@ -127,7 +127,7 @@ internal static class KnnExecutor
         foreach (var dp in slice.Span)
         {
             var vecSpan = dp.Value.AsVector().Span;
-            double dist = ComputeDistance(metric, querySpan, vecSpan);
+            double dist = VectorDistance.Compute(metric, querySpan, vecSpan);
             candidates.Add((dist, dp.Timestamp, seriesId));
         }
     }
@@ -139,6 +139,7 @@ internal static class KnnExecutor
         ulong seriesId,
         string vectorField,
         ReadOnlyMemory<float> queryVector,
+        int k,
         KnnMetric metric,
         TimeRange timeRange,
         List<(double Dist, long Ts, ulong Sid)> candidates)
@@ -158,63 +159,25 @@ internal static class KnnExecutor
                 || block.MinTimestamp > timeRange.ToInclusive)
                 continue;
 
+            bool fullCover = block.MinTimestamp >= timeRange.FromInclusive
+                && block.MaxTimestamp <= timeRange.ToInclusive;
+            if (fullCover && metric == KnnMetric.Cosine && reader.TryGetVectorIndex(block, out var vectorIndex))
+            {
+                var data = reader.ReadBlock(block);
+                var timestamps = BlockDecoder.DecodeTimestamps(block, data.TimestampPayload);
+                var annHits = vectorIndex.Search(querySpan, data.ValuePayload, timestamps, k, metric);
+                foreach (var hit in annHits)
+                    candidates.Add((hit.Distance, hit.Timestamp, seriesId));
+                continue;
+            }
+
             var points = reader.DecodeBlockRange(block, timeRange.FromInclusive, timeRange.ToInclusive);
             foreach (var dp in points)
             {
                 var vecSpan = dp.Value.AsVector().Span;
-                double dist = ComputeDistance(metric, querySpan, vecSpan);
+                double dist = VectorDistance.Compute(metric, querySpan, vecSpan);
                 candidates.Add((dist, dp.Timestamp, seriesId));
             }
         }
-    }
-
-    // ── 私有：距离函数 ──────────────────────────────────────────────────────
-
-    private static double ComputeDistance(KnnMetric metric, ReadOnlySpan<float> a, ReadOnlySpan<float> b)
-        => metric switch
-        {
-            KnnMetric.L2 => ComputeL2Distance(a, b),
-            KnnMetric.InnerProduct => ComputeNegativeInnerProduct(a, b),
-            _ => ComputeCosineDistance(a, b),
-        };
-
-    /// <summary>余弦距离：1 − (a·b) / (‖a‖ · ‖b‖)，值域 [0, 2]。</summary>
-    private static double ComputeCosineDistance(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
-    {
-        double dot = 0;
-        double normA2 = 0;
-        double normB2 = 0;
-        for (int i = 0; i < a.Length; i++)
-        {
-            dot += (double)a[i] * b[i];
-            normA2 += (double)a[i] * a[i];
-            normB2 += (double)b[i] * b[i];
-        }
-
-        if (normA2 == 0 || normB2 == 0)
-            // 零向量无法计算余弦相似度，返回 1.0（[0,2] 值域的中点，表示"无法比较"而非"最近/最远"）
-            return 1.0;
-        return 1.0 - dot / (Math.Sqrt(normA2) * Math.Sqrt(normB2));
-    }
-
-    /// <summary>L2（欧几里得）距离：√(Σ(aᵢ − bᵢ)²)。</summary>
-    private static double ComputeL2Distance(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
-    {
-        double sumSq = 0;
-        for (int i = 0; i < a.Length; i++)
-        {
-            double delta = (double)a[i] - b[i];
-            sumSq += delta * delta;
-        }
-        return Math.Sqrt(sumSq);
-    }
-
-    /// <summary>负内积：−(a·b)，值越小表示点积越大（越相似）。</summary>
-    private static double ComputeNegativeInnerProduct(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
-    {
-        double dot = 0;
-        for (int i = 0; i < a.Length; i++)
-            dot += (double)a[i] * b[i];
-        return -dot;
     }
 }

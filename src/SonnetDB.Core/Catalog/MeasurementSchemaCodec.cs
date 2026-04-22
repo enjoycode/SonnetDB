@@ -31,6 +31,11 @@ namespace SonnetDB.Catalog;
 ///     byte   DataType                  (1B)  SonnetDB.Storage.Format.FieldType
 ///     // PR #58 b（v2 起）：仅当 DataType == Vector(5) 时追加：
 ///     int32  VectorDimension           (4B)  必须 > 0
+///     // PR #61（v3 起）：仅当 DataType == Vector(5) 时追加：
+///     byte   VectorIndexKind           (1B)  0=None, 1=Hnsw
+///     // 若 VectorIndexKind == 1(Hnsw)：
+///     int32  HnswM                     (4B)
+///     int32  HnswEf                    (4B)
 ///
 /// MeasurementSchemaFooter (16B)
 ///   Crc32                              (4B)  整个 MeasurementSchema[] 区域的 CRC32
@@ -40,8 +45,8 @@ namespace SonnetDB.Catalog;
 /// </para>
 /// <para>写入策略：临时文件 + 原子 rename（崩溃安全）。</para>
 /// <para>
-/// 版本兼容：当前写入版本为 v2（见 <see cref="_formatVersion"/>）。v1 文件只能包含非 VECTOR 列；读取
-/// 时按版本号决定是否解析每列尾部的 4 字节 dim。
+/// 版本兼容：当前写入版本为 v3（见 <see cref="_formatVersion"/>）。v1 文件只能包含非 VECTOR 列；v2
+/// 支持 VECTOR(dim) 但不含索引声明；读取时按版本号决定是否解析维度与索引尾部字段。
 /// </para>
 /// </summary>
 public static class MeasurementSchemaCodec
@@ -52,7 +57,7 @@ public static class MeasurementSchemaCodec
     private static readonly byte[] _magic = "SDBMEAv1"u8.ToArray();
     private static readonly Encoding _utf8 = Encoding.UTF8;
 
-    private const int _formatVersion = 2;
+    private const int _formatVersion = 3;
     private const int _headerSize = 32;
     private const int _footerSize = 16;
 
@@ -116,7 +121,7 @@ public static class MeasurementSchemaCodec
                 throw new InvalidDataException("MeasurementSchema: invalid magic in header.");
 
             int version = headerReader.ReadInt32();
-            if (version != 1 && version != _formatVersion)
+            if (version is < 1 or > _formatVersion)
                 throw new InvalidDataException($"MeasurementSchema: unsupported format version {version}.");
 
             int hSize = headerReader.ReadInt32();
@@ -184,6 +189,8 @@ public static class MeasurementSchemaCodec
         var columns = new List<MeasurementColumn>(columnCount);
         Span<byte> roleAndType = stackalloc byte[2];
         Span<byte> dimBuf = stackalloc byte[4];
+        Span<byte> indexKindBuf = stackalloc byte[1];
+        Span<byte> hnswBuf = stackalloc byte[8];
         for (int c = 0; c < columnCount; c++)
         {
             string colName = ReadString(source, crc, fieldDescription: $"measurement {index} column {c} name");
@@ -205,6 +212,7 @@ public static class MeasurementSchemaCodec
                     $"MeasurementSchema: invalid column data type {typeByte} (measurement '{name}', column '{colName}').");
 
             int? vectorDim = null;
+            VectorIndexDefinition? vectorIndex = null;
             if (dataType == FieldType.Vector)
             {
                 if (version < 2)
@@ -217,9 +225,33 @@ public static class MeasurementSchemaCodec
                     throw new InvalidDataException(
                         $"MeasurementSchema: invalid VECTOR dimension {dim} (measurement '{name}', column '{colName}').");
                 vectorDim = dim;
+
+                if (version >= 3)
+                {
+                    ReadExactSpan(source, indexKindBuf, $"measurement {index} column {c} vector index kind");
+                    crc.Append(indexKindBuf);
+                    byte indexKind = indexKindBuf[0];
+                    switch (indexKind)
+                    {
+                        case 0:
+                            break;
+
+                        case (byte)VectorIndexKind.Hnsw:
+                            ReadExactSpan(source, hnswBuf, $"measurement {index} column {c} hnsw options");
+                            crc.Append(hnswBuf);
+                            int m = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(hnswBuf[..4]);
+                            int ef = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(hnswBuf[4..]);
+                            vectorIndex = VectorIndexDefinition.CreateHnsw(m, ef);
+                            break;
+
+                        default:
+                            throw new InvalidDataException(
+                                $"MeasurementSchema: invalid vector index kind {indexKind} (measurement '{name}', column '{colName}').");
+                    }
+                }
             }
 
-            columns.Add(new MeasurementColumn(colName, role, dataType, vectorDim));
+            columns.Add(new MeasurementColumn(colName, role, dataType, vectorDim, vectorIndex));
         }
 
         return MeasurementSchema.Create(name, columns, createdAt);
@@ -284,7 +316,12 @@ public static class MeasurementSchemaCodec
                     $"Column '{schema.Columns[i].Name}' 名称过长（{colNameLen} 字节，最大 {ushort.MaxValue}）。");
             int colSize = 2 + colNameLen + 1 + 1; // nameLen + name + role + type
             if (schema.Columns[i].DataType == FieldType.Vector)
+            {
                 colSize += 4; // VectorDimension (int32)
+                colSize += 1; // VectorIndexKind
+                if (schema.Columns[i].VectorIndex?.Kind == VectorIndexKind.Hnsw)
+                    colSize += 8; // HnswM + HnswEf
+            }
             columnSizes[i] = colSize;
             totalSize += colSize;
         }
@@ -305,8 +342,7 @@ public static class MeasurementSchemaCodec
             for (int i = 0; i < schema.Columns.Count; i++)
             {
                 var col = schema.Columns[i];
-                int extraDimSize = col.DataType == FieldType.Vector ? 4 : 0;
-                int colNameLen = columnSizes[i] - 4 - extraDimSize; // 2(len) + 1(role) + 1(type) (+ 4 if vector)
+                int colNameLen = _utf8.GetByteCount(col.Name);
                 writer.WriteUInt16((ushort)colNameLen);
                 int colWritten = _utf8.GetBytes(col.Name, writer.FreeSpan);
                 writer.Advance(colWritten);
@@ -318,6 +354,13 @@ public static class MeasurementSchemaCodec
                         ?? throw new InvalidDataException(
                             $"VECTOR column '{col.Name}' missing dimension when persisting schema.");
                     writer.WriteInt32(dim);
+                    byte indexKind = col.VectorIndex is null ? (byte)0 : (byte)col.VectorIndex.Kind;
+                    writer.WriteByte(indexKind);
+                    if (col.VectorIndex?.Kind == VectorIndexKind.Hnsw)
+                    {
+                        writer.WriteInt32(col.VectorIndex.Hnsw.M);
+                        writer.WriteInt32(col.VectorIndex.Hnsw.Ef);
+                    }
                 }
             }
 

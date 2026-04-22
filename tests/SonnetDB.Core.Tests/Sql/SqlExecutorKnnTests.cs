@@ -32,6 +32,14 @@ public sealed class SqlExecutorKnnTests : IDisposable
         return db;
     }
 
+    private Tsdb OpenDbWithHnsw()
+    {
+        var db = Tsdb.Open(new TsdbOptions { RootDirectory = _root });
+        SqlExecutor.Execute(db,
+            "CREATE MEASUREMENT docs (source TAG, embedding FIELD VECTOR(3) WITH INDEX hnsw(m=4, ef=8))");
+        return db;
+    }
+
     private static SelectExecutionResult Select(Tsdb db, string sql)
         => Assert.IsType<SelectExecutionResult>(SqlExecutor.Execute(db, sql));
 
@@ -152,6 +160,30 @@ public sealed class SqlExecutorKnnTests : IDisposable
 
         Assert.Equal(2, r.Rows.Count);
         Assert.All(r.Rows, row => Assert.True((long)row[0]! >= 2000L));
+    }
+
+    [Fact]
+    public void Knn_WithFlushedHnswSegment_UsesIndexedMeasurementAndReturnsResults()
+    {
+        using (var db = OpenDbWithHnsw())
+        {
+            SqlExecutor.Execute(db, "INSERT INTO docs (source, embedding, time) VALUES " +
+                "('a', [1, 0, 0], 1000), " +
+                "('b', [0.9, 0.1, 0], 2000), " +
+                "('c', [0, 1, 0], 3000), " +
+                "('d', [-1, 0, 0], 4000)");
+
+            var flush = db.FlushNow();
+            Assert.NotNull(flush);
+            Assert.True(File.Exists(TsdbPaths.VectorIndexPath(_root, flush!.SegmentId)));
+        }
+
+        using var reopened = Tsdb.Open(new TsdbOptions { RootDirectory = _root });
+        var result = Select(reopened, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 2)");
+
+        Assert.Equal(2, result.Rows.Count);
+        Assert.Equal("a", result.Rows[0][2]);
+        Assert.Equal("b", result.Rows[1][2]);
     }
 
     [Fact]
