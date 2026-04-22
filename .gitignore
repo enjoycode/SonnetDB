@@ -424,3 +424,4 @@ FodyWeavers.xsd
 /.tools
 /.tools5
 .dotnet_home/
+/.codex-temp

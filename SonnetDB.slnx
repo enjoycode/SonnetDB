@@ -1,4 +1,4 @@
-﻿<Solution>
+<Solution>
   <Folder Name="/eng/">
     <Project Path="eng/benchmarks/run-benchmarks/run-benchmarks.csproj" />
     <Project Path="eng/benchmarks/start-benchmark-env/start-benchmark-env.csproj" />
@@ -15,4 +15,7 @@
     <Project Path="tests/SonnetDB.Core.Tests/SonnetDB.Core.Tests.csproj" />
     <Project Path="tests/SonnetDB.Tests/SonnetDB.Tests.csproj" />
   </Folder>
+  <Project Path="docker-compose.dcproj">
+    <Build />
+  </Project>
 </Solution>

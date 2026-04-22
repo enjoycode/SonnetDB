@@ -94,7 +94,7 @@ internal static class HelpDocsEndpoints
     private static async Task WriteAsync(HttpContext ctx, string filePath)
     {
         ctx.Response.StatusCode = StatusCodes.Status200OK;
-        ctx.Response.ContentType = AdminUiAssets.GuessContentType(filePath);
+        ctx.Response.ContentType = StaticAssetContentTypes.Guess(filePath);
         ctx.Response.ContentLength = new FileInfo(filePath).Length;
 
         var requestPath = ctx.Request.Path.Value ?? string.Empty;

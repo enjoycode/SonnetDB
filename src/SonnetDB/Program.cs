@@ -191,7 +191,7 @@ public static class Program
         // ---- 产品官网首页（根路径 /）----
         app.MapHomePage();
 
-        // ---- Admin SPA（嵌入式静态资源；匿名可读，所有管理动作都走 SQL 端点）----
+        // ---- Admin SPA（开发期走 SpaProxy，发布期走静态文件；匿名可读，管理动作仍走 SQL/API）----
         app.MapAdminUi();
         app.MapHelpDocs(serverOptions);
 

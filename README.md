@@ -19,7 +19,7 @@ SonnetDB 是一个使用 C# / .NET 10 构建的时序数据库项目，既可以
 | `src/SonnetDB.Data` | ADO.NET 提供程序，统一支持本地嵌入式和远程 `SonnetDB` |
 | `src/SonnetDB.Cli` | 命令行工具 `sndb`：本地/远程连接、profile 管理（`local`/`remote`/`connect`）、交互式 REPL |
 | `src/SonnetDB` | HTTP 服务、首次安装流程、用户与授权、SSE、Admin UI、内置 `/help` 文档站点 |
-| `web/admin` | 管理后台前端 |
+| `web` | 管理后台前端（SPA 调试 + 发布静态资源） |
 | `docs` | JekyllNet 文档站点源码；构建镜像时会生成并打包到 `/help` |
 
 ## 当前能力
@@ -301,7 +301,7 @@ SonnetDB/
 │  ├─ SonnetDB.Cli/
 │  └─ SonnetDB/
 ├─ tests/
-├─ web/admin/
+├─ web/
 ├─ docs/
 ├─ CHANGELOG.md
 ├─ ROADMAP.md

@@ -1,8 +1,43 @@
-﻿import { defineConfig } from 'vite';
-import vue from '@vitejs/plugin-vue';
 import { fileURLToPath, URL } from 'node:url';
+import fs from 'node:fs';
+import path from 'node:path';
+import childProcess from 'node:child_process';
+import { env } from 'node:process';
+import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
 
-// SonnetDB Admin UI 由 ASP.NET Core 嵌入资源托管在 /admin/ 前缀下。
+const baseFolder =
+  env.APPDATA && env.APPDATA !== ''
+    ? path.join(env.APPDATA, 'ASP.NET', 'https')
+    : path.join(env.HOME ?? '.', '.aspnet', 'https');
+
+const certificateName = 'sonnetdb-admin';
+const certFilePath = path.join(baseFolder, `${certificateName}.pem`);
+const keyFilePath = path.join(baseFolder, `${certificateName}.key`);
+
+if (!fs.existsSync(baseFolder)) {
+  fs.mkdirSync(baseFolder, { recursive: true });
+}
+
+if (!fs.existsSync(certFilePath) || !fs.existsSync(keyFilePath)) {
+  const result = childProcess.spawnSync(
+    'dotnet',
+    ['dev-certs', 'https', '--export-path', certFilePath, '--format', 'Pem', '--no-password'],
+    { stdio: 'inherit' },
+  );
+
+  if (result.status !== 0) {
+    throw new Error('Could not create HTTPS certificate for SonnetDB Admin.');
+  }
+}
+
+const target =
+  env.ASPNETCORE_HTTPS_PORT && env.ASPNETCORE_HTTPS_PORT !== ''
+    ? `https://localhost:${env.ASPNETCORE_HTTPS_PORT}`
+    : env.ASPNETCORE_URLS
+      ? env.ASPNETCORE_URLS.split(';')[0]
+      : 'https://localhost:60844';
+
 export default defineConfig({
   base: '/admin/',
   plugins: [vue()],
@@ -26,11 +61,17 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: Number.parseInt(env.DEV_SERVER_PORT ?? '5173', 10),
+    strictPort: true,
+    https: {
+      cert: fs.readFileSync(certFilePath),
+      key: fs.readFileSync(keyFilePath),
+    },
     proxy: {
-      '/v1': 'http://localhost:5000',
-      '/healthz': 'http://localhost:5000',
-      '/metrics': 'http://localhost:5000',
+      '^/(v1|healthz|metrics|help|mcp)': {
+        target,
+        secure: false,
+      },
     },
   },
 });

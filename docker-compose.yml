@@ -1,8 +1,5 @@
 services:
   sonnetdb:
-    build:
-      context: .
-      dockerfile: src/SonnetDB/Dockerfile
     image: iotsharp/sonnetdb
     ports:
       - "5080:5080"

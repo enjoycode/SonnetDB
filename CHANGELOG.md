@@ -22,6 +22,7 @@
   - **代码命名空间**：`TSLite.*` → `SonnetDB.*`，`TSLite.Server.*` → `SonnetDB.*`（服务端去掉 `.Server` 子命名空间，与对外品牌一致）。
   - **保留**：核心类型名 `Tsdb` / `TsdbOptions` / `SndbConnection` 等不变（`Tsdb` 是通用时序库缩写而非品牌词）。
 - **版本升级**：`0.1.0` → `1.0.0`。
+- Server Admin UI 从“嵌入式资源”切换为官方 SPA 模式：开发期由 `SpaProxy` 自动启动 `web` 的 `npm run dev`，发布期改为 Static Web Assets 输出到 `/admin/`，以便更贴近 ASP.NET Core 推荐做法并减少 AOT 发布链路的额外定制。
 
 ### Planned
 - **Milestone 13 — 向量类型与嵌入式向量索引（剩余规划）**：PR #58 ~ #61（`VECTOR(dim)` / 距离函数 / `knn(...)` brute-force + HNSW 召回）已完成；剩余计划聚焦 PR #62，即向量召回基准与外部对比补数。

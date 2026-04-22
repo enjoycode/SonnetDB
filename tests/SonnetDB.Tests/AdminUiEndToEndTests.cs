@@ -17,6 +17,7 @@ public sealed class AdminUiEndToEndTests : IAsyncLifetime
     private WebApplication? _app;
     private string? _baseUrl;
     private string? _dataRoot;
+    private bool _hasPublishedAdminUi;
 
     public async Task InitializeAsync()
     {
@@ -33,6 +34,7 @@ public sealed class AdminUiEndToEndTests : IAsyncLifetime
         await _app.StartAsync();
         _baseUrl = _app.Services.GetRequiredService<IServer>()
             .Features.Get<IServerAddressesFeature>()!.Addresses.First();
+        _hasPublishedAdminUi = _app.Environment.WebRootFileProvider.GetFileInfo("admin/index.html").Exists;
     }
 
     public async Task DisposeAsync()
@@ -55,11 +57,17 @@ public sealed class AdminUiEndToEndTests : IAsyncLifetime
     {
         using var client = CreateClient();
         var resp = await client.GetAsync("/admin");
-        // 嵌入资源存在 → 200 + text/html；不存在 → 503（CI 未 build 前端时跳过）。
         if (resp.StatusCode == HttpStatusCode.ServiceUnavailable)
         {
             return;
         }
+        if (resp.StatusCode == HttpStatusCode.Found)
+        {
+            Assert.NotNull(resp.Headers.Location);
+            Assert.StartsWith("/admin", resp.Headers.Location!.OriginalString, StringComparison.Ordinal);
+            return;
+        }
+
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         Assert.StartsWith("text/html", resp.Content.Headers.ContentType?.MediaType ?? string.Empty);
         var body = await resp.Content.ReadAsStringAsync();
@@ -84,7 +92,7 @@ public sealed class AdminUiEndToEndTests : IAsyncLifetime
     {
         using var client = CreateClient();
         var resp = await client.GetAsync("/admin/this-does-not-exist.js");
-        if (!Hosting.AdminUiAssets.HasIndex)
+        if (!_hasPublishedAdminUi)
         {
             Assert.Equal(HttpStatusCode.ServiceUnavailable, resp.StatusCode);
             return;

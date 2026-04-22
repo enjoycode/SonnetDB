@@ -1,83 +1,177 @@
-﻿using Microsoft.AspNetCore.Builder;
+using System.Text.Encodings.Web;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 
 namespace SonnetDB.Hosting;
 
 /// <summary>
-/// 把嵌入式 Admin SPA 挂载到 <c>/admin/*</c> 路由。
+/// Configures the Admin SPA for development and published hosting modes.
 /// </summary>
 internal static class AdminUiEndpoints
 {
+    private const string DefaultSpaProxyServerUrl = "https://localhost:5173";
+
     /// <summary>
-    /// 注册 admin SPA 路由：<c>GET /admin</c>、<c>GET /admin/{**path}</c>。
+    /// Registers Admin SPA routes.
     /// </summary>
-    /// <remarks>
-    /// 行为：
-    /// <list type="bullet">
-    ///   <item>请求路径若命中嵌入资源（命中包括 <c>/admin/assets/index-xxx.js</c> 等），返回原字节 + Content-Type。</item>
-    ///   <item>未命中且 manifest 含 <c>index.html</c>，返回 <c>index.html</c>（SPA 客户端路由 fallback）。</item>
-    ///   <item>未命中且无 <c>index.html</c>，返回 503 + 提示先 <c>npm run build</c>。</item>
-    /// </list>
-    /// </remarks>
-    public static void MapAdminUi(this IEndpointRouteBuilder app)
+    /// <param name="app">The current web application.</param>
+    public static void MapAdminUi(this WebApplication app)
     {
-        // /admin 与 /admin/ 都重定向到 /admin/index.html 的内容（不真正 302，避免 SPA 路由抖动）。
-        app.MapMethods("/admin", ["GET"], (RequestDelegate)(ctx => ServeAsync(ctx, "")));
-        app.MapMethods("/admin/{**path}", ["GET"], (RequestDelegate)(ctx =>
+        if (app.Environment.IsDevelopment())
         {
-            var path = ctx.Request.RouteValues.TryGetValue("path", out var p) && p is string s ? s : string.Empty;
-            return ServeAsync(ctx, path);
-        }));
+            MapDevelopmentAdminUi(app);
+            return;
+        }
+
+        app.UseDefaultFiles(new DefaultFilesOptions
+        {
+            RequestPath = "/admin",
+        });
+        app.UseStaticFiles();
+
+        if (app.Environment.WebRootFileProvider.GetFileInfo("admin/index.html").Exists)
+        {
+            app.MapGet("/admin", static () => Results.Redirect("/admin/"));
+            app.MapFallbackToFile("/admin/{*path:nonfile}", "admin/index.html");
+            return;
+        }
+
+        app.MapMethods("/admin", ["GET"], static (HttpContext ctx) => WriteUnavailableAsync(ctx));
+        app.MapMethods("/admin/{**path}", ["GET"], static (HttpContext ctx) => WriteUnavailableAsync(ctx));
     }
 
-    private static async Task ServeAsync(HttpContext ctx, string relativePath)
+    private static void MapDevelopmentAdminUi(WebApplication app)
     {
-        // 规范化：去掉前后斜杠；空路径 → index.html
-        var path = string.IsNullOrEmpty(relativePath) ? "index.html" : relativePath.TrimStart('/');
+        var proxyServerUrl = GetSpaProxyServerUrl(app.Configuration);
 
-        if (AdminUiAssets.Assets.TryGetValue(path, out var asset))
+        app.MapMethods("/admin", ["GET"], (HttpContext ctx) => WriteLaunchPageAsync(ctx, proxyServerUrl, string.Empty));
+        app.MapMethods("/admin/{**path}", ["GET"], (HttpContext ctx) =>
         {
-            await WriteAsync(ctx, asset, StatusCodes.Status200OK).ConfigureAwait(false);
-            return;
-        }
-
-        // 没命中具体文件 → 尝试 SPA fallback（带扩展的不 fallback，避免 .js/.css 404 被吞）
-        if (!Path.HasExtension(path) && AdminUiAssets.Assets.TryGetValue("index.html", out var index))
-        {
-            await WriteAsync(ctx, index, StatusCodes.Status200OK).ConfigureAwait(false);
-            return;
-        }
-
-        if (!AdminUiAssets.HasIndex)
-        {
-            ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            ctx.Response.ContentType = "text/plain; charset=utf-8";
-            await ctx.Response.WriteAsync(
-                "SonnetDB Admin UI 尚未构建：请先在 web 目录执行 `npm install && npm run build`，再 `dotnet build src/SonnetDB`。"
-            ).ConfigureAwait(false);
-            return;
-        }
-
-        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            var path = ctx.Request.RouteValues.TryGetValue("path", out var routeValue) && routeValue is string text
+                ? text
+                : string.Empty;
+            return WriteLaunchPageAsync(ctx, proxyServerUrl, path);
+        });
     }
 
-    private static async Task WriteAsync(HttpContext ctx, AdminAsset asset, int status)
+    private static string GetSpaProxyServerUrl(IConfiguration configuration)
     {
-        ctx.Response.StatusCode = status;
-        ctx.Response.ContentType = asset.ContentType;
-        ctx.Response.ContentLength = asset.Bytes.Length;
-        // SPA 入口不缓存；hash 化的静态资产可缓存（Vite 默认 contenthash 命名）。
-        var path = ctx.Request.Path.Value ?? string.Empty;
-        if (path.EndsWith("/admin", StringComparison.Ordinal) || path.EndsWith("/admin/", StringComparison.Ordinal)
-            || path.EndsWith("/index.html", StringComparison.Ordinal))
+        var serverUrl = configuration["SpaProxyServer:ServerUrl"];
+        return string.IsNullOrWhiteSpace(serverUrl)
+            ? DefaultSpaProxyServerUrl
+            : serverUrl.TrimEnd('/');
+    }
+
+    private static async Task WriteLaunchPageAsync(HttpContext ctx, string proxyServerUrl, string relativePath)
+    {
+        if (!IsSpaEntryRequest(relativePath))
         {
-            ctx.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
         }
-        else
-        {
-            ctx.Response.Headers.CacheControl = "public, max-age=31536000, immutable";
+
+        var normalizedPath = string.IsNullOrWhiteSpace(relativePath)
+            || relativePath.Equals("index.html", StringComparison.OrdinalIgnoreCase)
+            ? string.Empty
+            : "/" + relativePath.Trim('/');
+        var targetUrl = $"{proxyServerUrl}/admin{normalizedPath}{ctx.Request.QueryString}";
+        var probeUrl = $"{proxyServerUrl}/admin/";
+        var htmlEncodedTargetUrl = HtmlEncoder.Default.Encode(targetUrl);
+        var jsEncodedTargetUrl = JavaScriptEncoder.Default.Encode(targetUrl);
+        var jsEncodedProbeUrl = JavaScriptEncoder.Default.Encode(probeUrl);
+
+        var html =
+$$"""
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SonnetDB Admin Dev Proxy</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, #f7fafc, #edf2f7);
+        font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+        color: #1a202c;
+      }
+      main {
+        width: min(640px, calc(100vw - 32px));
+        background: rgba(255, 255, 255, 0.92);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-radius: 20px;
+        padding: 32px;
+        box-shadow: 0 24px 60px rgba(15, 23, 42, 0.12);
+      }
+      h1 { margin: 0 0 12px; font-size: 28px; }
+      p { margin: 0 0 12px; line-height: 1.6; }
+      code {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #e2e8f0;
+        font-family: Consolas, "Cascadia Code", monospace;
+      }
+      a { color: #0f766e; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Connecting SonnetDB Admin to the Vite dev server</h1>
+      <p>The backend is running in SPA debug mode and will redirect to the frontend as soon as Vite is ready.</p>
+      <p>If this is the first run, execute <code>npm install</code> once in the <code>web</code> folder.</p>
+      <p>If the browser does not redirect automatically, open: <a href="{{htmlEncodedTargetUrl}}">{{htmlEncodedTargetUrl}}</a></p>
+    </main>
+    <script>
+      const targetUrl = "{{jsEncodedTargetUrl}}";
+      const probeUrl = "{{jsEncodedProbeUrl}}";
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      async function redirectWhenReady() {
+        for (;;) {
+          try {
+            await fetch(probeUrl, { cache: 'no-store', mode: 'no-cors' });
+            window.location.replace(targetUrl);
+            return;
+          } catch {
+            await sleep(1000);
+          }
         }
-        await ctx.Response.Body.WriteAsync(asset.Bytes).ConfigureAwait(false);
+      }
+
+      redirectWhenReady();
+    </script>
+  </body>
+</html>
+""";
+
+        ctx.Response.StatusCode = StatusCodes.Status200OK;
+        ctx.Response.ContentType = "text/html; charset=utf-8";
+        ctx.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+        await ctx.Response.WriteAsync(html).ConfigureAwait(false);
+    }
+
+    private static bool IsSpaEntryRequest(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return true;
+
+        var normalized = relativePath.Trim('/');
+        return normalized.Equals("index.html", StringComparison.OrdinalIgnoreCase)
+            || !Path.HasExtension(normalized);
+    }
+
+    private static async Task WriteUnavailableAsync(HttpContext ctx)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        ctx.Response.ContentType = "text/plain; charset=utf-8";
+        await ctx.Response.WriteAsync(
+            "SonnetDB Admin static files are missing. Run `npm install && npm run build` in `web`, or publish the server with `dotnet publish src/SonnetDB/SonnetDB.csproj`."
+        ).ConfigureAwait(false);
     }
 }

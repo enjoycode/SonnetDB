@@ -19,7 +19,7 @@ The current persistence model is directory-based. A database is stored as a set 
 | `src/SonnetDB.Data` | ADO.NET provider for both embedded and remote modes |
 | `src/SonnetDB.Cli` | `sndb` CLI: local/remote connections, profile management (`local`/`remote`/`connect`), and interactive REPL |
 | `src/SonnetDB` | HTTP server, first-run setup, auth/RBAC, SSE, admin UI, `/help` docs |
-| `web/admin` | Admin frontend |
+| `web` | Admin frontend (SPA dev proxy + published static assets) |
 | `docs` | JekyllNet documentation site source, bundled into the Docker image |
 
 ## Current Capabilities

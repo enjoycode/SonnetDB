@@ -5,20 +5,15 @@
 # Run:
 #   docker run -p 5080:5080 -e SONNETDB_SonnetDBServer__Tokens__mytoken=admin iotsharp/sonnetdb
 
-FROM node:24-bookworm-slim AS frontend-build
-WORKDIR /repo/web
-
-COPY web/package.json web/package-lock.json ./
-RUN npm ci --no-audit --no-fund
-
-COPY web/index.html web/env.d.ts web/tsconfig.json web/tsconfig.node.json web/vite.config.ts ./
-COPY web/public ./public
-COPY web/src ./src
-
-RUN npm run build
+FROM node:24-bookworm-slim AS node-tooling
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /repo
+
+COPY --from=node-tooling /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-tooling /usr/local/bin/npm /usr/local/bin/npm
+COPY --from=node-tooling /usr/local/bin/npx /usr/local/bin/npx
+COPY --from=node-tooling /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 # Copy build config and .csproj files first to maximize Docker layer cache for restore.
 COPY Directory.Build.props Directory.Packages.props global.json ./
@@ -33,7 +28,7 @@ RUN dotnet tool restore
 COPY src/SonnetDB/ src/SonnetDB/
 COPY src/SonnetDB.Core/ src/SonnetDB.Core/
 COPY docs/ docs/
-COPY --from=frontend-build /repo/web/dist web/dist
+COPY web/ web/
 
 RUN rm -rf src/SonnetDB/wwwroot/help \
     && dotnet tool run jekyllnet build --source docs --destination src/SonnetDB/wwwroot/help
