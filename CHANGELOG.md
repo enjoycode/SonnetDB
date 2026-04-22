@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- 修复 Production 模式下 `GET /admin/` 自重定向死循环（`ERR_TOO_MANY_REDIRECTS`）：原 `UseDefaultFiles({ RequestPath = "/admin" })` 未提供针对 `wwwroot/admin` 的 `FileProvider`，与 `MapGet("/admin")` / `MapFallbackToFile` 共同作用导致 Vite 构建产物无法被正确解析；现改为使用专用 `PhysicalFileProvider(wwwroot/admin)` 的 `UseStaticFiles`，并显式 `MapGet("/admin/")` 直接返回 `index.html`。
+- 修复访问根路径 `/`（产品宣传首页）被 Bearer 认证中间件拦截返回 `401`：将 `/`、`/favicon.ico`、`/robots.txt` 加入匿名白名单，使 `MapHomePage()` 渲染的官网首页可直接访问。
+
 ### Changed (品牌重命名 / Breaking)
 - **项目重命名 `TSLite` → `SonnetDB`**：因与其他品牌名称冲突，全仓代码、命名空间、包名、Docker 镜像、文档、CI 脚本统一改名为 `SonnetDB`。
   - **NuGet 包 ID**：

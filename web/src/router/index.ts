@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
+import WelcomeView from '@/views/WelcomeView.vue';
 import SetupView from '@/views/SetupView.vue';
 import LoginView from '@/views/LoginView.vue';
 import AppShell from '@/views/AppShell.vue';
@@ -14,16 +15,24 @@ import { useAuthStore } from '@/stores/auth';
 import { useSetupStore } from '@/stores/setup';
 
 const router = createRouter({
-  history: createWebHistory('/admin/'),
+  history: createWebHistory('/'),
   routes: [
-    { path: '/', redirect: '/app/dashboard' },
-    { path: '/setup', name: 'setup', component: SetupView, meta: { anon: true } },
-    { path: '/login', name: 'login', component: LoginView, meta: { anon: true } },
+    // 产品官网首页（匿名可访问，单 SPA 单 base）
+    { path: '/', name: 'home', component: WelcomeView, meta: { anon: true, marketing: true } },
+
+    // /admin 入口：调转到 dashboard，交由守卫根据 setup/auth 状态选路
+    { path: '/admin', redirect: { name: 'dashboard' } },
+
+    // 首次安装 / 登录页面（匿名，但纳入 /admin 命名空间）
+    { path: '/admin/setup', name: 'setup', component: SetupView, meta: { anon: true } },
+    { path: '/admin/login', name: 'login', component: LoginView, meta: { anon: true } },
+
+    // 管理后台主壳
     {
-      path: '/app',
+      path: '/admin/app',
       component: AppShell,
       meta: { app: true },
-      redirect: '/app/dashboard',
+      redirect: { name: 'dashboard' },
       children: [
         { path: 'dashboard', name: 'dashboard', component: DashboardView },
         { path: 'sql', name: 'sql', component: SqlConsoleView },
@@ -41,6 +50,11 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const auth = useAuthStore();
   const setup = useSetupStore();
+
+  // 产品首页是完全公开页面，不依赖 setup/auth 状态
+  if (to.meta.marketing) {
+    return true;
+  }
 
   try {
     await setup.ensureLoaded();

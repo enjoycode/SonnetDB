@@ -34,7 +34,7 @@ public sealed class AdminUiEndToEndTests : IAsyncLifetime
         await _app.StartAsync();
         _baseUrl = _app.Services.GetRequiredService<IServer>()
             .Features.Get<IServerAddressesFeature>()!.Addresses.First();
-        _hasPublishedAdminUi = _app.Environment.WebRootFileProvider.GetFileInfo("admin/index.html").Exists;
+        _hasPublishedAdminUi = _app.Environment.WebRootFileProvider.GetFileInfo("index.html").Exists;
     }
 
     public async Task DisposeAsync()
@@ -61,13 +61,19 @@ public sealed class AdminUiEndToEndTests : IAsyncLifetime
         {
             return;
         }
-        if (resp.StatusCode == HttpStatusCode.Found)
-        {
-            Assert.NotNull(resp.Headers.Location);
-            Assert.StartsWith("/admin", resp.Headers.Location!.OriginalString, StringComparison.Ordinal);
-            return;
-        }
+        // /admin 作为 SPA 路由入口，应被 fallback 到 index.html。
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        Assert.StartsWith("text/html", resp.Content.Headers.ContentType?.MediaType ?? string.Empty);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("<div id=\"app\">", body);
+    }
 
+    [Fact]
+    public async Task GetRoot_AnonymouslyReturnsSpaHtml()
+    {
+        using var client = CreateClient();
+        var resp = await client.GetAsync("/");
+        if (resp.StatusCode == HttpStatusCode.ServiceUnavailable) return;
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         Assert.StartsWith("text/html", resp.Content.Headers.ContentType?.MediaType ?? string.Empty);
         var body = await resp.Content.ReadAsStringAsync();
@@ -94,9 +100,11 @@ public sealed class AdminUiEndToEndTests : IAsyncLifetime
         var resp = await client.GetAsync("/admin/this-does-not-exist.js");
         if (!_hasPublishedAdminUi)
         {
-            Assert.Equal(HttpStatusCode.ServiceUnavailable, resp.StatusCode);
+            // 未发布时所有 GET 都被占位 503 / 未注册路由返回 404。
+            Assert.True(resp.StatusCode is HttpStatusCode.ServiceUnavailable or HttpStatusCode.NotFound);
             return;
         }
+        // 发布后：带扩展名的不存在资源不会被 SPA fallback接管，返回 404。
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
 
@@ -104,17 +112,18 @@ public sealed class AdminUiEndToEndTests : IAsyncLifetime
     public async Task GetAdmin_DoesNotRequireBearerToken()
     {
         using var client = CreateClient();
-        // 不带 Authorization
-        var resp = await client.GetAsync("/admin/index.html");
+        // 不带 Authorization；SPA 入口路由应返回 index.html
+        var resp = await client.GetAsync("/admin/login");
         if (resp.StatusCode == HttpStatusCode.ServiceUnavailable) return;
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        Assert.StartsWith("text/html", resp.Content.Headers.ContentType?.MediaType ?? string.Empty);
     }
 
     [Fact]
     public async Task GetAdminFavicon_ReturnsSvg()
     {
         using var client = CreateClient();
-        var resp = await client.GetAsync("/admin/favicon.svg");
+        var resp = await client.GetAsync("/favicon.svg");
         if (resp.StatusCode == HttpStatusCode.ServiceUnavailable) return;
         if (resp.StatusCode == HttpStatusCode.NotFound) return; // favicon 可选
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);

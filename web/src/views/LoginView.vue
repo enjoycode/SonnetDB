@@ -72,7 +72,7 @@ async function onSubmit(): Promise<void> {
   error.value = null;
   try {
     await auth.login(username.value, password.value);
-    const redirect = (route.query.redirect as string | undefined) ?? '/app/dashboard';
+    const redirect = (route.query.redirect as string | undefined) ?? '/admin/app/dashboard';
     await router.replace(redirect);
   } catch (cause: unknown) {
     error.value = (cause as { response?: { data?: { message?: string } } })?.response?.data?.message

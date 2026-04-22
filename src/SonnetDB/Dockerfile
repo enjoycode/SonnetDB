@@ -10,10 +10,16 @@ FROM node:24-bookworm-slim AS node-tooling
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /repo
 
-COPY --from=node-tooling /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-tooling /usr/local/bin/npm /usr/local/bin/npm
-COPY --from=node-tooling /usr/local/bin/npx /usr/local/bin/npx
-COPY --from=node-tooling /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node-tooling /usr/local/bin/ /usr/local/bin/
+COPY --from=node-tooling /usr/local/lib/node_modules/ /usr/local/lib/node_modules/
+
+# Keep npm/npx as symlinks to the npm package entrypoints.
+# Copying single files from another stage can dereference symlinks and break relative requires.
+RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+# Fail fast if Node/NPM wiring is broken in this stage.
+RUN node -v && npm -v
 
 # Copy build config and .csproj files first to maximize Docker layer cache for restore.
 COPY Directory.Build.props Directory.Packages.props global.json ./

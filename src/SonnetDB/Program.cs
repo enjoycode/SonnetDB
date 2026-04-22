@@ -188,11 +188,8 @@ public static class Program
         var metrics = app.Services.GetRequiredService<ServerMetrics>();
         var installation = app.Services.GetRequiredService<InstallationStore>();
 
-        // ---- 产品官网首页（根路径 /）----
-        app.MapHomePage();
-
-        // ---- Admin SPA（开发期走 SpaProxy，发布期走静态文件；匿名可读，管理动作仍走 SQL/API）----
-        app.MapAdminUi();
+        // ---- Vue SPA：根 / 承载产品官网，/admin/* 承载管理后台 ----
+        app.MapSpa();
         app.MapHelpDocs(serverOptions);
 
         // ---- 健康 / 指标 ----

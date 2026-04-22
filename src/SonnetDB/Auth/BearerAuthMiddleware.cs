@@ -50,8 +50,14 @@ public static class BearerAuthMiddleware
             return null;
         }
 
-        // Admin SPA 静态资源匿名可读，真正的管理动作仍通过登录后的 API 执行。
-        if (path.StartsWith("/admin", StringComparison.Ordinal))
+        // SPA / 静态资源：所有不命中数据/控制平面的 GET / HEAD 请求都视为 SPA 页面或静态文件，
+        // 由前端在拿到 HTML 后再通过受保护的 /v1/** API 发起真正的鉴权请求。
+        // 这覆盖了根路径、/admin/*、/assets/*、/favicon.ico 等所有 SPA 入口。
+        if ((HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method))
+            && !path.StartsWith("/v1/", StringComparison.Ordinal)
+            && !path.Equals("/v1", StringComparison.Ordinal)
+            && !path.StartsWith("/mcp/", StringComparison.Ordinal)
+            && !path.Equals("/mcp", StringComparison.Ordinal))
         {
             return null;
         }

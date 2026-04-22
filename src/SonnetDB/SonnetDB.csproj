@@ -59,8 +59,8 @@
 
   <ItemGroup Condition="Exists('$(AdminUiDistDir)')">
     <Content Include="$(AdminUiDistDir)\**\*.*">
-      <Link>wwwroot\admin\%(RecursiveDir)%(Filename)%(Extension)</Link>
-      <TargetPath>wwwroot\admin\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+      <Link>wwwroot\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <TargetPath>wwwroot\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </Content>
@@ -73,7 +73,7 @@
     <ItemGroup>
       <DistFiles Include="$(AdminUiDistDir)\**\*.*" />
       <ResolvedFileToPublish Include="@(DistFiles->'%(FullPath)')" Exclude="@(ResolvedFileToPublish)">
-        <RelativePath>wwwroot\admin\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <RelativePath>wwwroot\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
       </ResolvedFileToPublish>

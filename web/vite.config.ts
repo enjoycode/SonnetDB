@@ -39,7 +39,7 @@ const target =
       : 'https://localhost:60844';
 
 export default defineConfig({
-  base: '/admin/',
+  base: '/',
   plugins: [vue()],
   resolve: {
     alias: {
