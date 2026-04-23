@@ -1,5 +1,5 @@
 <template>
-  <n-card title="SNDBCopilot 设置" :bordered="false">
+  <n-card title="Copilot 设置" :bordered="false">
     <n-space vertical :size="20">
 
       <!-- 获取 API Key + 加群 -->
@@ -14,7 +14,7 @@
           <n-space vertical :size="8" style="padding-top: 4px">
             <n-text strong style="font-size: 15px">扫码加入用户群</n-text>
             <n-text depth="3">
-              进群即可免费领取 <strong>API Key</strong>，并获取 SNDBCopilot 新功能通知、
+              进群即可免费领取 <strong>API Key</strong>，并获取 Copilot 新功能通知、
               使用技巧和官方支持。
             </n-text>
             <n-text depth="3" style="font-size: 12px">
@@ -39,7 +39,7 @@
         <n-form-item label="启用 Copilot">
           <n-switch v-model:value="form.enabled" />
           <n-text depth="3" style="margin-left: 12px; font-size: 12px">
-            开启后 SQL Console 将显示 SNDBCopilot 面板
+            开启后 SQL Console 将显示 Copilot 面板
           </n-text>
         </n-form-item>
 
@@ -121,6 +121,46 @@
         <strong>{{ form.provider === 'domestic' ? '国内版 (ai.sonnetdb.com)' : '国际版 (sonnet.vip)' }}</strong>
       </n-text>
 
+      <n-divider style="margin: 0" />
+
+      <!-- 知识库（M4） -->
+      <n-card size="small" embedded :bordered="false" title="本地知识库">
+        <template #header-extra>
+          <n-space size="small">
+            <n-button size="small" quaternary :loading="kbLoading" @click="loadKbStatus">刷新</n-button>
+            <n-button
+              size="small"
+              type="primary"
+              :loading="kbReindexing"
+              :disabled="!kbStatus?.enabled"
+              @click="reindexKb"
+            >立即重建索引</n-button>
+          </n-space>
+        </template>
+        <n-space vertical :size="6" v-if="kbStatus">
+          <n-space :size="8" align="center">
+            <n-tag size="small" :type="kbStatus.enabled ? 'success' : 'default'">
+              {{ kbStatus.enabled ? '已启用' : '未启用' }}
+            </n-tag>
+            <n-tag size="small" :type="kbStatus.embeddingFallback ? 'warning' : 'info'">
+              Embedding：{{ kbStatus.embeddingProvider }}{{ kbStatus.embeddingFallback ? ' (降级)' : '' }} · {{ kbStatus.vectorDimension }}D
+            </n-tag>
+          </n-space>
+          <n-text depth="3" style="font-size: 12px">
+            已索引文档 <strong>{{ kbStatus.indexedFiles }}</strong> 篇 ·
+            分块 <strong>{{ kbStatus.indexedChunks }}</strong> 段 ·
+            技能 <strong>{{ kbStatus.skillCount }}</strong> 条 ·
+            最近摄入：<strong>{{ kbStatus.lastIngestedUtc ? formatTime(kbStatus.lastIngestedUtc) : '从未' }}</strong>
+          </n-text>
+          <n-text depth="3" style="font-size: 11px">
+            根目录：{{ kbStatus.docsRoots.join(' / ') || '(默认)' }}
+          </n-text>
+        </n-space>
+        <n-text v-else depth="3" style="font-size: 12px">
+          {{ kbLoading ? '加载中…' : (kbErr || '点击「刷新」查看知识库状态') }}
+        </n-text>
+      </n-card>
+
     </n-space>
   </n-card>
 </template>
@@ -129,12 +169,59 @@
 import { onMounted, ref } from 'vue';
 import {
   NAlert, NButton, NCard, NDivider, NForm, NFormItem, NInput, NInputNumber,
-  NRadio, NRadioGroup, NSpace, NSwitch, NTag, NText,
+  NRadio, NRadioGroup, NSpace, NSwitch, NTag, NText, useMessage,
 } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
 import { fetchAiConfig, saveAiConfig, streamAiChat } from '@/api/ai';
+import {
+  fetchCopilotKnowledgeStatus,
+  triggerCopilotDocsIngest,
+  type CopilotKnowledgeStatus,
+} from '@/api/copilot';
 
 const auth = useAuthStore();
+const message = useMessage();
+
+// 知识库（M4）
+const kbStatus = ref<CopilotKnowledgeStatus | null>(null);
+const kbLoading = ref(false);
+const kbReindexing = ref(false);
+const kbErr = ref('');
+
+async function loadKbStatus(): Promise<void> {
+  if (!auth.state?.token) return;
+  kbLoading.value = true;
+  kbErr.value = '';
+  try {
+    kbStatus.value = await fetchCopilotKnowledgeStatus(auth.state.token);
+  } catch (e: unknown) {
+    kbErr.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    kbLoading.value = false;
+  }
+}
+
+async function reindexKb(): Promise<void> {
+  if (!auth.state?.token) return;
+  kbReindexing.value = true;
+  try {
+    await triggerCopilotDocsIngest(auth.state.token, true);
+    message.success('已触发知识库重建，请稍候点击「刷新」查看结果');
+    setTimeout(() => { void loadKbStatus(); }, 800);
+  } catch (e: unknown) {
+    message.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    kbReindexing.value = false;
+  }
+}
+
+function formatTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
 
 // public/ 下的二维码资源（缺省提供 SVG 占位，运维可替换为真实 PNG）。
 // 优先尝试 PNG，失败时回退到 SVG 占位，避免出现 broken image。
@@ -226,5 +313,8 @@ async function testConnection(): Promise<void> {
   }
 }
 
-onMounted(load);
+onMounted(() => {
+  void load();
+  void loadKbStatus();
+});
 </script>

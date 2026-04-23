@@ -45,6 +45,7 @@
         <router-view />
       </n-layout-content>
     </n-layout>
+    <CopilotDock v-if="auth.isAuthenticated" />
   </n-layout>
 </template>
 
@@ -63,6 +64,7 @@ import {
   type MenuOption,
 } from 'naive-ui';
 import BrandLogo from '@/components/BrandLogo.vue';
+import CopilotDock from '@/components/CopilotDock.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useEventsStore } from '@/stores/events';
 import { useSetupStore } from '@/stores/setup';
@@ -85,7 +87,7 @@ const adminMenu: MenuOption[] = [
   { label: '用户', key: 'users' },
   { label: '权限', key: 'grants' },
   { label: 'Token', key: 'tokens' },
-  { label: 'SNDBCopilot', key: 'ai-settings' },
+  { label: 'Copilot', key: 'ai-settings' },
 ];
 
 const menuOptions = computed<MenuOption[]>(() => (
@@ -101,7 +103,7 @@ const titleByKey: Record<string, string> = {
   users: '用户',
   grants: '权限',
   tokens: 'Token',
-  'ai-settings': 'SNDBCopilot',
+  'ai-settings': 'Copilot',
 };
 
 const activeKey = computed(() => (route.name as string | undefined) ?? 'dashboard');

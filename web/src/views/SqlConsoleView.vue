@@ -51,7 +51,7 @@
     <!-- AI 助手面板（仅 AI 启用时显示） -->
     <n-card v-if="aiEnabled" :bordered="false" size="small">
       <template #header>
-        <span>SNDBCopilot
+        <span>Copilot
           <n-tag size="tiny" type="info" style="margin-left: 8px; vertical-align: middle">
             {{ aiStatus?.provider }} / {{ aiStatus?.model }}
           </n-tag>

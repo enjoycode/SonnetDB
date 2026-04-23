@@ -3,6 +3,47 @@ export interface CopilotMessage {
   content: string;
 }
 
+export interface CopilotKnowledgeStatus {
+  enabled: boolean;
+  embeddingProvider: string;
+  embeddingFallback: boolean;
+  vectorDimension: number;
+  docsRoots: string[];
+  indexedFiles: number;
+  indexedChunks: number;
+  lastIngestedUtc: string | null;
+  skillCount: number;
+}
+
+/** 读取知识库状态（embedding provider / 已索引文件数 / 最近摄入时间 等）。 */
+export async function fetchCopilotKnowledgeStatus(token: string): Promise<CopilotKnowledgeStatus> {
+  const resp = await fetch('/v1/copilot/knowledge/status', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`知识库状态读取失败 ${resp.status}: ${text}`);
+  }
+  return (await resp.json()) as CopilotKnowledgeStatus;
+}
+
+/** 触发知识库重新索引（force=true 时忽略增量指纹强制全量摄入）。 */
+export async function triggerCopilotDocsIngest(token: string, force = false): Promise<void> {
+  const resp = await fetch('/v1/copilot/docs/ingest', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ force, dryRun: false }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`触发知识库索引失败 ${resp.status}: ${text}`);
+  }
+}
+
+
 export interface CopilotCitation {
   id: string;
   kind: string;

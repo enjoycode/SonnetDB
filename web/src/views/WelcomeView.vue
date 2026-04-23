@@ -248,7 +248,7 @@ const capabilityCards = [
   },
   {
     index: '10',
-    title: 'SNDBCopilot',
+    title: 'Copilot',
     description: '通过自然语言帮助客户完成数据查询、结果解释、问题定位和知识检索，显著降低使用门槛。',
   },
 ];
