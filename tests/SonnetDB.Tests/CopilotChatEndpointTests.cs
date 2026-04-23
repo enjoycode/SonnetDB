@@ -331,6 +331,72 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
         Assert.DoesNotContain("请结合返回的结构化结果继续确认或缩小问题范围", final.Answer ?? string.Empty, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task CopilotChat_WhenPlannerFallsBackForCurrentDatabaseOverview_UsesShowMeasurements()
+    {
+        _chatProvider!.Reset();
+        _chatProvider.PlannerHandler = static _ => "planner unavailable";
+        _chatProvider.AnswerHandler = static _ => throw new InvalidOperationException("answer unavailable");
+
+        using var client = await CreateReaderClientAsync("reader_db_overview");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
+        {
+            Content = JsonContent.Create(
+                new CopilotChatRequest(
+                    DatabaseName,
+                    Messages:
+                    [
+                        new AiMessage("user", "查一查 当前这个数据库里有什么"),
+                    ]),
+                ServerJsonContext.Default.CopilotChatRequest),
+        };
+
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var events = await ReadNdjsonEventsAsync(response);
+
+        var toolCall = Assert.Single(events, static e => e.Type == "tool_call");
+        Assert.Equal("query_sql", toolCall.ToolName);
+        Assert.Contains("SHOW MEASUREMENTS", toolCall.ToolArguments ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        var final = Assert.Single(events, static e => e.Type == "final");
+        Assert.Contains("SHOW MEASUREMENTS", final.Answer ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cpu", final.Answer ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("我已经执行了这些工具", final.Answer ?? string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("请结合返回的结构化结果继续确认或缩小问题范围", final.Answer ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CopilotChat_WhenOnlyListMeasurementsIsAvailable_StillSummarizesMeasurements()
+    {
+        _chatProvider!.Reset();
+        _chatProvider.PlannerHandler = static _ => """{"tools":[{"name":"list_measurements"}]}""";
+        _chatProvider.AnswerHandler = static _ => throw new InvalidOperationException("answer unavailable");
+
+        using var client = await CreateReaderClientAsync("reader_list_measurements_fallback");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
+        {
+            Content = JsonContent.Create(
+                new CopilotChatRequest(
+                    DatabaseName,
+                    Messages:
+                    [
+                        new AiMessage("user", "看看这个库里有什么"),
+                    ]),
+                ServerJsonContext.Default.CopilotChatRequest),
+        };
+
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var events = await ReadNdjsonEventsAsync(response);
+
+        var final = Assert.Single(events, static e => e.Type == "final");
+        Assert.Contains("measurement", final.Answer ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cpu", final.Answer ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("我已经执行了这些工具", final.Answer ?? string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("请结合返回的结构化结果继续确认或缩小问题范围", final.Answer ?? string.Empty, StringComparison.Ordinal);
+    }
+
     private async Task<HttpClient> CreateReaderClientAsync(string userName)
     {
         using var admin = CreateClient(AdminToken);

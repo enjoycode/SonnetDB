@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -423,6 +424,28 @@ internal sealed class CopilotAgent
             return tools;
         }
 
+        if (LooksLikeDatabaseOverviewIntent(lowered))
+        {
+            tools.Add(new CopilotToolInvocation(
+                "query_sql",
+                SonnetDbMcpResults.DefaultToolRowLimit,
+                null,
+                null,
+                "SHOW MEASUREMENTS"));
+            return tools;
+        }
+
+        if (LooksLikeMeasurementSchemaIntent(lowered) && measurement is not null)
+        {
+            tools.Add(new CopilotToolInvocation(
+                "query_sql",
+                SonnetDbMcpResults.DefaultToolRowLimit,
+                null,
+                null,
+                $"DESCRIBE MEASUREMENT {measurement}"));
+            return tools;
+        }
+
         if ((lowered.Contains("字段", StringComparison.Ordinal)
                 || lowered.Contains("列", StringComparison.Ordinal)
                 || lowered.Contains("schema", StringComparison.Ordinal)
@@ -482,6 +505,48 @@ internal sealed class CopilotAgent
             ? tools
             : [new CopilotToolInvocation("list_measurements", SonnetDbMcpResults.DefaultToolRowLimit, null, null, null)];
     }
+
+    private static bool LooksLikeDatabaseOverviewIntent(string lowered)
+    {
+        var refersCurrentDatabase = lowered.Contains("当前这个数据库", StringComparison.Ordinal)
+            || lowered.Contains("当前数据库", StringComparison.Ordinal)
+            || lowered.Contains("这个数据库", StringComparison.Ordinal)
+            || lowered.Contains("当前这个库", StringComparison.Ordinal)
+            || lowered.Contains("当前库", StringComparison.Ordinal)
+            || lowered.Contains("这个库", StringComparison.Ordinal)
+            || lowered.Contains("库里", StringComparison.Ordinal)
+            || lowered.Contains("数据库里", StringComparison.Ordinal);
+        var asksOverview = lowered.Contains("有什么", StringComparison.Ordinal)
+            || lowered.Contains("有哪些", StringComparison.Ordinal)
+            || lowered.Contains("里面有什么", StringComparison.Ordinal)
+            || lowered.Contains("里有什么", StringComparison.Ordinal)
+            || lowered.Contains("看一下", StringComparison.Ordinal)
+            || lowered.Contains("看一看", StringComparison.Ordinal)
+            || lowered.Contains("查一下", StringComparison.Ordinal)
+            || lowered.Contains("查一查", StringComparison.Ordinal)
+            || lowered.Contains("看看", StringComparison.Ordinal)
+            || lowered.Contains("概览", StringComparison.Ordinal);
+        var asksSchema = lowered.Contains("measurement", StringComparison.Ordinal)
+            || lowered.Contains("schema", StringComparison.Ordinal)
+            || lowered.Contains("结构", StringComparison.Ordinal)
+            || lowered.Contains("表", StringComparison.Ordinal)
+            || lowered.Contains("字段", StringComparison.Ordinal)
+            || lowered.Contains("列", StringComparison.Ordinal);
+
+        return (refersCurrentDatabase && asksOverview)
+            || (refersCurrentDatabase && asksSchema)
+            || lowered.Contains("当前这个数据库里有什么", StringComparison.Ordinal)
+            || lowered.Contains("当前数据库里有什么", StringComparison.Ordinal)
+            || lowered.Contains("这个库里有什么", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeMeasurementSchemaIntent(string lowered)
+        => lowered.Contains("字段", StringComparison.Ordinal)
+            || lowered.Contains("列", StringComparison.Ordinal)
+            || lowered.Contains("schema", StringComparison.Ordinal)
+            || lowered.Contains("结构", StringComparison.Ordinal)
+            || lowered.Contains("tag", StringComparison.Ordinal)
+            || lowered.Contains("field", StringComparison.Ordinal);
 
     private static IReadOnlyList<CopilotToolInvocation> EnsureWriteDraftPlan(
         IReadOnlyList<CopilotToolInvocation> plan,
@@ -1177,10 +1242,81 @@ internal sealed class CopilotAgent
             }
         }
 
+        foreach (var observation in observations)
+        {
+            if (string.Equals(observation.Name, "query_sql", StringComparison.OrdinalIgnoreCase)
+                && TryDeserializeToolResult(observation.ResultJson, ServerJsonContext.Default.McpSqlQueryResult) is { } queryResult
+                && TryBuildQuerySqlFallbackAnswer(queryResult, observation.ArgumentsJson, observation.Citation.Id, out answer))
+            {
+                return true;
+            }
+
+            if (string.Equals(observation.Name, "list_measurements", StringComparison.OrdinalIgnoreCase)
+                && TryDeserializeToolResult(observation.ResultJson, ServerJsonContext.Default.McpMeasurementListResult) is { } measurementList)
+            {
+                answer = BuildMeasurementListFallbackAnswer(
+                    measurementList.Database,
+                    measurementList.Measurements,
+                    measurementList.Truncated,
+                    observation.Citation.Id,
+                    fromSql: false);
+                return true;
+            }
+
+            if (string.Equals(observation.Name, "describe_measurement", StringComparison.OrdinalIgnoreCase)
+                && TryDeserializeToolResult(observation.ResultJson, ServerJsonContext.Default.McpMeasurementSchemaResult) is { } schema)
+            {
+                answer = BuildMeasurementSchemaFallbackAnswer(
+                    schema.Database,
+                    schema.Measurement,
+                    schema.Columns,
+                    observation.Citation.Id,
+                    fromSql: false);
+                return true;
+            }
+        }
+
         var createSql = TryBuildCreateMeasurementSql(conversation.LatestUserMessage);
         if (createSql is not null)
         {
             answer = BuildInferredCreateSqlFallbackAnswer(createSql);
+            return true;
+        }
+
+        answer = string.Empty;
+        return false;
+    }
+
+    private static bool TryBuildQuerySqlFallbackAnswer(
+        McpSqlQueryResult queryResult,
+        string argumentsJson,
+        string citationId,
+        out string answer)
+    {
+        if (string.Equals(queryResult.StatementType, "show_measurements", StringComparison.OrdinalIgnoreCase))
+        {
+            answer = BuildMeasurementListFallbackAnswer(
+                queryResult.Database,
+                ExtractMeasurementNames(queryResult),
+                queryResult.Truncated,
+                citationId,
+                fromSql: true);
+            return true;
+        }
+
+        if (string.Equals(queryResult.StatementType, "describe_measurement", StringComparison.OrdinalIgnoreCase)
+            && TryExtractMeasurementSchema(
+                queryResult,
+                TryExtractMeasurementFromToolArguments(argumentsJson),
+                out var measurement,
+                out var columns))
+        {
+            answer = BuildMeasurementSchemaFallbackAnswer(
+                queryResult.Database,
+                measurement,
+                columns,
+                citationId,
+                fromSql: true);
             return true;
         }
 
@@ -1214,6 +1350,66 @@ internal sealed class CopilotAgent
         });
         AppendSqlBlock(builder, draft.Sql);
         AppendNotes(builder, draft.Notes);
+        AppendCitation(builder, citationId);
+        return builder.ToString().Trim();
+    }
+
+    private static string BuildMeasurementListFallbackAnswer(
+        string database,
+        IReadOnlyList<string> measurements,
+        bool truncated,
+        string citationId,
+        bool fromSql)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(fromSql
+            ? $"我已经对当前数据库 `{database}` 执行了 `SHOW MEASUREMENTS`。"
+            : $"我已经查看了当前数据库 `{database}` 的 measurement 列表。");
+
+        if (measurements.Count == 0)
+        {
+            builder.AppendLine("当前库里还没有任何 measurement。");
+            AppendCitation(builder, citationId);
+            return builder.ToString().Trim();
+        }
+
+        builder.AppendLine($"当前库里有 {measurements.Count}{(truncated ? "+" : string.Empty)} 个 measurement：");
+        foreach (var measurement in measurements)
+        {
+            if (!string.IsNullOrWhiteSpace(measurement))
+                builder.AppendLine($"- {measurement}");
+        }
+
+        builder.AppendLine("如果你愿意，我可以继续按其中某个 measurement 执行 `DESCRIBE MEASUREMENT <name>` 看字段结构。");
+        AppendCitation(builder, citationId);
+        return builder.ToString().Trim();
+    }
+
+    private static string BuildMeasurementSchemaFallbackAnswer(
+        string database,
+        string measurement,
+        IReadOnlyList<McpMeasurementColumnResult> columns,
+        string citationId,
+        bool fromSql)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(fromSql
+            ? $"我已经对数据库 `{database}` 执行了 `DESCRIBE MEASUREMENT {measurement}`。"
+            : $"我已经查看了数据库 `{database}` 中 measurement `{measurement}` 的结构。");
+
+        if (columns.Count == 0)
+        {
+            builder.AppendLine("当前没有读取到任何列定义。");
+            AppendCitation(builder, citationId);
+            return builder.ToString().Trim();
+        }
+
+        builder.AppendLine($"`{measurement}` 目前包含 {columns.Count} 列：");
+        foreach (var column in columns)
+        {
+            builder.AppendLine($"- {column.Name}：{column.ColumnType} / {column.DataType}");
+        }
+
         AppendCitation(builder, citationId);
         return builder.ToString().Trim();
     }
@@ -1266,6 +1462,109 @@ internal sealed class CopilotAgent
     {
         if (!string.IsNullOrWhiteSpace(citationId))
             builder.Append('[').Append(citationId).Append(']');
+    }
+
+    private static IReadOnlyList<string> ExtractMeasurementNames(McpSqlQueryResult queryResult)
+    {
+        var names = new List<string>(queryResult.Rows.Count);
+        foreach (var row in queryResult.Rows)
+        {
+            var name = TryReadCellText(row, 0);
+            if (!string.IsNullOrWhiteSpace(name))
+                names.Add(name);
+        }
+
+        return names;
+    }
+
+    private static bool TryExtractMeasurementSchema(
+        McpSqlQueryResult queryResult,
+        string? measurementHint,
+        out string measurement,
+        out IReadOnlyList<McpMeasurementColumnResult> columns)
+    {
+        measurement = measurementHint ?? "目标 measurement";
+        columns = [];
+
+        var nameIndex = FindColumnIndex(queryResult.Columns, "column_name");
+        var typeIndex = FindColumnIndex(queryResult.Columns, "column_type");
+        var dataTypeIndex = FindColumnIndex(queryResult.Columns, "data_type");
+        if (nameIndex < 0 || typeIndex < 0 || dataTypeIndex < 0)
+            return false;
+
+        var parsed = new List<McpMeasurementColumnResult>(queryResult.Rows.Count);
+        foreach (var row in queryResult.Rows)
+        {
+            var name = TryReadCellText(row, nameIndex);
+            var columnType = TryReadCellText(row, typeIndex);
+            var dataType = TryReadCellText(row, dataTypeIndex);
+            if (string.IsNullOrWhiteSpace(name)
+                || string.IsNullOrWhiteSpace(columnType)
+                || string.IsNullOrWhiteSpace(dataType))
+            {
+                continue;
+            }
+
+            parsed.Add(new McpMeasurementColumnResult(name, columnType, dataType));
+        }
+
+        if (parsed.Count == 0)
+            return false;
+
+        columns = parsed;
+        return true;
+    }
+
+    private static string? TryExtractMeasurementFromToolArguments(string argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(argumentsJson);
+            if (!document.RootElement.TryGetProperty("sql", out var sqlElement))
+                return null;
+            if (sqlElement.ValueKind != JsonValueKind.String)
+                return null;
+
+            var sql = sqlElement.GetString();
+            if (string.IsNullOrWhiteSpace(sql))
+                return null;
+
+            var statement = SqlParser.Parse(sql);
+            return statement is DescribeMeasurementStatement describe ? describe.Name : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static int FindColumnIndex(IReadOnlyList<string> columns, string name)
+    {
+        for (var i = 0; i < columns.Count; i++)
+        {
+            if (string.Equals(columns[i], name, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static string? TryReadCellText(IReadOnlyList<JsonElementValue> row, int index)
+    {
+        if (index < 0 || index >= row.Count)
+            return null;
+
+        return row[index].Kind switch
+        {
+            ScalarKind.String => row[index].StringValue,
+            ScalarKind.Integer => row[index].IntegerValue?.ToString(CultureInfo.InvariantCulture),
+            ScalarKind.Double => row[index].DoubleValue?.ToString(CultureInfo.InvariantCulture),
+            ScalarKind.Boolean => row[index].BooleanValue is true ? "true" : "false",
+            _ => null,
+        };
     }
 
     private static List<CopilotCitation> BuildRetrievalCitations(
@@ -1857,7 +2156,8 @@ internal sealed class CopilotAgent
         规则：
         - 只能输出 JSON，不要附加解释、Markdown 或代码块。
         - 如果已有上下文足够回答，可以返回 {"tools":[]}
-        - 询问 schema/字段/列结构时，优先 describe_measurement 或 list_measurements。
+        - 当用户说“查一查当前这个数据库里有什么 / 这个库里有什么 / 看看当前库结构”时，优先对当前数据库调用 query_sql("SHOW MEASUREMENTS")。
+        - 当用户询问具体 measurement 的 schema/字段/列结构时，优先调用 query_sql("DESCRIBE MEASUREMENT <name>")；只有在无法构造 SQL 时再退回 describe_measurement。
         - 用户给出只读 SQL 并询问结果时，优先 query_sql；询问扫描/成本/解释时优先 explain_sql。
         - 用户描述“建表 / 创建 measurement / 插入数据 / 写入 / 删除数据”等需求时：
             * 先用 list_measurements 或 describe_measurement 获取已有结构（如尚未掌握）。
@@ -1888,6 +2188,7 @@ internal sealed class CopilotAgent
         - 优先给出直接结论，再补充必要说明。
         - 如果给定了 citations，请尽量在对应句子末尾用 [C1] 这样的编号引用。
         - 若证据不足，请明确说明不确定或当前结果不足以确认。
+        - 不要向用户复述工具名；对于 SHOW MEASUREMENTS、DESCRIBE MEASUREMENT、measurement 列表或 schema 结果，直接翻译成自然语言结论。
         - 当用户的意图是建表 / 写入 / 删除 / 改 schema 时，必须给出可直接复制执行的 SQL：
             * 把每条 SQL 单独放在 ```sql 代码块中。
             * 优先使用 draft_sql / execute_sql 工具返回的 SQL，不要自行改写列名或类型。

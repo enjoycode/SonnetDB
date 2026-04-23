@@ -384,6 +384,17 @@ const pageContext = computed<PageContext | null>(() => {
   };
 });
 
+const effectiveDb = computed<string>(() => {
+  const ctx = pageContext.value;
+  if (ctx?.routeKey === 'sql' && ctx.sqlDb) {
+    return ctx.sqlDb;
+  }
+  return selectedDb.value;
+});
+
+const activeRequestDb = ref<string>('');
+const toolTabDb = computed<string>(() => activeRequestDb.value || effectiveDb.value || selectedDb.value);
+
 const pageContextSummary = computed<string>(() => {
   const ctx = pageContext.value;
   if (!ctx) return '';
@@ -391,11 +402,21 @@ const pageContextSummary = computed<string>(() => {
   if (ctx.routeKey === 'sql' && ctx.sql.length > 0) {
     parts.push(`SQL ${ctx.sql.length} 字符`);
   }
-  if (ctx.sqlDb && ctx.sqlDb !== selectedDb.value) {
+  if (ctx.sqlDb) {
     parts.push(`db=${ctx.sqlDb}`);
   }
   return parts.join(' · ');
 });
+
+watch(
+  () => [pageContext.value?.routeKey ?? '', pageContext.value?.sqlDb ?? ''] as const,
+  ([routeKey, sqlDb]) => {
+    if (routeKey === 'sql' && sqlDb && sqlDb !== selectedDb.value) {
+      selectedDb.value = sqlDb;
+    }
+  },
+  { immediate: true },
+);
 
 /** 把页面上下文构造成一条 system message（仅在 send 时临时注入，不进入会话历史）。 */
 function buildContextMessage(): CopilotMessage | null {
@@ -583,7 +604,7 @@ function ensureCopilotSqlTab(event: CopilotChatEvent, sql: string): string {
   copilotSqlSeen.add(normalizeSqlForDedupe(sql));
   const tab = sqlConsole.createTab({
     title: tabTitleForSqlTool(event.toolName ?? 'query_sql', sql),
-    db: selectedDb.value,
+    db: toolTabDb.value,
     sql,
     source: 'copilot',
     summary: event.type === 'tool_call'
@@ -727,7 +748,7 @@ function syncFinalAnswerSql(answer: string): void {
     copilotSqlSeen.add(key);
     sqlConsole.createTab({
       title: tabTitleForSqlTool('draft_sql', sql),
-      db: selectedDb.value,
+      db: toolTabDb.value,
       sql,
       source: 'copilot',
       summary: 'Copilot 最终回答中的 SQL，等待你确认后运行。',
@@ -737,7 +758,8 @@ function syncFinalAnswerSql(answer: string): void {
 
 async function send(): Promise<void> {
   if (!prompt.value.trim() || running.value) return;
-  if (!selectedDb.value) {
+  const targetDb = effectiveDb.value;
+  if (!targetDb) {
     errorMsg.value = '请先选择一个数据库（Copilot 的工具调用以数据库为单位）';
     return;
   }
@@ -745,9 +767,9 @@ async function send(): Promise<void> {
 
   // 没有当前会话则先建一个；切换数据库时同步到当前会话。
   if (!sessions.current) {
-    sessions.create(selectedDb.value);
-  } else if (sessions.current.db !== selectedDb.value) {
-    sessions.current.db = selectedDb.value;
+    sessions.create(targetDb);
+  } else if (sessions.current.db !== targetDb) {
+    sessions.current.db = targetDb;
   }
   const sessionId = sessions.currentId;
 
@@ -774,11 +796,12 @@ async function send(): Promise<void> {
   let finalAnswer = '';
   copilotToolTabs.clear();
   copilotSqlSeen.clear();
+  activeRequestDb.value = targetDb;
   try {
     for await (const event of streamCopilotChat(
       auth.state.token,
       {
-        db: selectedDb.value,
+        db: targetDb,
         messages: requestMessages,
         mode: permissionMode.value,
         ...(selectedModel.value ? { model: selectedModel.value } : {}),
@@ -817,6 +840,7 @@ async function send(): Promise<void> {
   } finally {
     running.value = false;
     abort.value = null;
+    activeRequestDb.value = '';
     await scrollToBottom();
   }
 }
@@ -827,7 +851,7 @@ function stop(): void {
 
 // === 会话历史（M5）===
 function onNewSession(): void {
-  sessions.create(selectedDb.value);
+  sessions.create(effectiveDb.value);
   streamBuffer.value = '';
   errorMsg.value = '';
 }
