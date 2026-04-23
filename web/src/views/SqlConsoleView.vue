@@ -31,19 +31,20 @@
         <n-space>
           <n-button type="primary" :loading="running" @click="run">运行</n-button>
           <n-button @click="clear">清空</n-button>
-          <span v-if="lastMeta" class="meta">{{ lastMeta }}</span>
+          <span v-if="summary" class="meta">{{ summary }}</span>
         </n-space>
 
         <n-alert v-if="errorMsg" type="error" :title="errorMsg" closable @close="errorMsg = ''" />
 
-        <n-data-table
-          v-if="resultColumns.length > 0"
-          :columns="resultColumns"
-          :data="resultRows"
-          :bordered="false"
-          size="small"
-          :max-height="480"
-        />
+        <n-space vertical :size="10" v-if="results.length > 0">
+          <SqlResultPanel
+            v-for="(item, idx) in results"
+            :key="idx"
+            :index="idx"
+            :sql="item.sql"
+            :result="item.result"
+          />
+        </n-space>
         <n-text v-else-if="ranOnce && !errorMsg" depth="3">语句已执行，没有结果集。</n-text>
       </n-space>
     </n-card>
@@ -53,17 +54,24 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import {
-  NCard, NSpace, NButton, NSelect, NAlert, NDataTable, NText,
-  type DataTableColumns, type SelectOption,
+  NCard, NSpace, NButton, NSelect, NAlert, NText, NTag,
+  type SelectOption,
 } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
 import {
-  execControlPlaneSql, execDataSql, rowsToObjects, type SqlResultSet,
+  execControlPlaneSql, execDataSql, type SqlResultSet,
 } from '@/api/sql';
+import { splitSqlStatements } from '@/api/sqlSplit';
 import { listDatabases } from '@/api/server';
 import { fetchSchema, type MeasurementInfo } from '@/api/schema';
 import SqlEditor from '@/components/SqlEditor.vue';
+import SqlResultPanel from '@/components/SqlResultPanel.vue';
 import { useSqlConsoleStore } from '@/stores/sqlConsole';
+
+interface ExecutedStatement {
+  sql: string;
+  result: SqlResultSet;
+}
 
 const auth = useAuthStore();
 const sqlConsole = useSqlConsoleStore();
@@ -75,9 +83,8 @@ const sql = ref<string>('SHOW DATABASES');
 const running = ref(false);
 const errorMsg = ref('');
 const ranOnce = ref(false);
-const lastMeta = ref('');
-const resultColumns = ref<DataTableColumns<Record<string, unknown>>>([]);
-const resultRows = ref<Record<string, unknown>[]>([]);
+const summary = ref('');
+const results = ref<ExecutedStatement[]>([]);
 const currentSchema = ref<MeasurementInfo[]>([]);
 
 const dbOptions = computed<SelectOption[]>(() => {
@@ -132,37 +139,48 @@ watch([targetDb, sql], ([db, text]) => {
 
 async function run(): Promise<void> {
   errorMsg.value = '';
-  resultColumns.value = [];
-  resultRows.value = [];
-  lastMeta.value = '';
+  results.value = [];
+  summary.value = '';
   if (!sql.value.trim()) return;
   if (!targetDb.value) {
     errorMsg.value = '当前没有可执行的数据面数据库。';
     return;
   }
+  const statements = splitSqlStatements(sql.value);
+  if (statements.length === 0) return;
+
   running.value = true;
   try {
-    const rs: SqlResultSet = targetDb.value === CONTROL_PLANE_KEY
-      ? await execControlPlaneSql(auth.api, sql.value)
-      : await execDataSql(auth.api, targetDb.value, sql.value);
+    let okCount = 0;
+    let failCount = 0;
+    let totalElapsed = 0;
+    const collected: ExecutedStatement[] = [];
+
+    for (const stmt of statements) {
+      const rs = targetDb.value === CONTROL_PLANE_KEY
+        ? await execControlPlaneSql(auth.api, stmt)
+        : await execDataSql(auth.api, targetDb.value, stmt);
+      collected.push({ sql: stmt, result: rs });
+      if (rs.error) {
+        failCount += 1;
+      } else {
+        okCount += 1;
+        if (rs.end) totalElapsed += rs.end.elapsedMs;
+      }
+      // 渐进展示：每条立刻插入，避免长批阻塞 UI。
+      results.value = [...collected];
+      // 任何一条失败即停止后续执行，避免基于失败结果继续跑。
+      if (rs.error) break;
+    }
+
     ranOnce.value = true;
-    if (rs.error) {
-      errorMsg.value = `[${rs.error.code ?? 'error'}] ${rs.error.message}`;
-      return;
-    }
-    if (rs.hasColumns) {
-      resultColumns.value = rs.columns.map<DataTableColumns<Record<string, unknown>>[number]>((c) => ({
-        title: c, key: c, ellipsis: { tooltip: true },
-      }));
-      resultRows.value = rowsToObjects(rs);
-    }
-    if (rs.end) {
-      const parts: string[] = [];
-      if (rs.hasColumns) parts.push(`${rs.end.rowCount} 行`);
-      if (rs.end.recordsAffected >= 0) parts.push(`受影响 ${rs.end.recordsAffected}`);
-      parts.push(`${rs.end.elapsedMs.toFixed(2)} ms`);
-      lastMeta.value = parts.join(' · ');
-    }
+    const parts = [
+      `共 ${statements.length} 条`,
+      `成功 ${okCount}`,
+    ];
+    if (failCount > 0) parts.push(`失败 ${failCount}`);
+    parts.push(`合计 ${totalElapsed.toFixed(2)} ms`);
+    summary.value = parts.join(' · ');
   } finally {
     running.value = false;
   }
@@ -170,10 +188,9 @@ async function run(): Promise<void> {
 
 function clear(): void {
   sql.value = '';
-  resultColumns.value = [];
-  resultRows.value = [];
+  results.value = [];
   errorMsg.value = '';
-  lastMeta.value = '';
+  summary.value = '';
   ranOnce.value = false;
 }
 

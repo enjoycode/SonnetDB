@@ -48,6 +48,14 @@ WORKDIR /app
 
 COPY --from=build /app/publish ./
 
+# 把源码里的知识库素材随镜像一起发布，让 CopilotDocsIngestionService /
+# CopilotSkillsIngestionService 在容器首次启动时即可把 docs / 技能向量化进
+# `__copilot__.docs` / `__copilot__.skills`，无需挂载额外卷。
+# 默认 Roots 是 ["./docs", "./web/help", "./src/SonnetDB/wwwroot/help"]，
+# 默认 Skills.Root 是 "./copilot/skills"，工作目录为 /app，所以拷贝到这两个相对路径下即可。
+COPY docs/ /app/docs/
+COPY copilot/ /app/copilot/
+
 RUN mkdir -p /data
 
 EXPOSE 5080
