@@ -294,10 +294,6 @@ function buildMessages(nextPrompt: string): CopilotMessage[] {
 async function sendMessage(): Promise<void> {
   const prompt = composer.value.trim();
   if (!prompt || loading.value) return;
-  if (!targetDb.value) {
-    errorMsg.value = '请先选择一个数据库。';
-    return;
-  }
 
   errorMsg.value = '';
   composer.value = '';
