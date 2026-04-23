@@ -9,8 +9,21 @@
  *
  * 标识符用反引号或双引号在 SonnetDB 暂不支持，这里也顺带忽略。
  *
- * 返回值：每个元素是去掉首尾空白、且非空的单条 SQL（不带尾随分号）。
+ * 返回值：每个元素是去掉首尾空白、且含有实质 SQL 内容（非纯注释）的单条语句（不带尾随分号）。
  */
+
+/**
+ * 判断字符串在去掉注释后是否还有非空字符。
+ * 仅用于过滤纯注释片段，不用于完整词法分析。
+ */
+function hasSubstantiveContent(s: string): boolean {
+  // 去掉块注释
+  let t = s.replace(/\/\*[\s\S]*?\*\//g, '');
+  // 去掉行注释
+  t = t.replace(/--[^\n]*/g, '');
+  return t.trim().length > 0;
+}
+
 export function splitSqlStatements(input: string): string[] {
   if (!input) return [];
   const out: string[] = [];
@@ -73,7 +86,7 @@ export function splitSqlStatements(input: string): string[] {
     // 顶层分号 → 切分
     if (ch === ';') {
       const stmt = buf.trim();
-      if (stmt.length > 0) out.push(stmt);
+      if (hasSubstantiveContent(stmt)) out.push(stmt);
       buf = '';
       i += 1;
       continue;
@@ -84,6 +97,6 @@ export function splitSqlStatements(input: string): string[] {
   }
 
   const tail = buf.trim();
-  if (tail.length > 0) out.push(tail);
+  if (hasSubstantiveContent(tail)) out.push(tail);
   return out;
 }
