@@ -20,6 +20,9 @@
             </template>
           </n-text>
           <n-button @click="reloadDbs" size="small">刷新</n-button>
+          <n-text depth="3" style="font-size: 12px">
+            提示：可输入 <code>USE &lt;db&gt;</code> 切换 / <code>SELECT current_database()</code> 查询当前库
+          </n-text>
         </n-space>
 
         <SqlEditor
@@ -62,6 +65,11 @@ import {
   execControlPlaneSql, execDataSql, type SqlResultSet,
 } from '@/api/sql';
 import { splitSqlStatements } from '@/api/sqlSplit';
+import {
+  parseSqlMetaCommand,
+  buildClientResultSet,
+  buildClientErrorResultSet,
+} from '@/api/sqlMeta';
 import { listDatabases } from '@/api/server';
 import { fetchSchema, type MeasurementInfo } from '@/api/schema';
 import SqlEditor from '@/components/SqlEditor.vue';
@@ -157,9 +165,14 @@ async function run(): Promise<void> {
     const collected: ExecutedStatement[] = [];
 
     for (const stmt of statements) {
-      const rs = targetDb.value === CONTROL_PLANE_KEY
-        ? await execControlPlaneSql(auth.api, stmt)
-        : await execDataSql(auth.api, targetDb.value, stmt);
+      // SQL Console 元命令：USE <db> / SHOW CURRENT_DATABASE / SELECT current_database() —
+      // 完全在客户端处理，不走服务端，避免命中服务端 SqlParser 的「未知关键字」错误。
+      const meta = parseSqlMetaCommand(stmt);
+      const rs = meta
+        ? executeMetaCommand(meta)
+        : (targetDb.value === CONTROL_PLANE_KEY
+          ? await execControlPlaneSql(auth.api, stmt)
+          : await execDataSql(auth.api, targetDb.value, stmt));
       collected.push({ sql: stmt, result: rs });
       if (rs.error) {
         failCount += 1;
@@ -184,6 +197,41 @@ async function run(): Promise<void> {
   } finally {
     running.value = false;
   }
+}
+
+/**
+ * 客户端处理 SQL Console 元命令：USE / 查询当前数据库。
+ * <p>
+ * 当前 db 名约定：control-plane 显示为字面量 <c>system</c>；用户库显示为名字本身。
+ * <c>USE system</c> 会切到控制面（仅 superuser 可用）。
+ */
+function executeMetaCommand(meta: ReturnType<typeof parseSqlMetaCommand>): SqlResultSet {
+  if (!meta) return buildClientErrorResultSet('console_meta', '未识别的元命令。');
+
+  const currentName = targetDb.value === CONTROL_PLANE_KEY ? 'system' : targetDb.value;
+
+  if (meta.kind === 'current-database') {
+    return buildClientResultSet(['current_database'], [[currentName]]);
+  }
+
+  // meta.kind === 'use'
+  const wanted = meta.database;
+  const isSystem = wanted === 'system' || wanted === '*';
+  if (isSystem) {
+    if (!auth.isSuperuser) {
+      return buildClientErrorResultSet('forbidden', '仅 superuser 才能切换到系统数据库。');
+    }
+    targetDb.value = CONTROL_PLANE_KEY;
+    return buildClientResultSet(['database'], [['system']]);
+  }
+  if (!databases.value.includes(wanted)) {
+    return buildClientErrorResultSet(
+      'database_not_found',
+      `数据库 "${wanted}" 不存在或当前用户没有访问权限。可用列表：${databases.value.join(', ') || '(空)'}。`,
+    );
+  }
+  targetDb.value = wanted;
+  return buildClientResultSet(['database'], [[wanted]]);
 }
 
 function clear(): void {
