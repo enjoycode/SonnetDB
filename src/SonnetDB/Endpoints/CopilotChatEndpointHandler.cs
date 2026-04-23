@@ -73,6 +73,13 @@ internal static class CopilotChatEndpointHandler
             return;
         }
 
+        // 系统内置库（如 __copilot__）不允许从对话端点直接操作，避免 LLM 把它当成业务库去 SHOW / CREATE。
+        if (DatabaseAccessEvaluator.IsSystemDatabase(req.Db))
+        {
+            await WriteErrorAsync(ctx, StatusCodes.Status403Forbidden, "system_database", $"数据库 '{req.Db}' 是系统内置库，不可在 Copilot 对话中直接使用，请选择一个业务数据库。").ConfigureAwait(false);
+            return;
+        }
+
         if (!registry.TryGet(req.Db, out var tsdb))
         {
             await WriteErrorAsync(ctx, StatusCodes.Status404NotFound, "db_not_found", $"数据库 '{req.Db}' 不存在。").ConfigureAwait(false);

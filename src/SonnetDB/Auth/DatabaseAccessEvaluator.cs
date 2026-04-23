@@ -47,6 +47,11 @@ internal static class DatabaseAccessEvaluator
     /// <summary>
     /// 获取当前请求可见的数据库列表。
     /// </summary>
+    /// <remarks>
+    /// 系统内置数据库（如 <c>__copilot__</c>）只供服务端子系统内部使用，不会出现在
+    /// 任何用户可见的列表里，也不会出现在 Copilot Agent 的 <c>VisibleDatabases</c> 中，
+    /// 避免 LLM 误把它当作业务库去 SHOW MEASUREMENTS / 建表。
+    /// </remarks>
     public static IReadOnlyList<string> GetVisibleDatabases(
         HttpContext context,
         GrantsStore grantsStore,
@@ -60,11 +65,13 @@ internal static class DatabaseAccessEvaluator
         if (user is AuthenticatedUser authenticatedUser)
         {
             if (authenticatedUser.IsSuperuser)
-                return allDatabases;
+                return FilterSystemDatabases(allDatabases);
 
             var visible = new List<string>(allDatabases.Count);
             foreach (var database in allDatabases)
             {
+                if (IsSystemDatabase(database))
+                    continue;
                 if (grantsStore.GetPermission(authenticatedUser.UserName, database) >= DatabasePermission.Read)
                     visible.Add(database);
             }
@@ -72,8 +79,44 @@ internal static class DatabaseAccessEvaluator
         }
 
         return BearerAuthMiddleware.GetRole(context) is ServerRoles.Admin or ServerRoles.ReadWrite or ServerRoles.ReadOnly
-            ? allDatabases
+            ? FilterSystemDatabases(allDatabases)
             : [];
+    }
+
+    /// <summary>
+    /// 判断指定数据库名是否属于系统内置库。
+    /// </summary>
+    /// <remarks>
+    /// 当前规则：名字以双下划线开头并以双下划线结尾（如 <c>__copilot__</c>）即视为系统库。
+    /// </remarks>
+    public static bool IsSystemDatabase(string database)
+        => !string.IsNullOrEmpty(database)
+            && database.Length >= 4
+            && database.StartsWith("__", StringComparison.Ordinal)
+            && database.EndsWith("__", StringComparison.Ordinal);
+
+    private static IReadOnlyList<string> FilterSystemDatabases(IReadOnlyList<string> allDatabases)
+    {
+        // 快路径：没有任何系统库时直接返回原列表，避免无谓拷贝。
+        var hasSystem = false;
+        for (var i = 0; i < allDatabases.Count; i++)
+        {
+            if (IsSystemDatabase(allDatabases[i]))
+            {
+                hasSystem = true;
+                break;
+            }
+        }
+        if (!hasSystem)
+            return allDatabases;
+
+        var visible = new List<string>(allDatabases.Count);
+        foreach (var database in allDatabases)
+        {
+            if (!IsSystemDatabase(database))
+                visible.Add(database);
+        }
+        return visible;
     }
 
     /// <summary>

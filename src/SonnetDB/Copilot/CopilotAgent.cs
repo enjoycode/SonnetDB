@@ -2193,7 +2193,13 @@ internal sealed class CopilotAgent
             步骤 3：调用 draft_sql 起草 CREATE MEASUREMENT（必须覆盖用户提到的所有字段）。
             步骤 4：仅当用户明确说执行/立即建表/直接写入/帮我跑一下时，才调用 execute_sql。
             不要跳过步骤，不要在没有 draft_sql 验证的情况下直接调用 execute_sql。
+        - 当用户的意图是【创建/新建一个数据库】（"建一个仓库"、"创建数据库"、"新建库"、"create database" 等），不要去 list_measurements / describe_measurement，也不要假设用户想往当前库里建表。优先按以下顺序推进：
+            步骤 1：调用 list_databases 确认目标库名是否已存在；如果用户没给名字，跳过该步骤直接进入步骤 2。
+            步骤 2：调用 draft_sql 起草 CREATE DATABASE 语句（语法：`CREATE DATABASE <name>`，name 必须是合法标识符；如果用户同时描述了想保存的指标，draft_sql 还需要紧跟一条 CREATE MEASUREMENT，覆盖所有字段）。
+            步骤 3：仅当用户明确说"执行/立即建/帮我创建"时才调用 execute_sql；否则直接返回 {"tools":[]} 让回答器把 SQL 给用户。
+        - 不要把 `__copilot__` / `_internal` 等系统库当成业务库去操作；它们不会出现在 list_databases 结果里。
         - 不要编造不存在的 measurement 名称、列名或函数。
+        - SonnetDB 的 CREATE DATABASE 语法：`CREATE DATABASE name`，不支持 IF NOT EXISTS / WITH 选项；同名库已存在时可直接复用。
         - SonnetDB 的 CREATE MEASUREMENT 语法：CREATE MEASUREMENT name (col TAG, col FIELD type, ...)，FIELD 类型只接受 FLOAT / INT / BOOL / STRING / VECTOR(N)，TAG 列固定为 STRING。
         - SonnetDB 的 INSERT 语法：INSERT INTO measurement (time, tag1, field1, ...) VALUES (1700000000000, 'host-1', 0.42, ...)，time 为毫秒时间戳。
         """;
@@ -2225,6 +2231,10 @@ internal sealed class CopilotAgent
             * 生成建表 SQL 时，必须覆盖用户提到的所有指标字段，不要只写一两个示例字段就省略其余。例如用户说 CPU 使用率、内存使用率、温度，就必须把三者都建成独立的 FIELD 列。
             * 如果当前数据库不存在（list_databases 结果为空或不含目标库），必须在建表 SQL 之前先给出 CREATE DATABASE 语句，并说明需要先创建数据库。
             * 当 SQL 已准备好且界面提供了 SQL Console 选项卡时，请在回答末尾提示用户：可以点击页面上方的 SQL Console 按鈕，将上方 SQL 粘贴进去直接执行。
+        - 当用户的意图是【新建 / 创建一个数据库】（"建一个仓库 / 数据库"、"create database"、"新建库"）：
+            * 必须先给出一条 `CREATE DATABASE <name>` SQL（放在 ```sql 代码块内）；如果用户没指定名字，请基于场景给一个合理名（例如 "host_metrics"、"sys_perf"）并在文字里说明可以改名。
+            * 如果用户同时描述了想保存的指标（CPU、内存、温度等），紧跟一条 CREATE MEASUREMENT，覆盖所有字段；FIELD 类型按语义选 FLOAT/INT/BOOL/STRING。
+            * 不要去 SHOW MEASUREMENTS、不要把 `__copilot__` 之类的系统库当成用户的业务库去描述；如果工具结果显示当前选中库是系统库，请明确告诉用户："这是系统内置库，建议为你新建的指标单独创建一个数据库"。
         - 当用户给出只是描述而工具没生成 SQL 时，根据已有 measurement 列表与字段，自己起草一条最贴近需求的 CREATE MEASUREMENT / INSERT 语句，同样放进 ```sql 代码块。
         """;
 }

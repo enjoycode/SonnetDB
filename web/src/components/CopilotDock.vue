@@ -108,6 +108,7 @@
         tag
         :show="modelOptions.length > 0 || undefined"
         :title="modelDefault ? `服务端默认：${modelDefault}` : '未配置默认模型'"
+        :to="dockEl ?? 'body'"
       >
         <template #empty>
           {{ modelDefault ? `默认：${modelDefault}` : '可输入模型名（如 gpt-4o-mini、qwen2.5-coder-32b）' }}
@@ -245,6 +246,7 @@ import { useSqlConsoleStore } from '@/stores/sqlConsole';
 import { buildClientResultSet } from '@/api/sqlMeta';
 import type { SqlResultSet } from '@/api/sql';
 import { listDatabases } from '@/api/server';
+import { execControlPlaneSql, isValidIdentifier } from '@/api/sql';
 import {
   streamCopilotChat,
   fetchCopilotKnowledgeStatus,
@@ -477,10 +479,19 @@ async function reloadStatus(): Promise<void> {
   }
 }
 
+/** 系统内置数据库，不应暴露给用户或 AI 推断使用。 */
+const SYSTEM_DATABASES = new Set(['_internal', '__copilot__']);
+
+/** 判断给定库名是否属于系统库（名字以双下划线开头并以双下划线结尾，或在显式列表中）。 */
+function isSystemDatabase(name: string): boolean {
+  if (SYSTEM_DATABASES.has(name)) return true;
+  return name.length >= 4 && name.startsWith('__') && name.endsWith('__');
+}
+
 async function reloadDbs(): Promise<void> {
   try {
     const result = await listDatabases(auth.api);
-    dbs.value = result.databases;
+    dbs.value = result.databases.filter((db: string) => !isSystemDatabase(db));
     if (!selectedDb.value && dbs.value.length > 0) {
       selectedDb.value = dbs.value[0];
     }
@@ -519,6 +530,56 @@ function onKeydown(e: KeyboardEvent): void {
 const SqlToolNames = new Set(['draft_sql', 'query_sql', 'execute_sql']);
 const copilotToolTabs = new Map<string, string>();
 const copilotSqlSeen = new Set<string>();
+
+/**
+ * 当账号没有任何业务数据库时，弹出对话框引导用户即时新建一个。
+ * 成功返回新数据库名；用户取消或失败返回空串。
+ */
+async function promptCreateDatabase(): Promise<string> {
+  if (!auth.isSuperuser) {
+    message.error('当前账号下没有可用的业务数据库，请联系管理员先创建一个。');
+    return '';
+  }
+  const inputName = ref('metrics');
+  return new Promise<string>((resolve) => {
+    const d = dialog.create({
+      title: '尚无业务数据库，请先创建一个',
+      content: () => h('div', { style: 'display: flex; flex-direction: column; gap: 8px' }, [
+        h(NText, { depth: 3, style: 'font-size: 12px' }, {
+          default: () => 'Copilot 需要绑定到某个数据库才能工作。请输入新数据库名（字母开头，仅含字母数字下划线）：',
+        }),
+        h(NInput, {
+          value: inputName.value,
+          'onUpdate:value': (v: string) => { inputName.value = v; },
+          placeholder: '例如 metrics、host_perf',
+          autofocus: true,
+        }),
+      ]),
+      positiveText: '创建并继续',
+      negativeText: '取消',
+      onPositiveClick: async () => {
+        const name = inputName.value.trim();
+        if (!isValidIdentifier(name)) {
+          message.error('名称必须以字母开头，仅包含字母数字下划线。');
+          return false;
+        }
+        const rs = await execControlPlaneSql(auth.api, `CREATE DATABASE ${name}`);
+        if (rs.error) {
+          message.error(rs.error.message);
+          return false;
+        }
+        message.success(`已创建数据库 ${name}`);
+        await reloadDbs();
+        selectedDb.value = name;
+        resolve(name);
+        return true;
+      },
+      onNegativeClick: () => { resolve(''); },
+      onClose: () => { resolve(''); },
+      onMaskClick: () => { resolve(''); d.destroy(); },
+    });
+  });
+}
 
 interface ToolArgumentsPayload {
   sql?: string;
@@ -765,7 +826,14 @@ async function send(): Promise<void> {
   if (!auth.state?.token) return;
 
   // 数据库自动推断：优先 SQL Console 当前库，其次已知库列表第一个，最后留空让后端处理
-  const targetDb = effectiveDb.value || (dbs.value.length > 0 ? dbs.value[0] : '');
+  let targetDb = effectiveDb.value || (dbs.value.length > 0 ? dbs.value[0] : '');
+
+  // 如果当前账号没有任何业务数据库，引导用户先创建一个（Copilot 必须挂在某个 DB 上）。
+  if (!targetDb) {
+    const created = await promptCreateDatabase();
+    if (!created) return;  // 用户取消或无权创建
+    targetDb = created;
+  }
 
   // 没有当前会话则先建一个；切换数据库时同步到当前会话。
   if (!sessions.current) {
