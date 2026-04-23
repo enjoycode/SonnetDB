@@ -3,15 +3,20 @@
     <n-card title="Copilot Chat" :bordered="false" class="chat-hero">
       <n-space vertical :size="14">
         <n-space align="center" justify="space-between" wrap>
-          <n-space align="center" wrap>
-            <span class="field-label">目标数据库</span>
-            <n-select
+          <n-space align="center" wrap :size="10">
+            <n-tag :type="targetDb ? 'success' : 'warning'" size="small">
+              {{ targetDb ? `当前数据库：${targetDb}` : '暂无可用数据库' }}
+            </n-tag>
+            <n-popselect
+              v-if="databases.length > 1"
               v-model:value="targetDb"
               :options="dbOptions"
-              style="width: 260px"
-              placeholder="选择数据库"
-            />
-            <n-button size="small" @click="reloadDbs">刷新</n-button>
+              trigger="click"
+              size="small"
+            >
+              <n-button quaternary size="small">切换</n-button>
+            </n-popselect>
+            <n-button quaternary size="small" @click="reloadDbs">刷新</n-button>
           </n-space>
 
           <n-space align="center" wrap>
@@ -33,7 +38,7 @@
         </n-space>
 
         <n-text depth="3">
-          Copilot 会基于最近对话、技能库、文档召回和只读工具结果生成回答；若模型生成的 SQL 执行失败，会自动携带错误重写并重试。
+          Copilot 会自动连接你当前可见的数据库（默认第一个），基于最近对话、技能库、文档召回与只读工具结果生成回答；若模型生成的 SQL 执行失败，会自动携带错误重写并重试。
         </n-text>
 
         <n-alert v-if="errorMsg" type="error" closable @close="errorMsg = ''">
@@ -188,7 +193,7 @@ import {
   NCollapseItem,
   NEmpty,
   NInput,
-  NSelect,
+  NPopselect,
   NSpace,
   NSpin,
   NTag,

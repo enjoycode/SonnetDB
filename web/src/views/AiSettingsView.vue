@@ -8,7 +8,8 @@
           <img
             :src="qrUrl"
             alt="扫码加群"
-            style="width: 130px; height: 130px; border-radius: 8px; flex-shrink: 0; display: block"
+            style="width: 130px; height: 130px; border-radius: 8px; flex-shrink: 0; display: block; background: #fff"
+            @error="handleQrError"
           />
           <n-space vertical :size="8" style="padding-top: 4px">
             <n-text strong style="font-size: 15px">扫码加入用户群</n-text>
@@ -94,9 +95,16 @@
         <n-form-item label=" " :show-feedback="false">
           <n-space>
             <n-button type="primary" :loading="saving" @click="save">保存配置</n-button>
-            <n-button :loading="testing" :disabled="!hasApiKey && !form.apiKey" @click="testConnection">
+            <n-button
+              :loading="testing"
+              :disabled="!form.enabled || (!hasApiKey && !form.apiKey)"
+              @click="testConnection"
+            >
               测试连接
             </n-button>
+            <n-text v-if="!form.enabled" depth="3" style="font-size: 12px; align-self: center">
+              请先勾选「启用 Copilot」并保存配置后再测试连接。
+            </n-text>
           </n-space>
         </n-form-item>
       </n-form>
@@ -128,8 +136,13 @@ import { fetchAiConfig, saveAiConfig, streamAiChat } from '@/api/ai';
 
 const auth = useAuthStore();
 
-// public/ 下的图片路径，随 base URL 自动适配（生产环境 /admin/qr-group.png）
-const qrUrl = `${import.meta.env.BASE_URL}qr-group.png`;
+// public/ 下的二维码资源（缺省提供 SVG 占位，运维可替换为真实 PNG）。
+// 优先尝试 PNG，失败时回退到 SVG 占位，避免出现 broken image。
+const qrUrl = ref(`${import.meta.env.BASE_URL}qr-group.png`);
+function handleQrError(): void {
+  const fallback = `${import.meta.env.BASE_URL}qr-group.svg`;
+  if (qrUrl.value !== fallback) qrUrl.value = fallback;
+}
 
 const form = ref({
   enabled: false,
@@ -201,7 +214,13 @@ async function testConnection(): Promise<void> {
     testOk.value = true;
     testMsg.value = `连接成功！模型回复：${reply.slice(0, 100)}${reply.length > 100 ? '…' : ''}`;
   } catch (e: unknown) {
-    testMsg.value = `连接失败：${e instanceof Error ? e.message : String(e)}`;
+    const raw = e instanceof Error ? e.message : String(e);
+    // 服务端尚未保存 enabled=true 时的友好提示
+    if (raw.includes('ai_disabled')) {
+      testMsg.value = '连接失败：AI 助手当前未启用。请先勾选「启用 Copilot」、填好 API Key 并点击「保存配置」，然后再测试连接。';
+    } else {
+      testMsg.value = `连接失败：${raw}`;
+    }
   } finally {
     testing.value = false;
   }

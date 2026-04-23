@@ -25,8 +25,9 @@
           <div class="hero-eyebrow">产品定位</div>
           <h1>让设备数据、业务指标与智能分析在一套时序数据库里协同工作。</h1>
           <p class="hero-subtitle">
-            SonnetDB 面向工业设备、传感器网络、车联网和智能运维场景，不只提供数据存储，还提供控制优化、趋势预测、
-            轨迹分析、语义检索和 Copilot 智能协作能力，帮助客户更快完成从采集到分析、从判断到执行的完整闭环。
+            SonnetDB 面向工业设备、传感器网络、车联网和智能运维场景，承接来自采集端、网关与上游系统的数据，
+            在统一时序库中完成存储、控制优化、趋势预测、轨迹分析、语义检索与 Copilot 智能协作，
+            帮助客户更快完成从数据接入到分析、从判断到执行的完整闭环。
           </p>
 
           <div class="hero-actions">
@@ -52,9 +53,9 @@
             <div class="stage-grid">
               <section class="stage-card stage-card-large">
                 <span class="stage-kicker">产品价值</span>
-                <strong>从实时采集、控制优化到预测分析和智能问答，SonnetDB 帮助客户把时间序列数据真正用起来。</strong>
+                <strong>从实时数据接入、控制优化到预测分析和智能问答，SonnetDB 帮助客户把时间序列数据真正用起来。</strong>
                 <p>
-                  无论是设备遥测、能源监测、车辆轨迹还是业务指标，SonnetDB 都能把实时数据、分析能力和智能协作整合到统一平台中。
+                  无论是设备遥测、能源监测、车辆轨迹还是业务指标，SonnetDB 都能把上游写入的实时数据、分析能力和智能协作整合到统一平台中。
                 </p>
                 <ul class="stage-list">
                   <li>帮助设备和传感器场景快速实现速率分析、平滑处理、控制优化和结果回写。</li>
@@ -85,7 +86,7 @@
       <section id="database" class="section-panel">
         <div class="section-heading">
           <span class="hero-eyebrow">核心价值</span>
-          <h2>一套产品覆盖数据采集、分析决策、控制优化与智能协作。</h2>
+          <h2>一套产品覆盖数据接入、分析决策、控制优化与智能协作。</h2>
           <p>
             SonnetDB 将原本分散在数据库、算法服务、地图系统和智能助手中的能力整合到一起，让客户用更低的系统复杂度获得更高的数据价值。
           </p>

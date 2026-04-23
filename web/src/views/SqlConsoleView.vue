@@ -8,8 +8,17 @@
             v-model:value="targetDb"
             :options="dbOptions"
             style="width: 240px"
-            placeholder="选择数据库或控制面"
+            placeholder="选择数据库"
           />
+          <n-text depth="3" style="font-size: 12px">
+            <template v-if="targetDb === CONTROL_PLANE_KEY">
+              <n-tag size="tiny" type="warning" style="margin-right: 4px">system</n-tag>
+              系统数据库（执行 CREATE USER / GRANT / SHOW USERS / CREATE DATABASE 等控制面 SQL）
+            </template>
+            <template v-else-if="targetDb">
+              用户数据库（执行 SELECT / INSERT / CREATE MEASUREMENT 等数据面 SQL）
+            </template>
+          </n-text>
           <n-button @click="reloadDbs" size="small">刷新</n-button>
         </n-space>
 
@@ -126,7 +135,7 @@ const aiAbort = ref<AbortController | null>(null);
 
 const dbOptions = computed<SelectOption[]>(() => {
   const options: SelectOption[] = auth.isSuperuser
-    ? [{ label: '控制面 (CREATE USER / GRANT / SHOW USERS …)', value: CONTROL_PLANE_KEY }]
+    ? [{ label: 'system （系统库 / 控制面）', value: CONTROL_PLANE_KEY }]
     : [];
   return [
     ...options,

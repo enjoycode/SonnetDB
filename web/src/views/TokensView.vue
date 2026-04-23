@@ -1,6 +1,23 @@
 <template>
-  <n-card title="Token 管理" :bordered="false">
+  <n-card title="API Key（Token）管理" :bordered="false">
+    <template #header-extra>
+      <n-tag size="small" type="info">用于外部客户端 / AI / MCP 调用</n-tag>
+    </template>
     <n-space vertical :size="12">
+      <n-alert type="info" :show-icon="false" :bordered="false" style="background: #f0f7ff">
+        <n-text depth="2" style="font-size: 13px; line-height: 1.7">
+          这里签发的 <strong>Token</strong> 就是 SonnetDB 的 <strong>API Key</strong>，供以下场景使用：
+          <br />
+          · 第三方应用 / 脚本 通过 ADO.NET / HTTP 访问数据库时，作为 <code>Authorization: Bearer &lt;token&gt;</code> 头；
+          <br />
+          · 外部 AI / Agent / MCP Host（如 Claude Desktop、Cursor、其它 LLM 工具）调用本服务的 <code>/mcp/{db}</code> 工具集时携带；
+          <br />
+          · CLI 工具 <code>sndb</code> 通过环境变量 <code>SONNETDB_TOKEN</code> 读取。
+          <br />
+          <strong style="color: #c47900">Token 明文只在签发时展示一次，请立即妥善保存。</strong>
+        </n-text>
+      </n-alert>
+
       <n-space>
         <n-select
           v-model:value="issueUser"
@@ -8,7 +25,7 @@
           placeholder="选择用户"
           style="width: 180px"
         />
-        <n-button type="primary" @click="onIssue">ISSUE TOKEN</n-button>
+        <n-button type="primary" @click="onIssue">签发新 API Key</n-button>
         <n-select
           v-model:value="filterUser"
           :options="userOptions"
@@ -24,9 +41,11 @@
       <n-data-table :columns="cols" :data="tokens" :bordered="false" size="small" />
     </n-space>
 
-    <n-modal v-model:show="issuedModal" preset="card" title="新 Token" style="width: 560px">
+    <n-modal v-model:show="issuedModal" preset="card" title="新 API Key（Token）" style="width: 560px">
       <n-space vertical :size="12">
-        <n-text>Token 明文只会展示一次，请立即复制保存。</n-text>
+        <n-text type="warning">
+          API Key 明文只会展示一次，请立即复制保存。关闭后将无法再次查看。
+        </n-text>
         <n-space>
           <n-tag type="success">{{ issuedTokenId }}</n-tag>
           <n-tag>{{ issuedUserName }}</n-tag>
@@ -38,7 +57,7 @@
           :autosize="{ minRows: 3, maxRows: 6 }"
         />
         <n-space justify="end">
-          <n-button @click="copyIssuedToken">复制 Token</n-button>
+          <n-button @click="copyIssuedToken">复制 API Key</n-button>
           <n-button type="primary" @click="issuedModal = false">关闭</n-button>
         </n-space>
       </n-space>
