@@ -93,4 +93,11 @@ namespace SonnetDB.Json;
 [JsonSerializable(typeof(List<CopilotSkillsSearchHit>))]
 [JsonSerializable(typeof(CopilotSkillLoadResponse))]
 [JsonSerializable(typeof(CopilotSkillsListResponse))]
+[JsonSerializable(typeof(CopilotChatRequest))]
+[JsonSerializable(typeof(CopilotChatEvent))]
+[JsonSerializable(typeof(CopilotCitation))]
+[JsonSerializable(typeof(List<CopilotCitation>))]
+// ---- Copilot Agent 内部协议（PR #67）----
+[JsonSerializable(typeof(CopilotToolPlan))]
+[JsonSerializable(typeof(CopilotPlannedTool))]
 internal sealed partial class ServerJsonContext : JsonSerializerContext;

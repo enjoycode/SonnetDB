@@ -38,7 +38,11 @@ public static class Program
     /// </summary>
     /// <param name="args">命令行参数（透传给 <see cref="WebApplication.CreateSlimBuilder(string[])"/>）。</param>
     /// <param name="overrideOptions">可选覆盖配置（如自定义 DataRoot / Tokens）。</param>
-    public static WebApplication BuildApp(string[] args, ServerOptions? overrideOptions = null)
+    /// <param name="configureServices">测试或宿主可选的附加 DI 覆盖。</param>
+    public static WebApplication BuildApp(
+        string[] args,
+        ServerOptions? overrideOptions = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         var builder = WebApplication.CreateSlimBuilder(args);
 
@@ -48,6 +52,7 @@ public static class Program
         var serverOptions = overrideOptions ?? LoadServerOptions(builder.Configuration);
 
         Configure(builder, serverOptions);
+        configureServices?.Invoke(builder.Services);
 
         var app = builder.Build();
         ConfigureMiddleware(app, serverOptions);
@@ -228,6 +233,7 @@ public static class Program
         builder.Services.AddSingleton<SkillSourceScanner>();
         builder.Services.AddSingleton<SkillRegistry>();
         builder.Services.AddSingleton<SkillSearchService>();
+        builder.Services.AddSingleton<CopilotAgent>();
         builder.Services.AddHostedService<CopilotSkillsIngestionService>();
 
         builder.Services.AddSingleton<SonnetDB.Sql.Execution.IControlPlane>(sp =>
@@ -537,6 +543,12 @@ public static class Program
         var aiConfigStore = app.Services.GetRequiredService<AiConfigStore>();
         var httpClientFactory = app.Services.GetRequiredService<IHttpClientFactory>();
         AiEndpointHandler.Map(app, aiConfigStore, grants, registry, httpClientFactory);
+        CopilotChatEndpointHandler.Map(
+            app,
+            copilotReadiness,
+            app.Services.GetRequiredService<CopilotAgent>(),
+            grants,
+            registry);
 
         // ---- Copilot 文档摄入 / 检索（PR #64）----
         var copilotOptions = serverOptions.Copilot;

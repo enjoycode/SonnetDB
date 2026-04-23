@@ -38,6 +38,13 @@
 - 回填 `ROADMAP.md` 的 PR #62 状态与 Milestone 13 里程碑进度：默认 `10k / 100k` 向量基准与 README 实测结果已闭环，`1M` 长测与外部库同机对比保留为显式 / 环境可选的后续补数项，不再阻塞 Milestone 14。
 
 ### Added
+- **PR #67 — Copilot 单轮问答闭环（Milestone 14 第五切片）**
+  - 新增内部 `CopilotAgent` 编排器：对单轮问题执行 docs/skills 召回、工具规划、只读工具执行与最终回答生成，串起 `IEmbeddingProvider`、`IChatProvider`、技能库、文档库与现有 MCP 只读工具语义。
+  - 新增 HTTP 端点：`POST /v1/copilot/chat` 返回 `application/x-ndjson` 事件流，`POST /v1/copilot/chat/stream` 返回 `text/event-stream` SSE；统一输出 `start` / `retrieval` / `tool_call` / `tool_result` / `final` / `error` / `done` 事件，并在最终回答中附带 `citations`。
+  - 新增 Bearer + 数据库级 `read` 权限校验：Copilot 聊天请求必须显式指定数据库，服务端会在进入编排前校验数据库名、数据库存在性以及当前凭据是否具备该库的 `read` 权限。
+  - `Program.BuildApp(...)` 新增可选 `configureServices` 覆盖入口，便于在集成测试中注入 fake embedding/chat provider，对 Copilot 闭环做稳定的端到端验证。
+  - 测试补齐：新增 Copilot chat 端到端用例，覆盖无 grant 返回 `403`、NDJSON 事件流返回、SSE 事件流返回三条关键链路。
+
 - **PR #66 — MCP schema 工具增强 + 抽样 / explain（Milestone 14 第四切片）**
   - MCP 新增只读工具：`list_databases()`、`sample_rows(measurement, n=5)`、`explain_sql(sql)`；其中 `list_databases()` 会按 `GrantsStore` 与当前 Bearer 身份过滤为“当前可见数据库”集合。
   - 新增 `SonnetDbMcpSchemaCache`：对 `list_measurements` / `describe_measurement` 及对应 schema resources 统一提供 30 秒进程内缓存，降低 Copilot / MCP 高频探测时的重复 schema 开销。
