@@ -678,7 +678,7 @@ internal sealed class CopilotAgent
         {
             notes.Add(context.CanWrite
                 ? "当前凭据具备写权限，可以调用 execute_sql 直接执行。"
-                : "当前凭据没有写权限，请把该 SQL 交由具备写权限的用户执行。");
+                : "当前凭据没有写权限。您可以：① 请管理员执行 GRANT WRITE ON DATABASE <db> TO <user> 为您授权（授权后在当前会话中即可生效）；② 将上方 SQL 复制后，切换到 SQL Console 选项卡，以具备写权限的账号粘贴执行。");
         }
 
         var payload = new McpDraftSqlResult(
@@ -1851,8 +1851,8 @@ internal sealed class CopilotAgent
         - draft_sql(sql)                        // 起草 / 校验 CREATE MEASUREMENT、INSERT、DELETE、SELECT 等 SQL，但不会改写数据
         - execute_sql(sql, maxRows?)            // 真正执行 CREATE MEASUREMENT / INSERT / DELETE / SELECT；写入需调用方具备写权限
 
-        输出必须是严格 JSON，格式如下：
-        {"tools":[{"name":"draft_sql","sql":"CREATE MEASUREMENT cpu (host TAG, usage FIELD FLOAT, temperature FIELD FLOAT)"}]}
+        输出必须是严格 JSON，格式如下（示例：用户要求建一个保存电脑性能数据的仓库）：
+        {"tools":[{"name":"list_databases"},{"name":"draft_sql","sql":"CREATE MEASUREMENT host_perf (host TAG, region TAG, cpu_pct FIELD FLOAT, mem_pct FIELD FLOAT, cpu_temp_celsius FIELD FLOAT, disk_read_mbps FIELD FLOAT, disk_write_mbps FIELD FLOAT, net_rx_mbps FIELD FLOAT, net_tx_mbps FIELD FLOAT)"}]}
 
         规则：
         - 只能输出 JSON，不要附加解释、Markdown 或代码块。
@@ -1887,12 +1887,15 @@ internal sealed class CopilotAgent
         - 使用中文回答。
         - 优先给出直接结论，再补充必要说明。
         - 如果给定了 citations，请尽量在对应句子末尾用 [C1] 这样的编号引用。
-        - 若证据不足，请明确说明“不确定”或“当前结果不足以确认”。
-        - 当用户的意图是“建表 / 写入 / 删除 / 改 schema”时，必须给出可直接复制执行的 SQL：
+        - 若证据不足，请明确说明不确定或当前结果不足以确认。
+        - 当用户的意图是建表 / 写入 / 删除 / 改 schema 时，必须给出可直接复制执行的 SQL：
             * 把每条 SQL 单独放在 ```sql 代码块中。
             * 优先使用 draft_sql / execute_sql 工具返回的 SQL，不要自行改写列名或类型。
             * 如果工具返回了 notes（例如缺权限、measurement 已存在），请把这些注意事项明确转述给用户。
-        - 当用户给出只是“描述”而工具没生成 SQL 时，根据已有 measurement 列表与字段，自己起草一条最贴近需求的 CREATE MEASUREMENT / INSERT 语句，同样放进 ```sql 代码块。
+            * 生成建表 SQL 时，必须覆盖用户提到的所有指标字段，不要只写一两个示例字段就省略其余。例如用户说 CPU 使用率、内存使用率、温度，就必须把三者都建成独立的 FIELD 列。
+            * 如果当前数据库不存在（list_databases 结果为空或不含目标库），必须在建表 SQL 之前先给出 CREATE DATABASE 语句，并说明需要先创建数据库。
+            * 当 SQL 已准备好且界面提供了 SQL Console 选项卡时，请在回答末尾提示用户：可以点击页面上方的 SQL Console 按鈕，将上方 SQL 粘贴进去直接执行。
+        - 当用户给出只是描述而工具没生成 SQL 时，根据已有 measurement 列表与字段，自己起草一条最贴近需求的 CREATE MEASUREMENT / INSERT 语句，同样放进 ```sql 代码块。
         """;
 }
 
