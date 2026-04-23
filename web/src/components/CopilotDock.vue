@@ -7,6 +7,7 @@
   <!-- 展开态：浮窗面板 -->
   <div
     v-else
+    ref="dockEl"
     class="copilot-dock"
     :class="{ 'is-fullscreen': fullscreen }"
     :style="dockStyle"
@@ -20,7 +21,7 @@
         </n-tag>
       </div>
       <n-space size="small" :wrap="false">
-        <n-popover trigger="click" placement="bottom-end" :width="300" :show-arrow="false">
+        <n-popover trigger="click" placement="bottom-end" :width="300" :show-arrow="false" :to="dockEl ?? 'body'">
           <template #trigger>
             <n-button text size="tiny" title="会话历史">≡</n-button>
           </template>
@@ -29,7 +30,7 @@
               <n-text strong style="font-size: 12px">最近会话</n-text>
               <n-space size="small">
                 <n-button size="tiny" type="primary" @click="onNewSession">+ 新会话</n-button>
-                <n-popconfirm @positive-click="onClearAll">
+                <n-popconfirm @positive-click="onClearAll" :to="dockEl ?? 'body'">
                   <template #trigger>
                     <n-button size="tiny" quaternary type="error" :disabled="sessions.recent.length === 0">清空</n-button>
                   </template>
@@ -93,16 +94,7 @@
       </div>
     </section>
 
-    <!-- 数据库选择 -->
-    <section class="copilot-dock__db">
-      <n-select
-        size="small"
-        v-model:value="selectedDb"
-        :options="dbOptions"
-        placeholder="选择数据库（用于工具调用）"
-        :disabled="dbs.length === 0"
-      />
-    </section>
+    <!-- 数据库选择 已移除：数据库由 AI 根据上下文自动推断，无需手动选择 -->
 
     <!-- M8: 模型选择器 -->
     <section class="copilot-dock__model">
@@ -125,23 +117,34 @@
 
     <!-- M7: 权限模式选择 -->
     <section class="copilot-dock__perm">
-      <n-popconfirm
-        v-if="permissionMode === 'read-only'"
-        positive-text="启用读写"
-        negative-text="保持只读"
-        @positive-click="permissionMode = 'read-write'"
-      >
-        <template #trigger>
-          <n-tag
-            size="tiny"
-            type="success"
-            :bordered="false"
-            style="cursor: pointer"
-            title="点击切换为读写模式"
-          >🔒 只读模式</n-tag>
-        </template>
-        切换为读写模式后，Copilot 可直接执行 INSERT / DELETE / CREATE MEASUREMENT 等写入语句。是否启用？
-      </n-popconfirm>
+      <!-- 只读模式：点击 tag 展开内联确认，避免 popconfirm teleport 被遮挡 -->
+      <template v-if="permissionMode === 'read-only'">
+        <n-tag
+          size="tiny"
+          type="success"
+          :bordered="false"
+          style="cursor: pointer"
+          title="点击切换为读写模式"
+          @click="permConfirmVisible = !permConfirmVisible"
+        >🔒 只读模式</n-tag>
+        <!-- 内联确认条：直接渲染在 dock 内，不 teleport，不会被遮挡 -->
+        <transition name="perm-confirm">
+          <div v-if="permConfirmVisible" class="copilot-dock__perm-confirm">
+            <n-text depth="3" style="font-size: 11px; flex: 1">
+              切换后 Copilot 可执行写入语句，是否启用？
+            </n-text>
+            <n-button
+              size="tiny"
+              type="primary"
+              @click="permissionMode = 'read-write'; permConfirmVisible = false"
+            >启用读写</n-button>
+            <n-button
+              size="tiny"
+              @click="permConfirmVisible = false"
+            >取消</n-button>
+          </div>
+        </transition>
+      </template>
       <n-tag
         v-else
         size="tiny"
@@ -262,12 +265,12 @@ const dialog = useDialog();
 
 const visible = ref(false);
 const fullscreen = ref(false);
+const dockEl = ref<HTMLElement | null>(null);  // dock 容器引用，供 Naive UI 浮层 teleport 到 dock 内部
 const status = ref<CopilotKnowledgeStatus | null>(null);
 const reindexing = ref(false);
 
 const dbs = ref<string[]>([]);
 const selectedDb = ref<string>('');
-const dbOptions = computed<SelectOption[]>(() => dbs.value.map((d) => ({ label: d, value: d })));
 
 const prompt = ref('');
 /** 来自当前会话的历史消息（只读引用，写入通过 sessions store）。 */
@@ -292,6 +295,7 @@ const contextEnabled = ref(true);
 type PermissionMode = 'read-only' | 'read-write';
 const PERM_STORAGE_KEY = 'sndb.copilot.permission.v1';
 const permissionMode = ref<PermissionMode>('read-only');
+const permConfirmVisible = ref(false);  // 内联确认条显示状态
 try {
   const saved = localStorage.getItem(PERM_STORAGE_KEY);
   if (saved === 'read-write') permissionMode.value = 'read-write';
@@ -758,17 +762,15 @@ function syncFinalAnswerSql(answer: string): void {
 
 async function send(): Promise<void> {
   if (!prompt.value.trim() || running.value) return;
-  const targetDb = effectiveDb.value;
-  if (!targetDb) {
-    errorMsg.value = '请先选择一个数据库（Copilot 的工具调用以数据库为单位）';
-    return;
-  }
   if (!auth.state?.token) return;
+
+  // 数据库自动推断：优先 SQL Console 当前库，其次已知库列表第一个，最后留空让后端处理
+  const targetDb = effectiveDb.value || (dbs.value.length > 0 ? dbs.value[0] : '');
 
   // 没有当前会话则先建一个；切换数据库时同步到当前会话。
   if (!sessions.current) {
     sessions.create(targetDb);
-  } else if (sessions.current.db !== targetDb) {
+  } else if (targetDb && sessions.current.db !== targetDb) {
     sessions.current.db = targetDb;
   }
   const sessionId = sessions.currentId;
@@ -1043,6 +1045,29 @@ onMounted(() => {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  gap: 4px;
+}
+.copilot-dock__perm-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: rgba(44, 123, 229, 0.06);
+  border: 1px solid rgba(44, 123, 229, 0.18);
+  border-radius: 6px;
+  font-size: 11px;
+}
+/* 滑入/滑出动画 */
+.perm-confirm-enter-active,
+.perm-confirm-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.perm-confirm-enter-from,
+.perm-confirm-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 .copilot-dock__ctx {
   padding: 6px 12px 0;
