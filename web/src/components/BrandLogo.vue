@@ -30,7 +30,7 @@
     </div>
     <div v-if="!compact" class="brand-copy">
       <span class="brand-name">SonnetDB</span>
-      <span class="brand-tagline">AI-Powered Time-Series Database</span>
+      <span class="brand-tagline">AI 加持的时序数据库</span>
     </div>
   </div>
 </template>

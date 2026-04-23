@@ -7,14 +7,14 @@
         </div>
         <div class="brand-copy">
           <span class="brand-name">SonnetDB</span>
-          <span class="brand-tagline">AI-Powered Time-Series Database</span>
+          <span class="brand-tagline">AI 加持的时序数据库</span>
         </div>
       </div>
       <nav class="hero-nav" aria-label="页面导航">
         <button type="button" class="nav-link" @click="scrollToSection('overview')">产品概览</button>
-        <button type="button" class="nav-link" @click="scrollToSection('database')">功能体系</button>
-        <button type="button" class="nav-link" @click="scrollToSection('capabilities')">核心功能</button>
-        <button type="button" class="nav-link" @click="scrollToSection('roadmap')">路线图</button>
+        <button type="button" class="nav-link" @click="scrollToSection('database')">核心价值</button>
+        <button type="button" class="nav-link" @click="scrollToSection('capabilities')">重点能力</button>
+        <button type="button" class="nav-link" @click="scrollToSection('roadmap')">能力演进</button>
         <button type="button" class="nav-cta" @click="goManage">进入后台</button>
       </nav>
     </header>
@@ -23,14 +23,15 @@
       <section id="overview" class="hero-panel">
         <div class="hero-copy">
           <div class="hero-eyebrow">产品定位</div>
-          <h1>面向采集、查询、治理与智能协作的一体化时序数据库。</h1>
+          <h1>让设备数据、业务指标与智能分析在一套时序数据库里协同工作。</h1>
           <p class="hero-subtitle">
-            SonnetDB 面向真实的时序业务场景，帮助团队用一套产品完成数据写入、SQL 查询、实时事件、权限治理和 AI 辅助分析。
+            SonnetDB 面向工业设备、传感器网络、车联网和智能运维场景，不只提供数据存储，还提供控制优化、趋势预测、
+            轨迹分析、语义检索和 Copilot 智能协作能力，帮助客户更快完成从采集到分析、从判断到执行的完整闭环。
           </p>
 
           <div class="hero-actions">
-            <button type="button" class="primary-action" @click="scrollToSection('capabilities')">查看核心功能</button>
-            <button type="button" class="secondary-action" @click="scrollToSection('database')">看功能体系</button>
+            <button type="button" class="primary-action" @click="scrollToSection('capabilities')">查看重点能力</button>
+            <button type="button" class="secondary-action" @click="scrollToSection('database')">了解产品价值</button>
           </div>
 
           <div class="hero-badges" aria-label="产品要点">
@@ -50,31 +51,31 @@
             </div>
             <div class="stage-grid">
               <section class="stage-card stage-card-large">
-                <span class="stage-kicker">功能总览</span>
-                <strong>用一套数据库产品打通时序写入、查询分析、运维治理和 AI 协作。</strong>
+                <span class="stage-kicker">产品价值</span>
+                <strong>从实时采集、控制优化到预测分析和智能问答，SonnetDB 帮助客户把时间序列数据真正用起来。</strong>
                 <p>
-                  SonnetDB 面向设备遥测、业务指标和日志序列等场景，把 SQL Console、数据库管理、事件流和 SNDBCopilot 放在统一工作台里。
+                  无论是设备遥测、能源监测、车辆轨迹还是业务指标，SonnetDB 都能把实时数据、分析能力和智能协作整合到统一平台中。
                 </p>
                 <ul class="stage-list">
-                  <li>从写入到查询都围绕时序场景设计，优先解决时间窗、聚合和过滤问题。</li>
-                  <li>数据库、用户、权限、Token 和实时事件集中在后台统一管理。</li>
-                  <li>AI 能力可以直接贴近日常排障、分析和运维协作，而不是做成外围附属。</li>
+                  <li>帮助设备和传感器场景快速实现速率分析、平滑处理、控制优化和结果回写。</li>
+                  <li>帮助业务和运维团队直接完成预测分析、异常识别、统计聚合和趋势判断。</li>
+                  <li>帮助智能应用落地语义检索、地图轨迹分析和 Copilot 自然语言协作。</li>
                 </ul>
               </section>
               <section class="stage-card">
-                <span class="stage-kicker">数据接入</span>
-                <strong>SQL 写入 + 时序采集</strong>
-                <p>让指标、日志和设备数据先顺畅进入系统，再围绕时序负载做后续分析与治理。</p>
+                <span class="stage-kicker">控制优化</span>
+                <strong>PID 控制与回写闭环</strong>
+                <p>支持控制量计算、自动整定和结果回写，让数据库直接服务设备调优和控制回路优化。</p>
               </section>
               <section class="stage-card">
-                <span class="stage-kicker">数据分析</span>
-                <strong>时间窗 + 聚合 + 过滤</strong>
-                <p>以时间范围、tag 条件和聚合计算为中心，让 SQL 查询更适合时序业务。</p>
+                <span class="stage-kicker">预测分析</span>
+                <strong>趋势预测与异常识别</strong>
+                <p>支持预测、异常检测、变点识别、速率分析和多种平滑算法，帮助客户更早发现问题、更快做出判断。</p>
               </section>
               <section class="stage-card stage-card-accent">
-                <span class="stage-kicker">智能协作</span>
-                <strong>SNDBCopilot + 实时事件</strong>
-                <p>把 AI 助手和事件流接进同一工作流，帮助团队更快定位问题、理解数据和处理运维任务。</p>
+                <span class="stage-kicker">智能与时空</span>
+                <strong>语义检索、轨迹分析与 Copilot</strong>
+                <p>支持智能搜索、地图轨迹分析、设备位置洞察和自然语言问答，让数据平台更接近真正可用的智能产品。</p>
               </section>
             </div>
           </div>
@@ -83,10 +84,10 @@
 
       <section id="database" class="section-panel">
         <div class="section-heading">
-          <span class="hero-eyebrow">功能体系</span>
-          <h2>首页优先讲清楚你能用 SonnetDB 做什么。</h2>
+          <span class="hero-eyebrow">核心价值</span>
+          <h2>一套产品覆盖数据采集、分析决策、控制优化与智能协作。</h2>
           <p>
-            我们把首页重点从实现细节转向产品能力本身，让访问者一眼看到接入、查询、管理和 AI 协作这些真正有价值的功能模块。
+            SonnetDB 将原本分散在数据库、算法服务、地图系统和智能助手中的能力整合到一起，让客户用更低的系统复杂度获得更高的数据价值。
           </p>
         </div>
 
@@ -101,8 +102,8 @@
 
       <section id="capabilities" class="section-panel">
         <div class="section-heading">
-          <span class="hero-eyebrow">核心功能</span>
-          <h2>围绕使用场景组织功能，而不是围绕底层实现组织文案。</h2>
+          <span class="hero-eyebrow">重点能力</span>
+          <h2>围绕设备、传感器、轨迹数据和智能运维打造可直接落地的产品能力。</h2>
         </div>
 
         <div class="feature-grid">
@@ -116,8 +117,8 @@
 
       <section id="roadmap" class="section-panel section-panel-tight">
         <div class="section-heading">
-          <span class="hero-eyebrow">路线图映射</span>
-          <h2>当前首页的内容，来自路线图里已经落地的核心能力。</h2>
+          <span class="hero-eyebrow">能力演进</span>
+          <h2>产品正持续增强高级分析、智能检索、Copilot 和时空分析能力。</h2>
         </div>
 
         <div class="roadmap-grid">
@@ -143,80 +144,134 @@ const setup = useSetupStore();
 
 const heroHighlights = [
   {
-    title: 'SQL 写查',
-    description: '围绕时序数据的写入、过滤、聚合和时间范围查询设计',
+    title: '控制优化',
+    description: '内置 PID、自动整定、速率分析、平滑处理和控制结果回写能力',
   },
   {
-    title: '统一管理',
-    description: '数据库、用户、权限、Token 和事件流集中在一个后台里',
+    title: '预测分析',
+    description: '支持趋势预测、异常识别、统计分析和丰富的时间窗口计算',
   },
   {
-    title: 'AI 傍身',
-    description: 'SNDBCopilot 为分析、排障和运维协作提供智能辅助',
+    title: '向量时空',
+    description: '支持语义检索、位置分析、轨迹洞察和地图联动展示',
+  },
+  {
+    title: 'Copilot',
+    description: '用自然语言完成查询、解释、排障和知识检索，降低使用门槛',
   },
 ];
 
 const databaseCards = [
   {
-    kicker: '接入',
-    title: 'SQL 写入与时序数据落库',
-    description: '围绕指标、设备和日志序列的接入体验组织能力，让数据尽快写入并进入可查询状态。',
+    kicker: '控制',
+    title: '设备控制优化',
+    description: '支持 PID 控制、自动整定和控制结果回写，帮助客户更快把时序数据接入控制闭环。',
   },
   {
-    kicker: '查询',
-    title: '时间范围、聚合与过滤优先',
-    description: '把时间窗、tag 条件、聚合分析和 SQL Console 作为第一层体验，而不是放在深处。',
+    kicker: '传感器',
+    title: '传感器数据分析',
+    description: '支持速率计算、平滑处理、累计变化、状态持续时长和状态切换分析，适合设备监测与运维场景。',
   },
   {
-    kicker: '治理',
-    title: '数据库与权限管理同台协作',
-    description: '数据库列表、用户、权限与 Token 都放在统一后台里，方便团队日常维护与分工。',
+    kicker: '预测',
+    title: '趋势预测与异常预警',
+    description: '支持时间序列预测、异常检测、变点识别和相似走势分析，帮助客户更早发现风险和机会。',
   },
   {
-    kicker: '智能',
-    title: 'AI 助手和实时事件直接可用',
-    description: 'SNDBCopilot 与事件流入口直接面向运营和排障流程，让系统更像一个会协作的数据库产品。',
+    kicker: '函数',
+    title: '高级统计与自定义分析',
+    description: '支持分位数、直方图、去重统计、滑动窗口和自定义函数扩展，满足行业化分析需求。',
+  },
+  {
+    kicker: '向量',
+    title: '语义检索与相似度分析',
+    description: '支持向量数据、相似度搜索和高性能近邻检索，为知识库、推荐和智能问答提供底座。',
+  },
+  {
+    kicker: '时空',
+    title: '位置数据与轨迹分析',
+    description: '支持地理围栏、距离计算、速度统计、轨迹回放和地图联动，适合车联网、物流和移动设备场景。',
+  },
+  {
+    kicker: 'Copilot',
+    title: 'Copilot 智能协作',
+    description: '把知识库、技能库和智能工具接入数据库工作流，让查询、排障、解释和培训更轻松。',
   },
 ];
 
 const capabilityCards = [
   {
     index: '01',
-    title: 'SQL Console',
-    description: '直接执行时序 SQL，快速完成查询验证、数据排查和结果确认。',
+    title: 'PID 控制与自动整定',
+    description: '既能根据历史数据估算控制参数，也能直接输出控制结果，帮助客户缩短调试和投产周期。',
   },
   {
     index: '02',
-    title: '数据库管理',
-    description: '集中查看数据库状态与配置，让数据资产管理和日常维护更清楚。',
+    title: '控制结果回写',
+    description: '支持把控制计算结果直接回写到时间序列中，方便做回测、联调和自动化闭环验证。',
   },
   {
     index: '03',
-    title: '权限与 Token',
-    description: '用用户、授权和 Token 管理把访问控制做进产品，而不是留给外围系统补齐。',
+    title: '速率与平滑分析',
+    description: '支持速率、增量、累计、移动平均和指数平滑，让设备数据趋势更容易理解和使用。',
   },
   {
     index: '04',
-    title: 'SNDBCopilot 与事件流',
-    description: '把 AI 辅助和实时事件放进同一后台，让分析、诊断和协作动作更连贯。',
+    title: '预测与异常检测',
+    description: '支持未来趋势预测、异常识别、突变检测和相似走势对比，帮助团队提前响应风险。',
+  },
+  {
+    index: '05',
+    title: '高级统计分析',
+    description: '支持均值以外的分位数、中位数、众数、波动分析、直方图和去重统计，适合更复杂的数据分析需求。',
+  },
+  {
+    index: '06',
+    title: '时间窗口与状态分析',
+    description: '支持补点、插值、状态持续时长和状态切换分析，帮助客户更细致地理解设备运行过程。',
+  },
+  {
+    index: '07',
+    title: '自定义分析扩展',
+    description: '支持把企业自己的算法和分析逻辑接入 SonnetDB，形成更贴合行业场景的专属能力。',
+  },
+  {
+    index: '08',
+    title: '语义搜索与知识召回',
+    description: '支持向量检索和相似内容召回，为知识库问答、文档搜索和智能应用提供基础能力。',
+  },
+  {
+    index: '09',
+    title: '地图与轨迹分析',
+    description: '支持位置筛选、距离测算、轨迹里程、速度统计和地图回放，方便做车辆、人员和设备路径分析。',
+  },
+  {
+    index: '10',
+    title: 'SNDBCopilot',
+    description: '通过自然语言帮助客户完成数据查询、结果解释、问题定位和知识检索，显著降低使用门槛。',
   },
 ];
 
 const roadmapCards = [
   {
-    milestone: 'M1-M4',
-    title: '数据底座',
-    description: '先把时序写入、查询和基本管理能力做稳，为上层产品体验打好基础。',
+    milestone: '当前可用',
+    title: '高级分析能力',
+    description: '控制优化、预测分析、高级统计和自定义扩展已经成为 SonnetDB 的核心产品能力。',
   },
   {
-    milestone: 'M5-M7',
-    title: '稳定运行',
-    description: '继续补齐保留策略、压缩、删除与索引能力，让数据库在长期运行中更可靠。',
+    milestone: '持续增强',
+    title: '智能检索能力',
+    description: '语义检索和高性能相似度搜索正在持续增强，为智能问答和知识库应用提供更强支持。',
   },
   {
-    milestone: 'M8-M12',
-    title: '智能与扩展',
-    description: '把控制台、事件流、AI 协作和更多高阶能力串起来，形成完整的产品闭环。',
+    milestone: '持续增强',
+    title: 'Copilot 智能协作',
+    description: 'Copilot 将进一步增强自然语言查询、知识检索、运维排障和分析辅助体验。',
+  },
+  {
+    milestone: '持续增强',
+    title: '时空分析能力',
+    description: '位置数据、轨迹分析、地图联动和时空洞察能力将持续完善，覆盖更多车联网和移动设备场景。',
   },
 ];
 
@@ -450,7 +505,7 @@ async function goManage(): Promise<void> {
 }
 
 .hero-badges {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   margin-top: 28px;
 }
 
@@ -571,7 +626,7 @@ async function goManage(): Promise<void> {
 }
 
 .info-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .info-card,
@@ -587,19 +642,18 @@ async function goManage(): Promise<void> {
 }
 
 .feature-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .roadmap-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 @media (max-width: 1100px) {
   .hero-panel,
   .info-grid,
   .feature-grid,
-  .roadmap-grid,
-  .hero-badges {
+  .roadmap-grid {
     grid-template-columns: 1fr;
   }
 
