@@ -104,6 +104,25 @@
       />
     </section>
 
+    <!-- M8: 模型选择器 -->
+    <section class="copilot-dock__model">
+      <n-select
+        size="small"
+        v-model:value="selectedModel"
+        :options="modelOptions"
+        placeholder="使用服务端默认模型"
+        clearable
+        filterable
+        tag
+        :show="modelOptions.length > 0 || undefined"
+        :title="modelDefault ? `服务端默认：${modelDefault}` : '未配置默认模型'"
+      >
+        <template #empty>
+          {{ modelDefault ? `默认：${modelDefault}` : '可输入模型名（如 gpt-4o-mini、qwen2.5-coder-32b）' }}
+        </template>
+      </n-select>
+    </section>
+
     <!-- M7: 权限模式选择 -->
     <section class="copilot-dock__perm">
       <n-popconfirm
@@ -218,6 +237,7 @@ import {
   streamCopilotChat,
   fetchCopilotKnowledgeStatus,
   triggerCopilotDocsIngest,
+  fetchCopilotModels,
   type CopilotKnowledgeStatus,
   type CopilotMessage,
 } from '@/api/copilot';
@@ -274,6 +294,51 @@ watch(permissionMode, (mode) => {
     // 忽略
   }
 });
+
+// === M8: 模型选择器 ===
+const MODEL_STORAGE_KEY = 'sndb.copilot.model.v1';
+const selectedModel = ref<string>('');
+const modelDefault = ref<string>('');
+const modelCandidates = ref<string[]>([]);
+try {
+  const saved = localStorage.getItem(MODEL_STORAGE_KEY);
+  if (saved) selectedModel.value = saved;
+} catch {
+  // 忽略
+}
+watch(selectedModel, (m) => {
+  try {
+    localStorage.setItem(MODEL_STORAGE_KEY, m ?? '');
+  } catch {
+    // 忽略
+  }
+});
+const modelOptions = computed<SelectOption[]>(() => {
+  const set = new Set<string>();
+  const out: SelectOption[] = [];
+  const push = (label: string, value: string, suffix = '') => {
+    if (!value || set.has(value)) return;
+    set.add(value);
+    out.push({ label: label + suffix, value });
+  };
+  if (modelDefault.value) push(modelDefault.value, modelDefault.value, '（默认）');
+  for (const c of modelCandidates.value) push(c, c);
+  if (selectedModel.value) push(selectedModel.value, selectedModel.value);
+  return out;
+});
+async function loadModels() {
+  if (!auth.state?.token) return;
+  try {
+    const m = await fetchCopilotModels(auth.state.token);
+    modelDefault.value = m.default ?? '';
+    modelCandidates.value = m.candidates ?? [];
+    if (!selectedModel.value && modelDefault.value) {
+      // 没有用户选择时，UI 显示默认模型但不写入 localStorage（保持空 = 走服务端默认）。
+    }
+  } catch {
+    // 忽略：模型列表不可用时退化为自由输入。
+  }
+}
 
 const ROUTE_LABELS: Record<string, string> = {
   dashboard: '概览',
@@ -358,6 +423,7 @@ function open(): void {
   if (status.value === null) {
     void reloadStatus();
     void reloadDbs();
+    void loadModels();
   }
 }
 
@@ -452,7 +518,12 @@ async function send(): Promise<void> {
   try {
     for await (const event of streamCopilotChat(
       auth.state.token,
-      { db: selectedDb.value, messages: requestMessages, mode: permissionMode.value },
+      {
+        db: selectedDb.value,
+        messages: requestMessages,
+        mode: permissionMode.value,
+        ...(selectedModel.value ? { model: selectedModel.value } : {}),
+      },
       ac.signal,
     )) {
       if (ac.signal.aborted) break;
@@ -674,6 +745,9 @@ onMounted(() => {
 
 .copilot-dock__db {
   padding: 8px 12px 0;
+}
+.copilot-dock__model {
+  padding: 6px 12px 0;
 }
 .copilot-dock__perm {
   padding: 6px 12px 0;

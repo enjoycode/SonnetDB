@@ -218,6 +218,7 @@ internal sealed class CopilotAgent
                     new AiMessage("system", PlannerSystemPrompt),
                     new AiMessage("user", plannerPrompt),
                 ],
+                context.ModelOverride,
                 cancellationToken).ConfigureAwait(false);
 
             if (TryParsePlan(response, out var plan) && plan is not null)
@@ -251,6 +252,7 @@ internal sealed class CopilotAgent
                     new AiMessage("system", AnswerSystemPrompt),
                     new AiMessage("user", prompt),
                 ],
+                context.ModelOverride,
                 cancellationToken).ConfigureAwait(false);
 
             if (!string.IsNullOrWhiteSpace(answer))
@@ -840,6 +842,7 @@ internal sealed class CopilotAgent
                     new AiMessage("system", SqlRepairSystemPrompt),
                     new AiMessage("user", prompt),
                 ],
+                context.ModelOverride,
                 cancellationToken).ConfigureAwait(false);
             return TryExtractSql(response);
         }
@@ -1542,11 +1545,13 @@ internal sealed class CopilotAgent
 /// <param name="Database">当前数据库实例。</param>
 /// <param name="VisibleDatabases">当前凭据可见的数据库集合。</param>
 /// <param name="CanWrite">当前调用方对该数据库是否拥有写权限（控制 <c>execute_sql</c> 是否可对 DDL/DML 生效）。</param>
+/// <param name="ModelOverride">可选模型覆盖（M8）：如果不为空，会传递给 chat provider 作为本次调用的模型名。</param>
 internal sealed record CopilotAgentContext(
     string DatabaseName,
     Tsdb Database,
     IReadOnlyList<string> VisibleDatabases,
-    bool CanWrite = false);
+    bool CanWrite = false,
+    string? ModelOverride = null);
 
 /// <summary>
 /// 多轮对话的规范化结果。

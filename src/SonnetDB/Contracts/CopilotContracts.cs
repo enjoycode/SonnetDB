@@ -133,6 +133,15 @@ public sealed record CopilotKnowledgeStatusResponse(
     int SkillCount);
 
 /// <summary>
+/// Copilot 可用 chat 模型列表（M8）。
+/// </summary>
+/// <param name="Default">服务端配置的默认模型；未配置时为空字符串。</param>
+/// <param name="Candidates">用户可选的候选模型列表；UI 仍允许自由输入。</param>
+public sealed record CopilotModelsResponse(
+    string Default,
+    IReadOnlyList<string> Candidates);
+
+/// <summary>
 /// Copilot 聊天请求体（PR #67 / #68）。
 /// </summary>
 /// <param name="Db">目标数据库名。</param>
@@ -141,13 +150,15 @@ public sealed record CopilotKnowledgeStatusResponse(
 /// <param name="DocsK">文档召回条数；为空时使用服务端默认值。</param>
 /// <param name="SkillsK">技能召回条数；为空时使用服务端默认值。</param>
 /// <param name="Mode">权限模式（M7）：<c>read-only</c>（默认，禁止写入工具调用）或 <c>read-write</c>（允许，但仍受凭据本身权限上限约束）。</param>
+/// <param name="Model">模型覆盖（M8）：不为空时覆盖 <c>CopilotOptions.Chat.Model</c>，允许用户临时选择不同 chat 模型。</param>
 public sealed record CopilotChatRequest(
     string Db,
     string? Message = null,
     List<AiMessage>? Messages = null,
     int? DocsK = null,
     int? SkillsK = null,
-    string? Mode = null);
+    string? Mode = null,
+    string? Model = null);
 
 /// <summary>
 /// Copilot 回答中附带的一条 citation（PR #67）。

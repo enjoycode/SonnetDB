@@ -110,6 +110,11 @@ public sealed class CopilotChatOptions
     public string? Model { get; set; }
 
     /// <summary>
+    /// （M8）可供前端 CopilotDock 下拉选择的模型列表。仅用于 UI 预填，实际能否调用取决于上游服务。
+    /// </summary>
+    public List<string> AvailableModels { get; set; } = new();
+
+    /// <summary>
     /// 请求超时（秒）。默认 <c>60</c>。
     /// </summary>
     public int TimeoutSeconds { get; set; } = 60;

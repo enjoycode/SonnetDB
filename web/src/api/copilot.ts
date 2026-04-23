@@ -43,6 +43,24 @@ export async function triggerCopilotDocsIngest(token: string, force = false): Pr
   }
 }
 
+/** 服务端可用 chat 模型（M8）。 */
+export interface CopilotModels {
+  default: string;
+  candidates: string[];
+}
+
+/** 拉取 Copilot 可用 chat 模型列表（默认 + 候选）。 */
+export async function fetchCopilotModels(token: string): Promise<CopilotModels> {
+  const resp = await fetch('/v1/copilot/models', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Copilot 模型列表读取失败 ${resp.status}: ${text}`);
+  }
+  return (await resp.json()) as CopilotModels;
+}
+
 
 export interface CopilotCitation {
   id: string;
@@ -76,6 +94,10 @@ export interface CopilotChatRequest {
    * - `read-write`：在凭据本身具备写权限的前提下允许 execute_sql 写入。
    */
   mode?: 'read-only' | 'read-write';
+  /**
+   * M8：本次请求使用的 chat 模型名；为空时使用服务端 `CopilotChatOptions.Model` 默认。
+   */
+  model?: string;
 }
 
 export async function* streamCopilotChat(

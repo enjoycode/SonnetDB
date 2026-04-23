@@ -21,7 +21,7 @@ public sealed class OpenAICompatibleChatProvider : IChatProvider
         _httpClientFactory = httpClientFactory;
     }
 
-    public async ValueTask<string> CompleteAsync(IReadOnlyList<AiMessage> messages, CancellationToken cancellationToken = default)
+    public async ValueTask<string> CompleteAsync(IReadOnlyList<AiMessage> messages, string? modelOverride = null, CancellationToken cancellationToken = default)
     {
         if (messages.Count == 0)
             throw new ArgumentException("Chat messages cannot be empty.", nameof(messages));
@@ -32,13 +32,16 @@ public sealed class OpenAICompatibleChatProvider : IChatProvider
         if (string.IsNullOrWhiteSpace(_options.ApiKey))
             throw new InvalidOperationException("Copilot chat API key is missing.");
 
-        if (string.IsNullOrWhiteSpace(_options.Model))
+        var effectiveModel = !string.IsNullOrWhiteSpace(modelOverride)
+            ? modelOverride!.Trim()
+            : _options.Model;
+        if (string.IsNullOrWhiteSpace(effectiveModel))
             throw new InvalidOperationException("Copilot chat model is missing.");
 
         using var client = _httpClientFactory.CreateClient();
         client.Timeout = TimeSpan.FromSeconds(_options.TimeoutSeconds > 0 ? _options.TimeoutSeconds : 60);
 
-        var request = new OpenAiChatCompletionRequest(_options.Model, messages, Stream: false);
+        var request = new OpenAiChatCompletionRequest(effectiveModel, messages, Stream: false);
         var json = JsonSerializer.Serialize(request, ServerJsonContext.Default.OpenAiChatCompletionRequest);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var message = new HttpRequestMessage(HttpMethod.Post, new Uri(endpoint, "chat/completions"))

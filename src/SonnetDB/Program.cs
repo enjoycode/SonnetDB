@@ -857,6 +857,30 @@ public static class Program
             }
         }));
 
+        // ---- Copilot 模型选择器（M8）：返回服务端默认模型 + 候选列表 ----
+        app.MapMethods("/v1/copilot/models", new[] { "GET" }, (RequestDelegate)(async ctx =>
+        {
+            if (!copilotOptions.Enabled)
+            {
+                await WriteSimpleErrorAsync(ctx, StatusCodes.Status409Conflict, "copilot_disabled", "Copilot 子系统已禁用。").ConfigureAwait(false);
+                return;
+            }
+
+            var defaultModel = copilotOptions.Chat.Model ?? string.Empty;
+            var candidates = (copilotOptions.Chat.AvailableModels ?? new List<string>())
+                .Where(static m => !string.IsNullOrWhiteSpace(m))
+                .Select(static m => m.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (!string.IsNullOrWhiteSpace(defaultModel) && !candidates.Any(c => string.Equals(c, defaultModel, StringComparison.OrdinalIgnoreCase)))
+                candidates.Insert(0, defaultModel);
+
+            var resp = new CopilotModelsResponse(defaultModel, candidates);
+            ctx.Response.StatusCode = StatusCodes.Status200OK;
+            ctx.Response.ContentType = "application/json; charset=utf-8";
+            await JsonSerializer.SerializeAsync(ctx.Response.Body, resp, ServerJsonContext.Default.CopilotModelsResponse).ConfigureAwait(false);
+        }));
+
         // ---- MCP：按数据库绑定的 Streamable HTTP 端点 ----
         app.MapMcp("/mcp/{db}");
     }
