@@ -20,6 +20,47 @@
         </n-tag>
       </div>
       <n-space size="small" :wrap="false">
+        <n-popover trigger="click" placement="bottom-end" :width="300" :show-arrow="false">
+          <template #trigger>
+            <n-button text size="tiny" title="会话历史">≡</n-button>
+          </template>
+          <div class="copilot-dock__sessions" @mousedown.stop>
+            <div class="copilot-dock__sessions-head">
+              <n-text strong style="font-size: 12px">最近会话</n-text>
+              <n-space size="small">
+                <n-button size="tiny" type="primary" @click="onNewSession">+ 新会话</n-button>
+                <n-popconfirm @positive-click="onClearAll">
+                  <template #trigger>
+                    <n-button size="tiny" quaternary type="error" :disabled="sessions.recent.length === 0">清空</n-button>
+                  </template>
+                  确认清空全部本地会话历史？此操作不可恢复。
+                </n-popconfirm>
+              </n-space>
+            </div>
+            <div v-if="sessions.recent.length === 0" class="copilot-dock__sessions-empty">
+              暂无会话，发送第一条消息即可创建。
+            </div>
+            <ul v-else class="copilot-dock__sessions-list">
+              <li
+                v-for="s in sessions.recent"
+                :key="s.id"
+                :class="{ 'is-active': s.id === sessions.currentId }"
+                @click="onSwitchSession(s.id)"
+              >
+                <div class="copilot-dock__sessions-item-main">
+                  <div class="copilot-dock__sessions-item-title" :title="s.title">{{ s.title }}</div>
+                  <div class="copilot-dock__sessions-item-meta">
+                    {{ s.db || '(无数据库)' }} · {{ Math.floor(s.messages.length / 2) }} 轮 · {{ formatRelative(s.updatedAt) }}
+                  </div>
+                </div>
+                <n-space size="small" :wrap="false" class="copilot-dock__sessions-item-actions">
+                  <n-button quaternary size="tiny" @click.stop="onRenameSession(s)" title="重命名">✎</n-button>
+                  <n-button quaternary size="tiny" type="error" @click.stop="onRemoveSession(s.id)" title="删除">×</n-button>
+                </n-space>
+              </li>
+            </ul>
+          </div>
+        </n-popover>
         <n-button text size="tiny" @click="reloadStatus" title="刷新知识库状态">↻</n-button>
         <n-button text size="tiny" @click="fullscreen = !fullscreen" :title="fullscreen ? '还原' : '全屏'">{{ fullscreen ? '⊟' : '⊕' }}</n-button>
         <n-button text size="tiny" @click="close" title="收起到角标">×</n-button>
@@ -61,6 +102,61 @@
         placeholder="选择数据库（用于工具调用）"
         :disabled="dbs.length === 0"
       />
+    </section>
+
+    <!-- M7: 权限模式选择 -->
+    <section class="copilot-dock__perm">
+      <n-popconfirm
+        v-if="permissionMode === 'read-only'"
+        positive-text="启用读写"
+        negative-text="保持只读"
+        @positive-click="permissionMode = 'read-write'"
+      >
+        <template #trigger>
+          <n-tag
+            size="tiny"
+            type="success"
+            :bordered="false"
+            style="cursor: pointer"
+            title="点击切换为读写模式"
+          >🔒 只读模式</n-tag>
+        </template>
+        切换为读写模式后，Copilot 可直接执行 INSERT / DELETE / CREATE MEASUREMENT 等写入语句。是否启用？
+      </n-popconfirm>
+      <n-tag
+        v-else
+        size="tiny"
+        type="warning"
+        :bordered="false"
+        closable
+        style="cursor: pointer"
+        title="点击 × 切换回只读"
+        @close="permissionMode = 'read-only'"
+      >⚠️ 读写模式</n-tag>
+      <n-text depth="3" style="font-size: 11px; margin-left: 6px">
+        {{ permissionMode === 'read-only' ? 'Copilot 只能查询' : '可执行写入（仍受凭据权限约束）' }}
+      </n-text>
+    </section>
+
+    <!-- M6: 页面上下文 -->
+    <section v-if="pageContextSummary" class="copilot-dock__ctx">
+      <n-tag
+        size="tiny"
+        :type="contextEnabled ? 'info' : 'default'"
+        :bordered="false"
+        closable
+        @close="contextEnabled = false"
+      >
+        📍 {{ pageContextSummary }}
+      </n-tag>
+      <n-button
+        v-if="!contextEnabled"
+        size="tiny"
+        text
+        type="primary"
+        style="margin-left: 6px"
+        @click="contextEnabled = true"
+      >启用</n-button>
     </section>
 
     <!-- 消息流 -->
@@ -108,9 +204,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { NButton, NInput, NSelect, NSpace, NTag, NText, type SelectOption, useMessage } from 'naive-ui';
+import { computed, h, nextTick, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
+import {
+  NButton, NInput, NPopconfirm, NPopover, NSelect, NSpace, NTag, NText,
+  type SelectOption, useDialog, useMessage,
+} from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
+import { useCopilotSessionsStore, type CopilotSession } from '@/stores/copilotSessions';
+import { useSqlConsoleStore } from '@/stores/sqlConsole';
 import { listDatabases } from '@/api/server';
 import {
   streamCopilotChat,
@@ -121,7 +223,11 @@ import {
 } from '@/api/copilot';
 
 const auth = useAuthStore();
+const sessions = useCopilotSessionsStore();
+const sqlConsole = useSqlConsoleStore();
+const route = useRoute();
 const message = useMessage();
+const dialog = useDialog();
 
 const visible = ref(false);
 const fullscreen = ref(false);
@@ -133,7 +239,8 @@ const selectedDb = ref<string>('');
 const dbOptions = computed<SelectOption[]>(() => dbs.value.map((d) => ({ label: d, value: d })));
 
 const prompt = ref('');
-const messages = ref<CopilotMessage[]>([]);
+/** 来自当前会话的历史消息（只读引用，写入通过 sessions store）。 */
+const messages = computed<CopilotMessage[]>(() => sessions.current?.messages ?? []);
 const streamBuffer = ref('');
 const running = ref(false);
 const errorMsg = ref('');
@@ -146,6 +253,105 @@ const dockPos = ref({ right: 24, bottom: 24 });
 const dockStyle = computed(() => fullscreen.value
   ? { right: '0', bottom: '0', top: '0', left: '0', width: 'auto', height: 'auto' }
   : { right: `${dockPos.value.right}px`, bottom: `${dockPos.value.bottom}px` });
+
+// === M6: 页面上下文 ===
+const contextEnabled = ref(true);
+
+// === M7: 权限模式 ===
+type PermissionMode = 'read-only' | 'read-write';
+const PERM_STORAGE_KEY = 'sndb.copilot.permission.v1';
+const permissionMode = ref<PermissionMode>('read-only');
+try {
+  const saved = localStorage.getItem(PERM_STORAGE_KEY);
+  if (saved === 'read-write') permissionMode.value = 'read-write';
+} catch {
+  // 忽略 localStorage 不可用
+}
+watch(permissionMode, (mode) => {
+  try {
+    localStorage.setItem(PERM_STORAGE_KEY, mode);
+  } catch {
+    // 忽略
+  }
+});
+
+const ROUTE_LABELS: Record<string, string> = {
+  dashboard: '概览',
+  sql: 'SQL Console',
+  chat: 'Copilot Chat',
+  databases: '数据库管理',
+  events: '事件流',
+  users: '用户',
+  grants: '权限',
+  tokens: 'Token',
+  'ai-settings': 'Copilot 设置',
+  home: '产品首页',
+};
+
+interface PageContext {
+  routeKey: string;
+  routeLabel: string;
+  routePath: string;
+  sql: string;
+  sqlDb: string;
+}
+
+const pageContext = computed<PageContext | null>(() => {
+  const key = (route.name as string | undefined) ?? '';
+  if (!key) return null;
+  return {
+    routeKey: key,
+    routeLabel: ROUTE_LABELS[key] ?? key,
+    routePath: route.path,
+    sql: sqlConsole.currentSql.trim(),
+    sqlDb: sqlConsole.currentDb,
+  };
+});
+
+const pageContextSummary = computed<string>(() => {
+  const ctx = pageContext.value;
+  if (!ctx) return '';
+  const parts: string[] = [`当前页面：${ctx.routeLabel}`];
+  if (ctx.routeKey === 'sql' && ctx.sql.length > 0) {
+    parts.push(`SQL ${ctx.sql.length} 字符`);
+  }
+  if (ctx.sqlDb && ctx.sqlDb !== selectedDb.value) {
+    parts.push(`db=${ctx.sqlDb}`);
+  }
+  return parts.join(' · ');
+});
+
+/** 把页面上下文构造成一条 system message（仅在 send 时临时注入，不进入会话历史）。 */
+function buildContextMessage(): CopilotMessage | null {
+  if (!contextEnabled.value) return null;
+  const ctx = pageContext.value;
+  if (!ctx) return null;
+  const lines: string[] = [
+    '[页面上下文 / Page Context]',
+    `用户当前所在页面：${ctx.routeLabel}（路由：${ctx.routePath}）。`,
+  ];
+  if (ctx.routeKey === 'sql') {
+    if (ctx.sqlDb) lines.push(`SQL Console 当前选中的数据库：${ctx.sqlDb}。`);
+    if (ctx.sql) {
+      // 截断超长 SQL 避免超过 token 预算
+      const snippet = ctx.sql.length > 2000 ? `${ctx.sql.slice(0, 2000)}\n…(已截断 ${ctx.sql.length - 2000} 字符)` : ctx.sql;
+      lines.push('用户正在编辑的 SQL：');
+      lines.push('```sql');
+      lines.push(snippet);
+      lines.push('```');
+    } else {
+      lines.push('SQL Console 编辑器当前为空。');
+    }
+    lines.push('如果用户提问与「这条 SQL / 当前查询 / 报错」相关，请优先围绕上面这段 SQL 回答。');
+  } else if (ctx.routeKey === 'databases') {
+    lines.push('用户正在查看「数据库管理」页面。如果用户问到 measurement / schema 信息，可调用工具列出当前选中数据库的 measurement。');
+  } else if (ctx.routeKey === 'events') {
+    lines.push('用户正在查看「事件流」页面（实时 SSE 事件）。');
+  } else if (ctx.routeKey === 'ai-settings') {
+    lines.push('用户正在「Copilot 设置」页面，可能在排查 API Key / 模型配置 / 知识库索引相关问题。');
+  }
+  return { role: 'system', content: lines.join('\n') };
+}
 
 function open(): void {
   visible.value = true;
@@ -214,10 +420,20 @@ async function send(): Promise<void> {
   }
   if (!auth.state?.token) return;
 
+  // 没有当前会话则先建一个；切换数据库时同步到当前会话。
+  if (!sessions.current) {
+    sessions.create(selectedDb.value);
+  } else if (sessions.current.db !== selectedDb.value) {
+    sessions.current.db = selectedDb.value;
+  }
+  const sessionId = sessions.currentId;
+
   const userText = prompt.value.trim();
+  const userMsg: CopilotMessage = { role: 'user', content: userText };
   prompt.value = '';
   errorMsg.value = '';
-  messages.value.push({ role: 'user', content: userText });
+  // 把 user 消息立即加到当前会话（先用临时 assistant 占位，最后替换）。
+  sessions.current!.messages.push(userMsg);
   streamBuffer.value = '';
   running.value = true;
   await scrollToBottom();
@@ -225,27 +441,41 @@ async function send(): Promise<void> {
   const ac = new AbortController();
   abort.value = ac;
 
+  // M6: 构造请求载荷 = [可选 system 上下文] + 会话历史
+  const ctxMsg = buildContextMessage();
+  const requestMessages: CopilotMessage[] = ctxMsg
+    ? [ctxMsg, ...sessions.current!.messages]
+    : sessions.current!.messages;
+
   const stepLog: string[] = [];
+  let finalAnswer = '';
   try {
     for await (const event of streamCopilotChat(
       auth.state.token,
-      { db: selectedDb.value, messages: messages.value },
+      { db: selectedDb.value, messages: requestMessages, mode: permissionMode.value },
       ac.signal,
     )) {
       if (ac.signal.aborted) break;
       if (event.type === 'final' && event.answer) {
+        finalAnswer = event.answer;
         streamBuffer.value = event.answer;
       } else if (event.type === 'error') {
         errorMsg.value = event.message ?? 'Copilot 请求失败';
       } else if (event.message) {
         stepLog.push(event.message);
         // 仅当尚无 final 时显示进度
-        if (!streamBuffer.value) streamBuffer.value = stepLog.slice(-3).join('\n');
+        if (!finalAnswer) streamBuffer.value = stepLog.slice(-3).join('\n');
       }
       await scrollToBottom();
     }
-    if (streamBuffer.value) {
-      messages.value.push({ role: 'assistant', content: streamBuffer.value });
+    if (finalAnswer) {
+      // 把 assistant 最终回答写回会话；store 的 watch 会持久化。
+      sessions.current!.messages.push({ role: 'assistant', content: finalAnswer });
+      sessions.current!.updatedAt = Date.now();
+      if (sessions.current!.title === '新会话') {
+        // 用 setMessages 触发标题派生
+        sessions.setMessages(sessionId!, sessions.current!.messages);
+      }
       streamBuffer.value = '';
     }
   } catch (e: unknown) {
@@ -261,6 +491,52 @@ async function send(): Promise<void> {
 
 function stop(): void {
   abort.value?.abort();
+}
+
+// === 会话历史（M5）===
+function onNewSession(): void {
+  sessions.create(selectedDb.value);
+  streamBuffer.value = '';
+  errorMsg.value = '';
+}
+
+function onSwitchSession(id: string): void {
+  sessions.switchTo(id);
+  streamBuffer.value = '';
+  errorMsg.value = '';
+  if (sessions.current?.db) {
+    selectedDb.value = sessions.current.db;
+  }
+}
+
+function onRemoveSession(id: string): void {
+  sessions.remove(id);
+}
+
+function onClearAll(): void {
+  sessions.clearAll();
+}
+
+function onRenameSession(s: CopilotSession): void {
+  const inputRef = ref(s.title);
+  dialog.create({
+    title: '重命名会话',
+    content: () => h(NInput, { value: inputRef.value, 'onUpdate:value': (v: string) => { inputRef.value = v; } }),
+    positiveText: '保存',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      sessions.rename(s.id, inputRef.value);
+    },
+  });
+}
+
+function formatRelative(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3600_000)} 小时前`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  try { return new Date(ts).toLocaleDateString(); } catch { return ''; }
 }
 
 async function scrollToBottom(): Promise<void> {
@@ -399,6 +675,19 @@ onMounted(() => {
 .copilot-dock__db {
   padding: 8px 12px 0;
 }
+.copilot-dock__perm {
+  padding: 6px 12px 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.copilot-dock__ctx {
+  padding: 6px 12px 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
 .copilot-dock__messages {
   flex: 1;
   overflow-y: auto;
@@ -449,4 +738,51 @@ onMounted(() => {
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   background: #fff;
 }
+
+/* 会话历史 popover */
+.copilot-dock__sessions { font-size: 12px; }
+.copilot-dock__sessions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  margin-bottom: 6px;
+}
+.copilot-dock__sessions-empty {
+  padding: 16px 4px;
+  color: var(--sndb-ink-soft, #678);
+  text-align: center;
+}
+.copilot-dock__sessions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.copilot-dock__sessions-list li {
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  align-items: center;
+}
+.copilot-dock__sessions-list li:hover { background: rgba(13, 59, 102, 0.05); }
+.copilot-dock__sessions-list li.is-active { background: rgba(44, 123, 229, 0.12); }
+.copilot-dock__sessions-item-main { flex: 1; min-width: 0; }
+.copilot-dock__sessions-item-title {
+  font-weight: 600;
+  color: var(--sndb-ink-strong, #111);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.copilot-dock__sessions-item-meta {
+  color: var(--sndb-ink-soft, #678);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.copilot-dock__sessions-item-actions { flex-shrink: 0; }
 </style>

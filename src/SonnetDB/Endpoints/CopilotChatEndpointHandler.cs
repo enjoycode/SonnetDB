@@ -88,7 +88,12 @@ internal static class CopilotChatEndpointHandler
 
         var visibleDatabases = DatabaseAccessEvaluator.GetVisibleDatabases(ctx, grantsStore, registry.ListDatabases());
         var canWrite = DatabaseAccessEvaluator.HasPermission(permission, DatabasePermission.Write);
-        var context = new CopilotAgentContext(req.Db, tsdb, visibleDatabases, canWrite);
+        // M7：客户端可显式声明 read-only 模式，强制收紧 execute_sql 写权限。
+        // 仅 read-write 走凭据自身的权限上限；其它取值（含未提供 / read-only / 任意拼写）一律按只读处理。
+        var requestedMode = req.Mode?.Trim();
+        var clientAllowsWrite = string.Equals(requestedMode, "read-write", StringComparison.OrdinalIgnoreCase);
+        var effectiveCanWrite = canWrite && clientAllowsWrite;
+        var context = new CopilotAgentContext(req.Db, tsdb, visibleDatabases, effectiveCanWrite);
 
         ctx.Response.StatusCode = StatusCodes.Status200OK;
         ctx.Response.ContentType = sse

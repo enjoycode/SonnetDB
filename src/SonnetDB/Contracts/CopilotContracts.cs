@@ -140,12 +140,14 @@ public sealed record CopilotKnowledgeStatusResponse(
 /// <param name="Messages">多轮对话历史，通常按 <c>user/assistant</c> 交替排列，最后一条应为当前用户问题。</param>
 /// <param name="DocsK">文档召回条数；为空时使用服务端默认值。</param>
 /// <param name="SkillsK">技能召回条数；为空时使用服务端默认值。</param>
+/// <param name="Mode">权限模式（M7）：<c>read-only</c>（默认，禁止写入工具调用）或 <c>read-write</c>（允许，但仍受凭据本身权限上限约束）。</param>
 public sealed record CopilotChatRequest(
     string Db,
     string? Message = null,
     List<AiMessage>? Messages = null,
     int? DocsK = null,
-    int? SkillsK = null);
+    int? SkillsK = null,
+    string? Mode = null);
 
 /// <summary>
 /// Copilot 回答中附带的一条 citation（PR #67）。

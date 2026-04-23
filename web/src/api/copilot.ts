@@ -70,6 +70,12 @@ export interface CopilotChatRequest {
   messages: CopilotMessage[];
   docsK?: number;
   skillsK?: number;
+  /**
+   * M7：权限模式。
+   * - `read-only`（默认）：服务端将 `canWrite` 强制置为 false，agent 不会调用 execute_sql 写入。
+   * - `read-write`：在凭据本身具备写权限的前提下允许 execute_sql 写入。
+   */
+  mode?: 'read-only' | 'read-write';
 }
 
 export async function* streamCopilotChat(

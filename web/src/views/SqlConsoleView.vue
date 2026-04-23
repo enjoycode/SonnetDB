@@ -178,6 +178,11 @@ async function loadSchema(db: string): Promise<void> {
 
 watch(targetDb, (db) => loadSchema(db));
 
+// M6: 同步当前 SQL/db 到共享 store，供 CopilotDock 注入页面上下文。
+watch([targetDb, sql], ([db, text]) => {
+  sqlConsole.setCurrent(db === CONTROL_PLANE_KEY ? '' : db, text);
+}, { immediate: true });
+
 async function run(): Promise<void> {
   errorMsg.value = '';
   resultColumns.value = [];
