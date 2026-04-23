@@ -107,6 +107,46 @@ public sealed class CopilotInfrastructureTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Healthz_ReportsEmbeddingReady_ForBuiltinProvider_ByDefault()
+    {
+        var options = CreateServerOptions();
+        // Embedding 默认就是 builtin，无需任何外部资源。
+        options.Copilot.Chat.Provider = "openai";
+        options.Copilot.Chat.Endpoint = "https://example.com/v1/";
+        options.Copilot.Chat.ApiKey = "chat-key";
+        options.Copilot.Chat.Model = "chat-model";
+
+        var readiness = new CopilotReadiness(options).Evaluate();
+
+        Assert.Equal("builtin", options.Copilot.Embedding.Provider);
+        Assert.True(readiness.EmbeddingReady);
+        Assert.True(readiness.ChatReady);
+        Assert.True(readiness.Ready);
+        Assert.Null(readiness.Reason);
+    }
+
+    [Fact]
+    public async Task BuiltinHashEmbeddingProvider_ProducesStableUnitVectors()
+    {
+        var provider = new BuiltinHashEmbeddingProvider(new CopilotEmbeddingOptions { Provider = "builtin" });
+
+        var v1 = await provider.EmbedAsync("CREATE MEASUREMENT cpu (host TAG, usage FIELD FLOAT)");
+        var v2 = await provider.EmbedAsync("CREATE MEASUREMENT cpu (host TAG, usage FIELD FLOAT)");
+        var v3 = await provider.EmbedAsync("完全不同的中文文本");
+
+        Assert.Equal(BuiltinHashEmbeddingProvider.VectorDimension, v1.Length);
+        Assert.Equal(v1, v2);
+
+        double norm = 0;
+        foreach (var x in v1)
+            norm += x * x;
+        Assert.InRange(Math.Sqrt(norm), 0.99, 1.01);
+
+        // 不同输入应产生不同向量（极少数 hash 碰撞概率忽略）。
+        Assert.NotEqual(v1, v3);
+    }
+
+    [Fact]
     public void Healthz_ReportsCopilotNotReady_WhenLocalModelFileIsMissing()
     {
         var options = CreateServerOptions();

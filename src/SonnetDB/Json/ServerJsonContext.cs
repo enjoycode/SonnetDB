@@ -95,6 +95,7 @@ namespace SonnetDB.Json;
 [JsonSerializable(typeof(List<CopilotSkillsSearchHit>))]
 [JsonSerializable(typeof(CopilotSkillLoadResponse))]
 [JsonSerializable(typeof(CopilotSkillsListResponse))]
+[JsonSerializable(typeof(CopilotKnowledgeStatusResponse))]
 [JsonSerializable(typeof(CopilotChatRequest))]
 [JsonSerializable(typeof(CopilotChatEvent))]
 [JsonSerializable(typeof(CopilotCitation))]

@@ -95,6 +95,38 @@ internal sealed class DocsIngestor
         return new DocsIngestStats(files.Count, indexedFiles, skippedFiles, deletedFiles, writtenChunks, dryRun);
     }
 
+    /// <summary>
+    /// 知识库当前已索引状态汇总（供 Web Admin 状态卡片只读展示）。
+    /// </summary>
+    /// <param name="IndexedFiles">已建索引的文档源数。</param>
+    /// <param name="IndexedChunks">已写入向量库的块总数。</param>
+    /// <param name="LastIngestedUtc">最近一次摄入完成时间（UTC ISO-8601）；从未摄入则为 null。</param>
+    internal sealed record DocsIndexState(int IndexedFiles, int IndexedChunks, string? LastIngestedUtc);
+
+    /// <summary>
+    /// 读取 docs_state 表，汇总当前知识库已索引文件数 / 块数 / 最近摄入时间。
+    /// </summary>
+    internal async Task<DocsIndexState> GetIndexStateAsync(CancellationToken cancellationToken = default)
+    {
+        var rows = await LoadStateAsync(cancellationToken).ConfigureAwait(false);
+        if (rows.Count == 0)
+            return new DocsIndexState(0, 0, null);
+
+        var indexedFiles = rows.Count;
+        var indexedChunks = 0;
+        string? latest = null;
+        foreach (var row in rows.Values)
+        {
+            indexedChunks += (int)row.ChunkCount;
+            if (string.IsNullOrEmpty(row.ModifiedUtc))
+                continue;
+            if (latest is null || string.CompareOrdinal(row.ModifiedUtc, latest) > 0)
+                latest = row.ModifiedUtc;
+        }
+
+        return new DocsIndexState(indexedFiles, indexedChunks, latest);
+    }
+
     internal Tsdb GetKnowledgeDb()
     {
         _registry.TryCreate(CopilotDatabaseName, out var tsdb);

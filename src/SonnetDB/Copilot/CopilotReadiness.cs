@@ -57,6 +57,12 @@ public sealed class CopilotReadiness
 
     private static bool EvaluateEmbedding(CopilotEmbeddingOptions options, out string? reason)
     {
+        if (string.Equals(options.Provider, "builtin", StringComparison.OrdinalIgnoreCase))
+        {
+            reason = null;
+            return true;
+        }
+
         if (string.Equals(options.Provider, "local", StringComparison.OrdinalIgnoreCase))
         {
             if (string.IsNullOrWhiteSpace(options.LocalModelPath))

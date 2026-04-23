@@ -110,6 +110,29 @@ public sealed record CopilotSkillLoadResponse(
 public sealed record CopilotSkillsListResponse(IReadOnlyList<CopilotSkillsSearchHit> Skills);
 
 /// <summary>
+/// Copilot 知识库可视化状态（M1.5）。供 Web Admin "知识库" 卡片只读展示。
+/// </summary>
+/// <param name="Enabled">Copilot 子系统是否启用。</param>
+/// <param name="EmbeddingProvider">当前 embedding provider 名（builtin / local / openai）。</param>
+/// <param name="EmbeddingFallback">是否处于降级状态（用户配 local，但因模型缺失退化为 builtin）。</param>
+/// <param name="VectorDimension">向量维度，固定 384。</param>
+/// <param name="DocsRoots">实际扫描的文档根目录（绝对路径）。</param>
+/// <param name="IndexedFiles">已建索引的文档源数。</param>
+/// <param name="IndexedChunks">已写入向量库的块数。</param>
+/// <param name="LastIngestedUtc">最近一次摄入完成时间（UTC ISO-8601）；从未摄入则为 null。</param>
+/// <param name="SkillCount">已加载的 Copilot 技能数。</param>
+public sealed record CopilotKnowledgeStatusResponse(
+    bool Enabled,
+    string EmbeddingProvider,
+    bool EmbeddingFallback,
+    int VectorDimension,
+    IReadOnlyList<string> DocsRoots,
+    int IndexedFiles,
+    int IndexedChunks,
+    string? LastIngestedUtc,
+    int SkillCount);
+
+/// <summary>
 /// Copilot 聊天请求体（PR #67 / #68）。
 /// </summary>
 /// <param name="Db">目标数据库名。</param>

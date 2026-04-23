@@ -53,9 +53,10 @@ public sealed class CopilotSkillsOptions
 public sealed class CopilotEmbeddingOptions
 {
     /// <summary>
-    /// provider 名称：<c>local</c> 或 <c>openai</c>。
+    /// provider 名称：<c>builtin</c>（默认，零依赖 hash 投影） / <c>local</c>（本地 ONNX） / <c>openai</c>。
+    /// 默认使用 <c>builtin</c>，保证首次启动不需要任何外部依赖即可使 Copilot 就绪。
     /// </summary>
-    public string Provider { get; set; } = "local";
+    public string Provider { get; set; } = "builtin";
 
     /// <summary>
     /// 本地 ONNX 模型路径。

@@ -209,7 +209,15 @@ public static class Program
             if (string.Equals(options.Provider, "openai", StringComparison.OrdinalIgnoreCase))
                 return new OpenAICompatibleEmbeddingProvider(options, sp.GetRequiredService<IHttpClientFactory>());
             if (string.Equals(options.Provider, "local", StringComparison.OrdinalIgnoreCase))
-                return new LocalOnnxEmbeddingProvider(options);
+            {
+                // 本地 ONNX 骨架还未接入 tokenizer；若模型文件不存在则自动降级到 builtin，
+                // 避免首次部署者后 Copilot 在运行时装载报错。
+                if (!string.IsNullOrWhiteSpace(options.LocalModelPath) && File.Exists(options.LocalModelPath))
+                    return new LocalOnnxEmbeddingProvider(options);
+                return new BuiltinHashEmbeddingProvider(options);
+            }
+            if (string.Equals(options.Provider, "builtin", StringComparison.OrdinalIgnoreCase))
+                return new BuiltinHashEmbeddingProvider(options);
 
             throw new InvalidOperationException($"Unsupported copilot embedding provider '{options.Provider}'.");
         });
@@ -799,6 +807,53 @@ public static class Program
             catch (Exception ex)
             {
                 await WriteSimpleErrorAsync(ctx, StatusCodes.Status500InternalServerError, "skills_load_failed", ex.Message).ConfigureAwait(false);
+            }
+        }));
+
+        // ---- Copilot 知识库可视化（M1.5）：只读 status ----
+        app.MapMethods("/v1/copilot/knowledge/status", new[] { "GET" }, (RequestDelegate)(async ctx =>
+        {
+            if (!copilotOptions.Enabled)
+            {
+                await WriteSimpleErrorAsync(ctx, StatusCodes.Status409Conflict, "copilot_disabled", "Copilot 子系统已禁用。").ConfigureAwait(false);
+                return;
+            }
+
+            try
+            {
+                var ingestor = app.Services.GetRequiredService<DocsIngestor>();
+                var skillRegistry = app.Services.GetRequiredService<SkillRegistry>();
+                var indexState = await ingestor.GetIndexStateAsync(ctx.RequestAborted).ConfigureAwait(false);
+                var skillCount = skillRegistry.List().Count;
+
+                var embeddingProvider = app.Services.GetRequiredService<IEmbeddingProvider>();
+                var providerName = copilotOptions.Embedding.Provider ?? "builtin";
+                var fallback = embeddingProvider is BuiltinHashEmbeddingProvider builtin && builtin.IsFallback;
+
+                var docsRoots = copilotOptions.Docs.Roots
+                    .Where(static root => !string.IsNullOrWhiteSpace(root))
+                    .Select(static root => Path.IsPathRooted(root) ? Path.GetFullPath(root) : Path.GetFullPath(root, Directory.GetCurrentDirectory()))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                var resp = new CopilotKnowledgeStatusResponse(
+                    Enabled: true,
+                    EmbeddingProvider: providerName,
+                    EmbeddingFallback: fallback,
+                    VectorDimension: BuiltinHashEmbeddingProvider.VectorDimension,
+                    DocsRoots: docsRoots,
+                    IndexedFiles: indexState.IndexedFiles,
+                    IndexedChunks: indexState.IndexedChunks,
+                    LastIngestedUtc: indexState.LastIngestedUtc,
+                    SkillCount: skillCount);
+
+                ctx.Response.StatusCode = StatusCodes.Status200OK;
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                await JsonSerializer.SerializeAsync(ctx.Response.Body, resp, ServerJsonContext.Default.CopilotKnowledgeStatusResponse).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await WriteSimpleErrorAsync(ctx, StatusCodes.Status500InternalServerError, "knowledge_status_failed", ex.Message).ConfigureAwait(false);
             }
         }));
 
