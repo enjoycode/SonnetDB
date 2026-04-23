@@ -120,7 +120,7 @@ public sealed class CopilotEvalSuiteTests : IAsyncLifetime
             var stopwatch = Stopwatch.StartNew();
 
             await foreach (var evt in agent.RunAsync(
-                               new CopilotAgentContext(AlphaDatabaseName, alpha, visibleDatabases),
+                               new CopilotAgentContext(AlphaDatabaseName, alpha, visibleDatabases, CanWrite: true),
                                messages,
                                docsK: scenario.DocsK,
                                skillsK: scenario.SkillsK))

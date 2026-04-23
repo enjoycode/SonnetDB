@@ -42,6 +42,8 @@ namespace SonnetDB.Json;
 [JsonSerializable(typeof(McpSqlQueryResult))]
 [JsonSerializable(typeof(McpSampleRowsResult))]
 [JsonSerializable(typeof(McpExplainSqlResult))]
+[JsonSerializable(typeof(McpDraftSqlResult))]
+[JsonSerializable(typeof(McpExecuteSqlResult))]
 [JsonSerializable(typeof(McpDocsSearchHit))]
 [JsonSerializable(typeof(McpDocsSearchResult))]
 [JsonSerializable(typeof(McpSkillSearchHit))]

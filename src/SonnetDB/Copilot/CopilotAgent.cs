@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using SonnetDB.Catalog;
 using SonnetDB.Contracts;
 using SonnetDB.Engine;
 using SonnetDB.Exceptions;
@@ -347,6 +348,15 @@ internal sealed class CopilotAgent
                         null,
                         null,
                         planned.Sql.Trim()),
+                "draft_sql" when !string.IsNullOrWhiteSpace(planned.Sql)
+                    => new CopilotToolInvocation(normalizedName, null, null, null, planned.Sql.Trim()),
+                "execute_sql" when !string.IsNullOrWhiteSpace(planned.Sql)
+                    => new CopilotToolInvocation(
+                        normalizedName,
+                        NormalizeLimit(planned.MaxRows, SonnetDbMcpResults.DefaultToolRowLimit, SonnetDbMcpResults.MaxToolRowLimit),
+                        null,
+                        null,
+                        planned.Sql.Trim()),
                 _ => null,
             };
 
@@ -378,12 +388,33 @@ internal sealed class CopilotAgent
                 return tools;
             }
 
+            if (LooksLikeWriteSql(sql))
+            {
+                tools.Add(new CopilotToolInvocation("draft_sql", null, null, null, sql));
+                return tools;
+            }
+
             tools.Add(new CopilotToolInvocation(
                 "query_sql",
                 SonnetDbMcpResults.DefaultToolRowLimit,
                 null,
                 null,
                 sql));
+            return tools;
+        }
+
+        if (LooksLikeWriteIntent(lowered))
+        {
+            // 当用户只描述需求（建表 / 插入数据）但没给 SQL 时，先把已有 measurement 列表喂给 LLM，
+            // 让最终回答阶段据此生成可执行的 CREATE MEASUREMENT / INSERT 语句。
+            tools.Add(new CopilotToolInvocation(
+                "list_measurements",
+                SonnetDbMcpResults.DefaultToolRowLimit,
+                null,
+                null,
+                null));
+            if (measurement is not null)
+                tools.Add(new CopilotToolInvocation("describe_measurement", null, null, measurement, null));
             return tools;
         }
 
@@ -472,6 +503,10 @@ internal sealed class CopilotAgent
                 return new CopilotToolExecutionResult(tool, ExecuteSampleRows(context, tool), []);
             case "explain_sql":
                 return new CopilotToolExecutionResult(tool, ExecuteExplainSql(context, tool), []);
+            case "draft_sql":
+                return new CopilotToolExecutionResult(tool, ExecuteDraftSql(context, tool), []);
+            case "execute_sql":
+                return new CopilotToolExecutionResult(tool, ExecuteExecuteSql(context, tool), []);
             case "query_sql":
                 return await ExecuteQuerySqlWithRepairAsync(
                     context,
@@ -553,6 +588,177 @@ internal sealed class CopilotAgent
         var payload = _explainSqlService.Explain(context.DatabaseName, context.Database, statement);
         return SerializeToolResult(payload, ServerJsonContext.Default.McpExplainSqlResult);
     }
+
+    private string ExecuteDraftSql(CopilotAgentContext context, CopilotToolInvocation tool)
+    {
+        var sql = tool.Sql
+            ?? throw new InvalidOperationException("draft_sql 缺少 sql 参数。");
+
+        SqlStatement statement;
+        try
+        {
+            statement = SqlParser.Parse(sql);
+        }
+        catch (SqlParseException ex)
+        {
+            throw new SqlExecutionException(sql, "parse", ex.Message, ex);
+        }
+
+        if (!IsDraftableStatement(statement))
+        {
+            throw new InvalidOperationException(
+                "draft_sql 仅支持 CREATE MEASUREMENT、INSERT、DELETE、SELECT、SHOW MEASUREMENTS 与 DESCRIBE [MEASUREMENT]。");
+        }
+
+        var (statementType, measurement, isWrite) = DescribeStatement(statement);
+        bool? exists = null;
+        var notes = new List<string>(2);
+
+        if (isWrite && measurement is not null)
+        {
+            var existing = context.Database.Measurements.TryGet(measurement);
+            exists = existing is not null;
+            switch (statement)
+            {
+                case CreateMeasurementStatement when exists is true:
+                    notes.Add($"measurement '{measurement}' 已经存在；如需追加列，请改用 INSERT 而不是 CREATE。");
+                    break;
+                case CreateMeasurementStatement when exists is false:
+                    notes.Add($"measurement '{measurement}' 当前不存在，可以执行该 CREATE 语句创建。");
+                    break;
+                case InsertStatement when exists is false:
+                    notes.Add($"measurement '{measurement}' 尚未创建，执行 INSERT 之前需要先 CREATE MEASUREMENT。");
+                    break;
+                case DeleteStatement when exists is false:
+                    notes.Add($"measurement '{measurement}' 不存在，DELETE 不会影响任何数据。");
+                    break;
+            }
+        }
+
+        if (isWrite)
+        {
+            notes.Add(context.CanWrite
+                ? "当前凭据具备写权限，可以调用 execute_sql 直接执行。"
+                : "当前凭据没有写权限，请把该 SQL 交由具备写权限的用户执行。");
+        }
+
+        var payload = new McpDraftSqlResult(
+            Database: context.DatabaseName,
+            StatementType: statementType,
+            Sql: sql.Trim(),
+            Measurement: measurement,
+            IsWrite: isWrite,
+            MeasurementExists: exists,
+            Notes: notes);
+        return SerializeToolResult(payload, ServerJsonContext.Default.McpDraftSqlResult);
+    }
+
+    private string ExecuteExecuteSql(CopilotAgentContext context, CopilotToolInvocation tool)
+    {
+        var sql = tool.Sql
+            ?? throw new InvalidOperationException("execute_sql 缺少 sql 参数。");
+
+        SqlStatement statement;
+        try
+        {
+            statement = SqlParser.Parse(sql);
+        }
+        catch (SqlParseException ex)
+        {
+            throw new SqlExecutionException(sql, "parse", ex.Message, ex);
+        }
+
+        if (!IsDraftableStatement(statement))
+        {
+            throw new SqlExecutionException(
+                sql,
+                "validate",
+                "execute_sql 仅支持 CREATE MEASUREMENT、INSERT、DELETE、SELECT、SHOW MEASUREMENTS 与 DESCRIBE [MEASUREMENT]。");
+        }
+
+        var (statementType, measurement, isWrite) = DescribeStatement(statement);
+        if (isWrite && !context.CanWrite)
+        {
+            throw new SqlExecutionException(
+                sql,
+                "permission",
+                $"当前凭据对数据库 '{context.DatabaseName}' 没有写权限，无法执行 {statementType.ToUpperInvariant()} 语句。");
+        }
+
+        var maxRows = tool.MaxRows ?? SonnetDbMcpResults.DefaultToolRowLimit;
+        SqlStatement executable = statement;
+        var canTruncate = false;
+        if (statement is SelectStatement selectStatement)
+            executable = SonnetDbMcpResults.ApplyToolRowLimit(selectStatement, maxRows, out canTruncate);
+
+        object? executionResult;
+        try
+        {
+            executionResult = SqlExecutor.ExecuteStatement(context.Database, executable);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or ArgumentException)
+        {
+            throw new SqlExecutionException(sql, "execute", ex.Message, ex);
+        }
+
+        IReadOnlyList<string>? columns = null;
+        IReadOnlyList<IReadOnlyList<JsonElementValue>>? rows = null;
+        int? returnedRows = null;
+        int? rowsAffected = null;
+        var truncated = false;
+
+        switch (executionResult)
+        {
+            case SelectExecutionResult selectResult:
+                var (rowList, isTruncated) = SonnetDbMcpResults.SliceRows(selectResult, maxRows, canTruncate);
+                columns = selectResult.Columns;
+                rows = rowList;
+                returnedRows = rowList.Count;
+                truncated = isTruncated;
+                break;
+            case InsertExecutionResult insertResult:
+                rowsAffected = insertResult.RowsInserted;
+                break;
+            case DeleteExecutionResult deleteResult:
+                rowsAffected = deleteResult.TombstonesAdded;
+                break;
+            case MeasurementSchema schema:
+                rowsAffected = schema.Columns.Count;
+                break;
+        }
+
+        var payload = new McpExecuteSqlResult(
+            Database: context.DatabaseName,
+            StatementType: statementType,
+            Sql: sql.Trim(),
+            Measurement: measurement,
+            RowsAffected: rowsAffected,
+            Columns: columns,
+            Rows: rows,
+            ReturnedRows: returnedRows,
+            Truncated: truncated);
+        return SerializeToolResult(payload, ServerJsonContext.Default.McpExecuteSqlResult);
+    }
+
+    private static (string StatementType, string? Measurement, bool IsWrite) DescribeStatement(SqlStatement statement)
+        => statement switch
+        {
+            CreateMeasurementStatement create => ("create_measurement", create.Name, true),
+            InsertStatement insert => ("insert", insert.Measurement, true),
+            DeleteStatement delete => ("delete", delete.Measurement, true),
+            SelectStatement select => ("select", select.Measurement, false),
+            ShowMeasurementsStatement => ("show_measurements", null, false),
+            DescribeMeasurementStatement describe => ("describe_measurement", describe.Name, false),
+            _ => ("unknown", null, false),
+        };
+
+    private static bool IsDraftableStatement(SqlStatement statement)
+        => statement is CreateMeasurementStatement
+            or InsertStatement
+            or DeleteStatement
+            or SelectStatement
+            or ShowMeasurementsStatement
+            or DescribeMeasurementStatement;
 
     private async Task<CopilotToolExecutionResult> ExecuteQuerySqlWithRepairAsync(
         CopilotAgentContext context,
@@ -1016,6 +1222,18 @@ internal sealed class CopilotAgent
         if (describeIndex >= 0)
             return message[describeIndex..].Trim();
 
+        var createIndex = message.IndexOf("CREATE ", StringComparison.OrdinalIgnoreCase);
+        if (createIndex >= 0)
+            return message[createIndex..].Trim();
+
+        var insertIndex = message.IndexOf("INSERT ", StringComparison.OrdinalIgnoreCase);
+        if (insertIndex >= 0)
+            return message[insertIndex..].Trim();
+
+        var deleteIndex = message.IndexOf("DELETE ", StringComparison.OrdinalIgnoreCase);
+        if (deleteIndex >= 0)
+            return message[deleteIndex..].Trim();
+
         return null;
     }
 
@@ -1026,7 +1244,40 @@ internal sealed class CopilotAgent
 
         return text.StartsWith("SELECT ", StringComparison.OrdinalIgnoreCase)
             || text.StartsWith("SHOW ", StringComparison.OrdinalIgnoreCase)
-            || text.StartsWith("DESCRIBE ", StringComparison.OrdinalIgnoreCase);
+            || text.StartsWith("DESCRIBE ", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith("CREATE ", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith("INSERT ", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith("DELETE ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeWriteSql(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var trimmed = text.TrimStart();
+        return trimmed.StartsWith("CREATE ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("INSERT ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("DELETE ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeWriteIntent(string lowered)
+    {
+        // 中英文常见的“建表 / 创建 measurement / 插入 / 写入 / 删除”意图关键词。
+        return lowered.Contains("建表", StringComparison.Ordinal)
+            || lowered.Contains("建一个表", StringComparison.Ordinal)
+            || lowered.Contains("建一张表", StringComparison.Ordinal)
+            || lowered.Contains("新建表", StringComparison.Ordinal)
+            || lowered.Contains("创建表", StringComparison.Ordinal)
+            || lowered.Contains("创建 measurement", StringComparison.Ordinal)
+            || lowered.Contains("create table", StringComparison.Ordinal)
+            || lowered.Contains("create measurement", StringComparison.Ordinal)
+            || lowered.Contains("插入", StringComparison.Ordinal)
+            || lowered.Contains("写入数据", StringComparison.Ordinal)
+            || lowered.Contains("写入一条", StringComparison.Ordinal)
+            || lowered.Contains("insert into", StringComparison.Ordinal)
+            || lowered.Contains("删除数据", StringComparison.Ordinal)
+            || lowered.Contains("delete from", StringComparison.Ordinal);
     }
 
     private static bool IsReadOnlyStatement(SqlStatement statement)
@@ -1229,23 +1480,32 @@ internal sealed class CopilotAgent
     private const string PlannerSystemPrompt =
         """
         你是 SonnetDB Copilot 的工具规划器。
-        你的任务是只从下面 6 个工具中选择最少必要的工具调用，最多 3 个：
+        你的任务是只从下面 8 个工具中选择最少必要的工具调用，最多 3 个：
         - list_databases()
         - list_measurements(maxRows?)
         - describe_measurement(measurement)
         - sample_rows(measurement, n?)
         - explain_sql(sql)
-        - query_sql(sql, maxRows?)
+        - query_sql(sql, maxRows?)              // 仅 SELECT/SHOW/DESCRIBE
+        - draft_sql(sql)                        // 起草 / 校验 CREATE MEASUREMENT、INSERT、DELETE、SELECT 等 SQL，但不会改写数据
+        - execute_sql(sql, maxRows?)            // 真正执行 CREATE MEASUREMENT / INSERT / DELETE / SELECT；写入需调用方具备写权限
 
         输出必须是严格 JSON，格式如下：
-        {"tools":[{"name":"describe_measurement","measurement":"cpu"}]}
+        {"tools":[{"name":"draft_sql","sql":"CREATE MEASUREMENT cpu (host TAG, usage FIELD float64, temperature FIELD float64)"}]}
 
         规则：
         - 只能输出 JSON，不要附加解释、Markdown 或代码块。
         - 如果已有上下文足够回答，可以返回 {"tools":[]}
         - 询问 schema/字段/列结构时，优先 describe_measurement 或 list_measurements。
         - 用户给出只读 SQL 并询问结果时，优先 query_sql；询问扫描/成本/解释时优先 explain_sql。
-        - 不要编造不存在的 measurement 名称。
+        - 用户描述“建表 / 创建 measurement / 插入数据 / 写入 / 删除数据”等需求时：
+            * 先用 list_measurements 或 describe_measurement 获取已有结构（如尚未掌握）。
+            * 再用 draft_sql 给出可执行的 CREATE MEASUREMENT / INSERT / DELETE 语句。
+            * 仅当用户在最近一次消息中明确说“执行 / 立即建表 / 直接写入 / 帮我跑一下”等含义时，才追加 execute_sql。
+            * 不要在没有 draft_sql 验证的情况下直接调用 execute_sql。
+        - 不要编造不存在的 measurement 名称、列名或函数。
+        - SonnetDB 的 CREATE MEASUREMENT 语法：CREATE MEASUREMENT name (col TAG, col FIELD type, ...)，FIELD 类型只接受 FLOAT / INT / BOOL / STRING / VECTOR(N)，TAG 列固定为 STRING。
+        - SonnetDB 的 INSERT 语法：INSERT INTO measurement (time, tag1, field1, ...) VALUES (1700000000000, 'host-1', 0.42, ...)，time 为毫秒时间戳。
         """;
 
     private const string SqlRepairSystemPrompt =
@@ -1267,6 +1527,11 @@ internal sealed class CopilotAgent
         - 优先给出直接结论，再补充必要说明。
         - 如果给定了 citations，请尽量在对应句子末尾用 [C1] 这样的编号引用。
         - 若证据不足，请明确说明“不确定”或“当前结果不足以确认”。
+        - 当用户的意图是“建表 / 写入 / 删除 / 改 schema”时，必须给出可直接复制执行的 SQL：
+            * 把每条 SQL 单独放在 ```sql 代码块中。
+            * 优先使用 draft_sql / execute_sql 工具返回的 SQL，不要自行改写列名或类型。
+            * 如果工具返回了 notes（例如缺权限、measurement 已存在），请把这些注意事项明确转述给用户。
+        - 当用户给出只是“描述”而工具没生成 SQL 时，根据已有 measurement 列表与字段，自己起草一条最贴近需求的 CREATE MEASUREMENT / INSERT 语句，同样放进 ```sql 代码块。
         """;
 }
 
@@ -1276,10 +1541,12 @@ internal sealed class CopilotAgent
 /// <param name="DatabaseName">当前数据库名。</param>
 /// <param name="Database">当前数据库实例。</param>
 /// <param name="VisibleDatabases">当前凭据可见的数据库集合。</param>
+/// <param name="CanWrite">当前调用方对该数据库是否拥有写权限（控制 <c>execute_sql</c> 是否可对 DDL/DML 生效）。</param>
 internal sealed record CopilotAgentContext(
     string DatabaseName,
     Tsdb Database,
-    IReadOnlyList<string> VisibleDatabases);
+    IReadOnlyList<string> VisibleDatabases,
+    bool CanWrite = false);
 
 /// <summary>
 /// 多轮对话的规范化结果。

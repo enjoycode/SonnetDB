@@ -87,7 +87,8 @@ internal static class CopilotChatEndpointHandler
         }
 
         var visibleDatabases = DatabaseAccessEvaluator.GetVisibleDatabases(ctx, grantsStore, registry.ListDatabases());
-        var context = new CopilotAgentContext(req.Db, tsdb, visibleDatabases);
+        var canWrite = DatabaseAccessEvaluator.HasPermission(permission, DatabasePermission.Write);
+        var context = new CopilotAgentContext(req.Db, tsdb, visibleDatabases, canWrite);
 
         ctx.Response.StatusCode = StatusCodes.Status200OK;
         ctx.Response.ContentType = sse

@@ -128,6 +128,50 @@ internal sealed record McpExplainSqlResult(
     int TagFilterCount);
 
 /// <summary>
+/// Copilot <c>draft_sql</c> 工具的返回体：仅做语法/语义校验，不执行写入，
+/// 用于让 LLM 与最终回答阶段把可执行的 SQL 安全呈现给用户。
+/// </summary>
+/// <param name="Database">目标数据库名。</param>
+/// <param name="StatementType">语句类型（<c>create_measurement</c>/<c>insert</c>/<c>delete</c>/<c>select</c>/<c>show_measurements</c>/<c>describe_measurement</c>）。</param>
+/// <param name="Sql">规范化后的 SQL 文本。</param>
+/// <param name="Measurement">语句涉及的 measurement 名称（无法推断时为 <c>null</c>）。</param>
+/// <param name="IsWrite">是否为写入类语句（CREATE/INSERT/DELETE）。</param>
+/// <param name="MeasurementExists">写入类语句涉及的 measurement 是否已经存在；非写入或不可判定时为 <c>null</c>。</param>
+/// <param name="Notes">附加提示（例如安全建议、需要的权限等）。</param>
+internal sealed record McpDraftSqlResult(
+    string Database,
+    string StatementType,
+    string Sql,
+    string? Measurement,
+    bool IsWrite,
+    bool? MeasurementExists,
+    IReadOnlyList<string> Notes);
+
+/// <summary>
+/// Copilot <c>execute_sql</c> 工具的返回体：实际执行单条 SQL，
+/// 写入类语句要求当前调用方拥有写权限。
+/// </summary>
+/// <param name="Database">目标数据库名。</param>
+/// <param name="StatementType">语句类型。</param>
+/// <param name="Sql">实际执行的 SQL 文本。</param>
+/// <param name="Measurement">语句涉及的 measurement 名称。</param>
+/// <param name="RowsAffected">写入类语句的影响行数（INSERT 行数 / DELETE 墓碑数 / CREATE 列数；不适用时为 <c>null</c>）。</param>
+/// <param name="Columns">SELECT 类语句返回的列名（不适用时为 <c>null</c>）。</param>
+/// <param name="Rows">SELECT 类语句返回的行数据（不适用时为 <c>null</c>）。</param>
+/// <param name="ReturnedRows">实际返回的行数（不适用时为 <c>null</c>）。</param>
+/// <param name="Truncated">SELECT 结果是否被工具的 <c>maxRows</c> 截断。</param>
+internal sealed record McpExecuteSqlResult(
+    string Database,
+    string StatementType,
+    string Sql,
+    string? Measurement,
+    int? RowsAffected,
+    IReadOnlyList<string>? Columns,
+    IReadOnlyList<IReadOnlyList<JsonElementValue>>? Rows,
+    int? ReturnedRows,
+    bool Truncated);
+
+/// <summary>
 /// MCP 工具/资源的辅助方法。
 /// </summary>
 internal static class SonnetDbMcpResults

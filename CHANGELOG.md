@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 
+### Added
+- **Copilot Agent 支持 DDL/DML SQL 起草与执行**：在 `/v1/copilot/chat` 后台代理中新增 `draft_sql` 与 `execute_sql` 两个工具。`draft_sql` 会用 `SqlParser` 校验 `CREATE MEASUREMENT` / `INSERT` / `DELETE` / `SELECT` 语句并附带 measurement 是否已存在等说明，但不写入数据；`execute_sql` 在调用方对当前数据库具备 `Write` 权限时才会真正执行写入语句。Planner / Answer / 启发式回退、`CopilotAgentContext` 都已同步扩展，遇到“建表 / 写入 / 删除”意图时会先用 `list_measurements` / `describe_measurement` 收集上下文，再生成可直接复制执行的 SQL（放进 ```sql 代码块）。在 `tests/SonnetDB.Tests/Copilot/copilot-eval-scenarios.json` 新增 2 个 `write` 类场景覆盖回归。
+
 ### Fixed
 - 重写首页欢迎页为产品介绍页：去掉安装/帮助导向叙述，改为展示数据库简介、核心功能、产品形态和路线图对应能力，并保留进入后台入口。
 - 修复 Production 模式下 `GET /admin/` 自重定向死循环（`ERR_TOO_MANY_REDIRECTS`）：原 `UseDefaultFiles({ RequestPath = "/admin" })` 未提供针对 `wwwroot/admin` 的 `FileProvider`，与 `MapGet("/admin")` / `MapFallbackToFile` 共同作用导致 Vite 构建产物无法被正确解析；现改为使用专用 `PhysicalFileProvider(wwwroot/admin)` 的 `UseStaticFiles`，并显式 `MapGet("/admin/")` 直接返回 `index.html`。

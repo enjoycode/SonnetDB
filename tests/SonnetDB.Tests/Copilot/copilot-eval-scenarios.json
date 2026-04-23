@@ -919,5 +919,57 @@
       "memory"
     ],
     "answerSummary": "我已经把 mem 修正成 memory，并返回前 2 行结果。"
+  },
+  {
+    "id": "write_draft_create_measurement",
+    "category": "write",
+    "question": "帮我在 alpha 里建一个 sensor 表，需要 host 当 tag，温度 temp 和湿度 humidity 作为 field。",
+    "plannedTools": [
+      {
+        "name": "draft_sql",
+        "sql": "CREATE MEASUREMENT sensor (host TAG, temp FIELD FLOAT, humidity FIELD FLOAT)"
+      }
+    ],
+    "expectedToolArgumentsContains": [
+      "CREATE MEASUREMENT sensor"
+    ],
+    "expectedToolResultContains": [
+      "create_measurement",
+      "sensor",
+      "host",
+      "humidity"
+    ],
+    "expectedAnswerContains": [
+      "CREATE MEASUREMENT",
+      "sensor",
+      "humidity"
+    ],
+    "answerSummary": "已经为你起草建表 SQL：```sql\nCREATE MEASUREMENT sensor (host TAG, temp FIELD FLOAT, humidity FIELD FLOAT)\n```\n确认后可调用 execute_sql 执行。"
+  },
+  {
+    "id": "write_execute_insert_cpu",
+    "category": "write",
+    "question": "立即往 cpu 写入一条 host=edge-99、usage=0.42、temp=37 的样例数据。",
+    "plannedTools": [
+      {
+        "name": "execute_sql",
+        "sql": "INSERT INTO cpu (time, host, region, usage, temp) VALUES (1700000000000, 'edge-99', 'cn-east', 0.42, 37)"
+      }
+    ],
+    "expectedToolArgumentsContains": [
+      "INSERT INTO cpu"
+    ],
+    "expectedToolResultContains": [
+      "insert",
+      "cpu",
+      "RowsAffected",
+      "1"
+    ],
+    "expectedAnswerContains": [
+      "INSERT",
+      "cpu",
+      "edge-99"
+    ],
+    "answerSummary": "已经把这条样例点写入 cpu：```sql\nINSERT INTO cpu (time, host, region, usage, temp) VALUES (1700000000000, 'edge-99', 'cn-east', 0.42, 37)\n```\nRowsAffected=1。"
   }
 ]
