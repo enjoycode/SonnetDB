@@ -43,7 +43,7 @@ SHOW TOKENS FOR writer;
 -- 1-7  查看所有数据库
 SHOW DATABASES;
 
-
+USE demo;
 -- ============================================================
 -- 第二部分：数据面 —— 建表（CREATE MEASUREMENT）
 -- 以下语句在数据库 demo 内执行

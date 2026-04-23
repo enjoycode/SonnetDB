@@ -169,7 +169,7 @@ async function run(): Promise<void> {
       // 完全在客户端处理，不走服务端，避免命中服务端 SqlParser 的「未知关键字」错误。
       const meta = parseSqlMetaCommand(stmt);
       const rs = meta
-        ? executeMetaCommand(meta)
+        ? await executeMetaCommand(meta)
         : (targetDb.value === CONTROL_PLANE_KEY
           ? await execControlPlaneSql(auth.api, stmt)
           : await execDataSql(auth.api, targetDb.value, stmt));
@@ -179,6 +179,10 @@ async function run(): Promise<void> {
       } else {
         okCount += 1;
         if (rs.end) totalElapsed += rs.end.elapsedMs;
+        // CREATE/DROP DATABASE 成功后刷新本地缓存，这样后续 USE / 选择器立即能看到最新库列表。
+        if (!meta && /^\s*(create|drop)\s+database\b/i.test(stmt)) {
+          await reloadDbs();
+        }
       }
       // 渐进展示：每条立刻插入，避免长批阻塞 UI。
       results.value = [...collected];
@@ -205,7 +209,7 @@ async function run(): Promise<void> {
  * 当前 db 名约定：control-plane 显示为字面量 <c>system</c>；用户库显示为名字本身。
  * <c>USE system</c> 会切到控制面（仅 superuser 可用）。
  */
-function executeMetaCommand(meta: ReturnType<typeof parseSqlMetaCommand>): SqlResultSet {
+async function executeMetaCommand(meta: ReturnType<typeof parseSqlMetaCommand>): Promise<SqlResultSet> {
   if (!meta) return buildClientErrorResultSet('console_meta', '未识别的元命令。');
 
   const currentName = targetDb.value === CONTROL_PLANE_KEY ? 'system' : targetDb.value;
@@ -223,6 +227,10 @@ function executeMetaCommand(meta: ReturnType<typeof parseSqlMetaCommand>): SqlRe
     }
     targetDb.value = CONTROL_PLANE_KEY;
     return buildClientResultSet(['database'], [['system']]);
+  }
+  // 本地缓存可能滞后于服务端（例如同一批刚 CREATE DATABASE）：未命中时主动刷新一次再校验。
+  if (!databases.value.includes(wanted)) {
+    await reloadDbs();
   }
   if (!databases.value.includes(wanted)) {
     return buildClientErrorResultSet(
