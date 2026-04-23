@@ -26,7 +26,7 @@ internal sealed class CopilotAgent
     private const int DefaultSkillsK = 3;
     private const int MaxSkillsK = 8;
     private const int MaxLoadedSkills = 3;
-    private const int MaxPlannedTools = 3;
+    private const int MaxReActRounds = 6;      // ReAct 最多循环轮次（每轮执行 1 个工具）
     private const int HistoryTokenBudget = 1200;
     private const int MaxSqlRepairAttempts = 3;
 
@@ -100,15 +100,22 @@ internal sealed class CopilotAgent
             ToolNames: suggestedToolNames.Length > 0 ? suggestedToolNames : null,
             Citations: retrievalCitations.Count > 0 ? retrievalCitations : null);
 
-        var plan = await PlanToolsAsync(context, conversation, docs, loadedSkills, cancellationToken).ConfigureAwait(false);
-        var observations = new List<CopilotToolObservation>(plan.Count);
+        // ReAct 多轮循环：每轮 Planner 看到前面所有工具结果后再决定下一步
+        var observations = new List<CopilotToolObservation>(MaxReActRounds);
 
-        foreach (var tool in plan)
+        for (var round = 0; round < MaxReActRounds; round++)
         {
+            var plan = await PlanToolsAsync(
+                context, conversation, docs, loadedSkills, observations, cancellationToken).ConfigureAwait(false);
+
+            if (plan.Count == 0)
+                break;  // Planner 说已有足够信息，结束工具循环
+
+            var tool = plan[0];  // 每轮只取第一个（Planner 已改为单步模式）
             var toolArguments = FormatToolArguments(tool);
             yield return new CopilotChatEvent(
                 Type: "tool_call",
-                Message: $"执行工具 {tool.Name}。",
+                Message: $"[第 {round + 1} 轮] 执行工具 {tool.Name}。",
                 ToolName: tool.Name,
                 ToolArguments: toolArguments);
 
@@ -207,10 +214,11 @@ internal sealed class CopilotAgent
         CopilotConversation conversation,
         IReadOnlyList<DocsSearchResult> docs,
         IReadOnlyList<SkillLoadResult> loadedSkills,
+        IReadOnlyList<CopilotToolObservation> observations,
         CancellationToken cancellationToken)
     {
         var measurements = _schemaCache.GetMeasurements(context.DatabaseName, context.Database);
-        var plannerPrompt = BuildPlannerPrompt(context, conversation, docs, loadedSkills);
+        var plannerPrompt = BuildPlannerPrompt(context, conversation, docs, loadedSkills, observations);
 
         try
         {
@@ -315,11 +323,12 @@ internal sealed class CopilotAgent
         if (plannedTools is null || plannedTools.Count == 0)
             return [];
 
-        var tools = new List<CopilotToolInvocation>(Math.Min(plannedTools.Count, MaxPlannedTools));
+        // ReAct 模式：Planner 每轮只输出 1 个工具，取第一个有效工具即可
+        var tools = new List<CopilotToolInvocation>(1);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var planned in plannedTools)
         {
-            if (tools.Count >= MaxPlannedTools)
+            if (tools.Count >= 1)
                 break;
             if (string.IsNullOrWhiteSpace(planned.Name))
                 continue;
@@ -570,13 +579,11 @@ internal sealed class CopilotAgent
         if (plan.Count == 0)
             return [draft];
 
-        var augmented = new List<CopilotToolInvocation>(Math.Min(MaxPlannedTools, plan.Count + 1));
+        // ReAct 模式下每轮只执行 1 个工具；heuristic 已包含 list_measurements，
+        // 追加 draft 后返回，RunAsync 只会取 plan[0]，下一轮再执行 draft。
+        var augmented = new List<CopilotToolInvocation>(plan.Count + 1);
         foreach (var tool in plan)
-        {
-            if (augmented.Count >= MaxPlannedTools - 1)
-                break;
             augmented.Add(tool);
-        }
 
         augmented.Add(draft);
         return augmented;
@@ -1013,7 +1020,8 @@ internal sealed class CopilotAgent
         CopilotAgentContext context,
         CopilotConversation conversation,
         IReadOnlyList<DocsSearchResult> docs,
-        IReadOnlyList<SkillLoadResult> loadedSkills)
+        IReadOnlyList<SkillLoadResult> loadedSkills,
+        IReadOnlyList<CopilotToolObservation> observations)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"当前数据库：{context.DatabaseName}");
@@ -1055,6 +1063,22 @@ internal sealed class CopilotAgent
                 builder.Append(string.IsNullOrWhiteSpace(doc.Title) ? doc.Source : doc.Title);
                 builder.Append("：");
                 builder.AppendLine(Truncate(CollapseWhitespace(doc.Content), 240));
+            }
+        }
+
+        // 把本轮之前已执行的工具结果注入给 Planner，让它基于真实结果决定下一步
+        if (observations.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("【已执行工具结果】（请基于这些结果决定下一步，不要重复调用已成功的工具）：");
+            foreach (var obs in observations)
+            {
+                builder.Append("- tool=");
+                builder.Append(obs.Name);
+                builder.Append(" args=");
+                builder.Append(obs.ArgumentsJson);
+                builder.Append(" result=");
+                builder.AppendLine(Truncate(obs.ResultJson, 600));
             }
         }
 
@@ -2139,8 +2163,10 @@ internal sealed class CopilotAgent
 
     private const string PlannerSystemPrompt =
         """
-        你是 SonnetDB Copilot 的工具规划器。
-        你的任务是只从下面 8 个工具中选择最少必要的工具调用，最多 3 个：
+        你是 SonnetDB Copilot 的工具规划器，采用 ReAct（Reason + Act）模式逐步推进。
+        每次调用你只需决定【下一个最必要的单个工具】，看到该工具结果后再决定下一步。
+
+        可用工具（共 8 个）：
         - list_databases()
         - list_measurements(maxRows?)
         - describe_measurement(measurement)
@@ -2150,20 +2176,23 @@ internal sealed class CopilotAgent
         - draft_sql(sql)                        // 起草 / 校验 CREATE MEASUREMENT、INSERT、DELETE、SELECT 等 SQL，但不会改写数据
         - execute_sql(sql, maxRows?)            // 真正执行 CREATE MEASUREMENT / INSERT / DELETE / SELECT；写入需调用方具备写权限
 
-        输出必须是严格 JSON，格式如下（示例：用户要求建一个保存电脑性能数据的仓库）：
-        {"tools":[{"name":"list_databases"},{"name":"draft_sql","sql":"CREATE MEASUREMENT host_perf (host TAG, region TAG, cpu_pct FIELD FLOAT, mem_pct FIELD FLOAT, cpu_temp_celsius FIELD FLOAT, disk_read_mbps FIELD FLOAT, disk_write_mbps FIELD FLOAT, net_rx_mbps FIELD FLOAT, net_tx_mbps FIELD FLOAT)"}]}
+        输出必须是严格 JSON，每次只输出 1 个工具（或空数组表示已完成）：
+        {"tools":[{"name":"list_databases"}]}
+        {"tools":[{"name":"draft_sql","sql":"CREATE MEASUREMENT host_perf (host TAG, cpu_pct FIELD FLOAT, mem_pct FIELD FLOAT, cpu_temp_celsius FIELD FLOAT)"}]}
+        {"tools":[]}
 
         规则：
         - 只能输出 JSON，不要附加解释、Markdown 或代码块。
-        - 如果已有上下文足够回答，可以返回 {"tools":[]}
-        - 当用户说“查一查当前这个数据库里有什么 / 这个库里有什么 / 看看当前库结构”时，优先对当前数据库调用 query_sql("SHOW MEASUREMENTS")。
-        - 当用户询问具体 measurement 的 schema/字段/列结构时，优先调用 query_sql("DESCRIBE MEASUREMENT <name>")；只有在无法构造 SQL 时再退回 describe_measurement。
+        - 每次只输出 1 个工具；如果已有上下文足够回答，输出 {"tools":[]} 表示完成。
+        - 如果已有【已执行工具结果】，必须先阅读这些结果再决定下一步，不要重复调用已经成功执行过的工具。
+        - 询问 schema/字段/列结构时，优先 describe_measurement 或 list_measurements。
         - 用户给出只读 SQL 并询问结果时，优先 query_sql；询问扫描/成本/解释时优先 explain_sql。
-        - 用户描述“建表 / 创建 measurement / 插入数据 / 写入 / 删除数据”等需求时：
-            * 先用 list_measurements 或 describe_measurement 获取已有结构（如尚未掌握）。
-            * 再用 draft_sql 给出可执行的 CREATE MEASUREMENT / INSERT / DELETE 语句。
-            * 仅当用户在最近一次消息中明确说“执行 / 立即建表 / 直接写入 / 帮我跑一下”等含义时，才追加 execute_sql。
-            * 不要在没有 draft_sql 验证的情况下直接调用 execute_sql。
+        - 用户描述建表/创建 measurement/写入/删除数据等需求时，按以下顺序逐步推进：
+            步骤 1：若尚未知道数据库是否存在，先调用 list_databases。
+            步骤 2：若数据库存在但不确定 measurement 是否已存在，调用 list_measurements。
+            步骤 3：调用 draft_sql 起草 CREATE MEASUREMENT（必须覆盖用户提到的所有字段）。
+            步骤 4：仅当用户明确说执行/立即建表/直接写入/帮我跑一下时，才调用 execute_sql。
+            不要跳过步骤，不要在没有 draft_sql 验证的情况下直接调用 execute_sql。
         - 不要编造不存在的 measurement 名称、列名或函数。
         - SonnetDB 的 CREATE MEASUREMENT 语法：CREATE MEASUREMENT name (col TAG, col FIELD type, ...)，FIELD 类型只接受 FLOAT / INT / BOOL / STRING / VECTOR(N)，TAG 列固定为 STRING。
         - SonnetDB 的 INSERT 语法：INSERT INTO measurement (time, tag1, field1, ...) VALUES (1700000000000, 'host-1', 0.42, ...)，time 为毫秒时间戳。
