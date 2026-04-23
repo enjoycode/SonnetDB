@@ -465,16 +465,16 @@ PR #70（GEOPOINT 类型）
 | #84 | **M6：页面上下文感知**：CopilotDock 自动捕获当前路由 + SQL Console 编辑中的 SQL / 当前选中数据库，以 `system` 角色消息在 `send()` 时临时拼到 `messages[]` 头部（不写入会话历史）；UI 提供 `📍 当前页面：Xxx · SQL N 字符 · db=xxx` 状态标签与开关；后续（规划中）提示词模板支持 `{{page.route}}` / `{{page.selection}}` 变量 | ✅ |
 | #85 | **M7：权限选择器 + 写操作审批**：CopilotDock 提供 `🔒 只读模式` / `⚠️ 读写模式` 切换，默认只读；切换为读写需 NPopconfirm 二次确认；服务端 `CopilotChatRequest.Mode` 字段在 `read-only` 时强制将 `CopilotAgentContext.CanWrite` 置为 false，使 `execute_sql` 写入在 agent 内部即遭拒；后续（规划）能在 UI 逐条弹“将执行以下 SQL，确认？”对话框 | ✅ |
 | #86 | **M8：模型选择器**：CopilotDock 下拉选择 chat 模型，服务端新增 `GET /v1/copilot/models` 返回 `{default, candidates[]}`（`CopilotChatOptions.AvailableModels` 提供候选）；UI 支持自由输入 + `localStorage` 记忆；`/v1/copilot/chat` 请求体新增可选 `model`，`IChatProvider.CompleteAsync` 增加 `modelOverride` 参数，在 OpenAI-compatible provider 中临时覆盖 `CopilotChatOptions.Model` | ✅ |
-| #87 | **M9：SQL Console 语法高亮回归**：核查 `web/src/components/SqlEditor.vue`（CodeMirror 6 + `@codemirror/lang-sql`）当前 `StandardSQL` dialect 是否高亮失效；扩展 dialect 增加 SonnetDB 关键字（`MEASUREMENT` / `TAG` / `FIELD` / `VECTOR` / `knn` / `time_bucket` / `forecast` / `pid_*`） | 📋 |
-| #88 | **M10：新手引导 / 提示词模板**：CopilotDock 空白态显示分类的 starter prompt 卡片（"建表"/"批量写入"/"时间窗聚合"/"向量检索"/"PID 调参"/"故障排查"）；点击直接填入输入框；模板 JSON 来自 `__copilot__.prompts` 系统库或前端 `web/src/copilot/starters.ts` | 📋 |
+| #87 | **M9：SQL Console 语法高亮回归**：新增 `web/src/components/sonnetdb-dialect.ts` 定义 `SonnetDbSQL = SQLDialect.define({ ...StandardSQL.spec, keywords + 'measurement|tag|field|...', types + 'vector|float|int|bool|string', builtin + 'knn|time_bucket|forecast|pid_*' })`；SqlEditor 改为使用 `SonnetDbSQL` 方言，lang-sql 内置的关键字补全与高亮自动覆盖 SonnetDB 词汇 | ✅ |
+| #88 | **M10：新手引导 / 提示词模板**：新增 `web/src/copilot/starters.ts` 定义 `COPILOT_STARTERS`（建表 / 写入 / 聚合 / 向量 / 预测 / PID / 排查分类）与 `pickStarters(routeKey)` 路由过滤；CopilotDock 空白态按 grid 展示 starter 卡片，点击填入输入框 | ✅ |
 
 ### 推进顺序
 
 ```
 PR #78 ✅ → #79 ✅ → #80 ✅ → #81 ✅ → #82 ✅
-  → #83（M5 会话历史）→ #84（M6 上下文）
-  → #85（M7 权限）→ #86（M8 模型）
-  → #87（M9 高亮）→ #88（M10 引导）
+  → #83（M5 会话历史）✅ → #84（M6 上下文）✅
+  → #85（M7 权限）✅ → #86（M8 模型）✅
+  → #87（M9 高亮）✅ → #88（M10 引导）✅
 ```
 
 **前置依赖**：Milestone 14 已合并；本 Milestone 不破坏 SonnetDB Core 的二进制格式，全部为 `src/SonnetDB`（API 层）+ `web/`（前端）+ Copilot 子系统的扩展。

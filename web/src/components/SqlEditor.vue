@@ -8,8 +8,11 @@ import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirro
 import { EditorState } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { bracketMatching, indentOnInput } from '@codemirror/language';
-import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap } from '@codemirror/autocomplete';
-import { sql, StandardSQL } from '@codemirror/lang-sql';
+import {
+  closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap,
+} from '@codemirror/autocomplete';
+import { sql } from '@codemirror/lang-sql';
+import { SonnetDbSQL } from './sonnetdb-dialect';
 
 export interface ColumnInfo { name: string; role: string; dataType: string; }
 export interface MeasurementInfo { name: string; columns: ColumnInfo[]; }
@@ -39,7 +42,7 @@ function buildSqlSchema(measurements?: MeasurementInfo[]) {
 function createView(el: HTMLElement) {
   const tables = buildSqlSchema(props.schema);
   const sqlLang = sql({
-    dialect: StandardSQL,
+    dialect: SonnetDbSQL,
     schema: tables,
     upperCaseKeywords: true,
   });

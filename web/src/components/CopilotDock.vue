@@ -181,12 +181,19 @@
     <!-- 消息流 -->
     <section class="copilot-dock__messages" ref="msgContainer">
       <div v-if="messages.length === 0 && !running" class="copilot-dock__empty">
-        <p>问点什么？例如：</p>
-        <ul>
-          <li @click="quickPrompt('列出当前数据库的所有 measurement')">列出当前数据库的所有 measurement</li>
-          <li @click="quickPrompt('帮我建一张存储温度数据的表，包含设备 tag 和 float 字段')">帮我建一张存储温度数据的表</li>
-          <li @click="quickPrompt('如何用 knn 做向量检索？')">如何用 knn 做向量检索？</li>
-        </ul>
+        <p class="copilot-dock__empty-tip">问点什么？点击下方模板可直接填入：</p>
+        <div class="copilot-dock__starters">
+          <button
+            v-for="s in starters"
+            :key="s.title"
+            class="copilot-dock__starter"
+            :title="s.description"
+            @click="onStarterClick(s)"
+          >
+            <span class="copilot-dock__starter-cat">{{ s.category }}</span>
+            <span class="copilot-dock__starter-title">{{ s.title }}</span>
+          </button>
+        </div>
       </div>
       <div v-for="(msg, idx) in messages" :key="idx" class="copilot-dock__msg" :class="`copilot-dock__msg--${msg.role}`">
         <div class="copilot-dock__msg-role">{{ msg.role === 'user' ? '我' : 'Copilot' }}</div>
@@ -241,6 +248,7 @@ import {
   type CopilotKnowledgeStatus,
   type CopilotMessage,
 } from '@/api/copilot';
+import { pickStarters, type CopilotStarter } from '@/copilot/starters';
 
 const auth = useAuthStore();
 const sessions = useCopilotSessionsStore();
@@ -467,8 +475,10 @@ async function onReindex(): Promise<void> {
   }
 }
 
-function quickPrompt(text: string): void {
-  prompt.value = text;
+const starters = computed<CopilotStarter[]>(() => pickStarters(pageContext.value?.routeKey ?? null, 6));
+
+function onStarterClick(s: CopilotStarter): void {
+  prompt.value = s.prompt;
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -781,6 +791,43 @@ onMounted(() => {
   background: rgba(44, 123, 229, 0.06);
 }
 .copilot-dock__empty li:hover { background: rgba(44, 123, 229, 0.12); }
+.copilot-dock__empty-tip { margin: 0 0 8px; }
+.copilot-dock__starters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 6px;
+}
+.copilot-dock__starter {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid rgba(44, 123, 229, 0.18);
+  border-radius: 8px;
+  background: rgba(44, 123, 229, 0.04);
+  color: var(--sndb-ink, #1f2937);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.copilot-dock__starter:hover {
+  background: rgba(44, 123, 229, 0.12);
+  border-color: rgba(44, 123, 229, 0.45);
+}
+.copilot-dock__starter-cat {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(44, 123, 229, 0.15);
+  color: rgb(44, 123, 229);
+  line-height: 1.4;
+}
+.copilot-dock__starter-title {
+  font-weight: 600;
+  line-height: 1.3;
+}
 .copilot-dock__msg { margin: 8px 0; }
 .copilot-dock__msg-role { font-size: 11px; color: var(--sndb-ink-soft, #678); margin-bottom: 2px; }
 .copilot-dock__msg-body { white-space: pre-wrap; word-break: break-word; }
