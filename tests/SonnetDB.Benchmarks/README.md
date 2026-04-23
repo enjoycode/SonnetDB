@@ -225,18 +225,20 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 | SonnetDB Server Query (10%)    |  88.40 ms |  16.07 MB |
 | SonnetDB Server Aggregate 1Min |  88.82 ms |   2.47 MB |
 
-// VectorRecallBenchmark（PR #62，结果待实测补数）
+// VectorRecallBenchmark（PR #62，2026-04-22 本机实测：10k / 100k）
 | Method                           | Dataset | Mean | Recall@10 |
 |--------------------------------- |--------:|-----:|----------:|
-| BruteForce_Top10                 |   10k   |  TBD |   1.000   |
-| Hnsw_Top10                       |   10k   |  TBD |    TBD    |
-| Hnsw_RecallAt10 (batch average)  |   10k   |  TBD |    TBD    |
-| BruteForce_Top10                 |  100k   |  TBD |   1.000   |
-| Hnsw_Top10                       |  100k   |  TBD |    TBD    |
-| Hnsw_RecallAt10 (batch average)  |  100k   |  TBD |    TBD    |
+| BruteForce_Top10                 |   10k   |  5.015 ms |   1.000   |
+| Hnsw_Top10                       |   10k   |  1.766 ms |    TBD    |
+| Hnsw_RecallAt10 (batch average)  |   10k   |  1.678 ms |    TBD    |
+| BruteForce_Top10                 |  100k   | 44.624 ms |   1.000   |
+| Hnsw_Top10                       |  100k   |  2.468 ms |    TBD    |
+| Hnsw_RecallAt10 (batch average)  |  100k   |  2.504 ms |    TBD    |
 ```
 
-> PR #62 当前已把 `VectorRecallBenchmark` 代码、运行入口和结果占位接入仓库；待在具备足够内存的基准机上跑完 `10k / 100k / 1M` 后，再把真实数字与 `sqlite-vec` / `pgvector` 同机粗略对比一并写回此处。
+> 当前已回填 `10k / 100k` 两档的 BenchmarkDotNet 实测耗时（Windows 11 / Intel Core Ultra 9 185H / .NET 10.0.7，`IterationCount=3`、`WarmupCount=1`）。`1M` 档位在本机长测时耗时过长，本轮未继续等待；`sqlite-vec` / `pgvector` 同机粗略对比也仍待补。
+>
+> 说明：`Hnsw_RecallAt10` 这一行的 `Mean` 是“计算平均 Recall@10 这段逻辑本身的耗时”，而不是 Recall 数值；BenchmarkDotNet 摘要不会直接展示该方法的返回值，因此 `Recall@10` 列本轮暂保留 `TBD`，后续通过单独 probe 补齐。
 
 ### PR #49 关键结论
 

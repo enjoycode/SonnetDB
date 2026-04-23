@@ -42,7 +42,7 @@
   - `tests/SonnetDB.Benchmarks` 新增 `VectorRecallBenchmark`，覆盖 SonnetDB 自身 `384-dim` 向量的 brute-force Top10、HNSW Top10 与平均 `Recall@10`。
   - 默认档位为 `10k / 100k`；设置环境变量 `SONNETDB_VECTOR_BENCH_INCLUDE_1M=1` 后可额外启用 `1M` 数据集，避免日常基准意外占满内存。
   - `HnswVectorBlockIndex` 新增直接基于连续 `float32` 向量 payload 建图的重载，减少基准场景为构图额外复制 `DataPoint[]` 的内存开销。
-  - `tests/SonnetDB.Benchmarks/README.md` 与根 `README.md` 新增向量基准运行入口、结果占位和后续 `sqlite-vec` / `pgvector` 同机粗略对比的补数说明。
+  - `tests/SonnetDB.Benchmarks/README.md` 与根 `README.md` 已补回 `10k / 100k` 两档实测耗时；`1M` 档位与 `sqlite-vec` / `pgvector` 同机粗略对比仍待后续长测补数。
 
 - **PR #61 — HNSW 段内 ANN sidecar 索引（Milestone 13 第六切片）**
   - `CREATE MEASUREMENT` 新增向量索引声明语法：`embedding FIELD VECTOR(384) WITH INDEX hnsw(m=16, ef=200)`；AST、`SqlParser`、`SqlExecutor`、`MeasurementSchema` 与 `MeasurementSchemaCodec` 已贯通，schema 文件格式升级到 v3 并兼容读取 v1/v2。
