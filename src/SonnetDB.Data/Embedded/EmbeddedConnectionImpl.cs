@@ -61,6 +61,20 @@ internal sealed class EmbeddedConnectionImpl : IConnectionImpl
         if (_tsdb is null || _state != ConnectionState.Open)
             throw new InvalidOperationException("连接未打开。");
 
+        // 客户端拦截 SQL Console 风格元命令：USE / SELECT current_database() / SHOW CURRENT_DATABASE。
+        // 嵌入式模式下 "database" 等价于 Data Source 路径，无法切换；USE 视为不支持。
+        var meta = SqlMetaCommand.TryParse(sql, out var requestedDb);
+        if (meta == MetaKind.CurrentDatabase)
+        {
+            return MaterializedExecutionResult.FromSelect(SqlMetaCommand.BuildCurrentDatabaseResult(Database));
+        }
+        if (meta == MetaKind.UseDatabase)
+        {
+            throw new NotSupportedException(
+                $"嵌入式模式下不支持 USE：当前连接已绑定到 Data Source = '{DataSource}'，" +
+                $"切换到 '{requestedDb}' 请关闭连接后用新的 ConnectionString 重新打开。");
+        }
+
         var statement = SqlParser.Parse(sql);
         return statement switch
         {

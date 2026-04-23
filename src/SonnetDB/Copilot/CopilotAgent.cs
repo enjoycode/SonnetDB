@@ -222,7 +222,10 @@ internal sealed class CopilotAgent
                 cancellationToken).ConfigureAwait(false);
 
             if (TryParsePlan(response, out var plan) && plan is not null)
-                return SanitizePlan(plan.Tools, measurements, conversation.LatestUserMessage);
+            {
+                var sanitized = SanitizePlan(plan.Tools, measurements, conversation.LatestUserMessage);
+                return EnsureWriteDraftPlan(sanitized, conversation.LatestUserMessage);
+            }
 
             _logger.LogWarning("Copilot planner returned non-JSON content: {Response}", response);
         }
@@ -231,7 +234,7 @@ internal sealed class CopilotAgent
             _logger.LogWarning(ex, "Copilot planner failed, falling back to heuristics.");
         }
 
-        return BuildHeuristicPlan(conversation.LatestUserMessage, measurements);
+        return EnsureWriteDraftPlan(BuildHeuristicPlan(conversation.LatestUserMessage, measurements), conversation.LatestUserMessage);
     }
 
     private async Task<string> GenerateAnswerAsync(
@@ -263,7 +266,7 @@ internal sealed class CopilotAgent
             _logger.LogWarning(ex, "Copilot final answer generation failed, using deterministic fallback.");
         }
 
-        return BuildFallbackAnswer(context, observations, citations);
+        return BuildFallbackAnswer(context, conversation, observations, citations);
     }
 
     private static bool TryParsePlan(string response, out CopilotToolPlan? plan)
@@ -478,6 +481,40 @@ internal sealed class CopilotAgent
         return tools.Count > 0
             ? tools
             : [new CopilotToolInvocation("list_measurements", SonnetDbMcpResults.DefaultToolRowLimit, null, null, null)];
+    }
+
+    private static IReadOnlyList<CopilotToolInvocation> EnsureWriteDraftPlan(
+        IReadOnlyList<CopilotToolInvocation> plan,
+        string userMessage)
+    {
+        if (!LooksLikeCreateMeasurementIntent(userMessage.ToLowerInvariant()))
+            return plan;
+
+        if (plan.Any(static tool =>
+                string.Equals(tool.Name, "draft_sql", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tool.Name, "execute_sql", StringComparison.OrdinalIgnoreCase)))
+        {
+            return plan;
+        }
+
+        var sql = TryBuildCreateMeasurementSql(userMessage);
+        if (sql is null)
+            return plan;
+
+        var draft = new CopilotToolInvocation("draft_sql", MaxRows: null, N: null, Measurement: null, Sql: sql);
+        if (plan.Count == 0)
+            return [draft];
+
+        var augmented = new List<CopilotToolInvocation>(Math.Min(MaxPlannedTools, plan.Count + 1));
+        foreach (var tool in plan)
+        {
+            if (augmented.Count >= MaxPlannedTools - 1)
+                break;
+            augmented.Add(tool);
+        }
+
+        augmented.Add(draft);
+        return augmented;
     }
 
     private async Task<CopilotToolExecutionResult> ExecuteToolAsync(
@@ -1097,9 +1134,13 @@ internal sealed class CopilotAgent
 
     private static string BuildFallbackAnswer(
         CopilotAgentContext context,
+        CopilotConversation conversation,
         IReadOnlyList<CopilotToolObservation> observations,
         IReadOnlyList<CopilotCitation> citations)
     {
+        if (TryBuildSqlFallbackAnswer(conversation, observations, out var sqlAnswer))
+            return sqlAnswer;
+
         if (observations.Count == 0)
         {
             return citations.Count > 0
@@ -1112,6 +1153,119 @@ internal sealed class CopilotAgent
             ? string.Concat(citations.Select(static item => $"[{item.Id}]"))
             : string.Empty;
         return $"我已经执行了这些工具：{summary}。请结合返回的结构化结果继续确认或缩小问题范围。{citationSuffix}".Trim();
+    }
+
+    private static bool TryBuildSqlFallbackAnswer(
+        CopilotConversation conversation,
+        IReadOnlyList<CopilotToolObservation> observations,
+        out string answer)
+    {
+        foreach (var observation in observations)
+        {
+            if (string.Equals(observation.Name, "draft_sql", StringComparison.OrdinalIgnoreCase)
+                && TryDeserializeToolResult(observation.ResultJson, ServerJsonContext.Default.McpDraftSqlResult) is { } draft)
+            {
+                answer = BuildDraftSqlFallbackAnswer(draft, observation.Citation.Id);
+                return true;
+            }
+
+            if (string.Equals(observation.Name, "execute_sql", StringComparison.OrdinalIgnoreCase)
+                && TryDeserializeToolResult(observation.ResultJson, ServerJsonContext.Default.McpExecuteSqlResult) is { } executed)
+            {
+                answer = BuildExecuteSqlFallbackAnswer(executed, observation.Citation.Id);
+                return true;
+            }
+        }
+
+        var createSql = TryBuildCreateMeasurementSql(conversation.LatestUserMessage);
+        if (createSql is not null)
+        {
+            answer = BuildInferredCreateSqlFallbackAnswer(createSql);
+            return true;
+        }
+
+        answer = string.Empty;
+        return false;
+    }
+
+    private static T? TryDeserializeToolResult<T>(
+        string json,
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize(json, typeInfo);
+        }
+        catch (JsonException)
+        {
+            return default;
+        }
+    }
+
+    private static string BuildDraftSqlFallbackAnswer(McpDraftSqlResult draft, string citationId)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(draft.StatementType switch
+        {
+            "create_measurement" => "已经为你起草建表 SQL：",
+            "insert" => "已经为你起草写入 SQL：",
+            "delete" => "已经为你起草删除 SQL：",
+            _ => "已经为你起草 SQL：",
+        });
+        AppendSqlBlock(builder, draft.Sql);
+        AppendNotes(builder, draft.Notes);
+        AppendCitation(builder, citationId);
+        return builder.ToString().Trim();
+    }
+
+    private static string BuildExecuteSqlFallbackAnswer(McpExecuteSqlResult executed, string citationId)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(executed.StatementType switch
+        {
+            "create_measurement" => "SQL 已执行，measurement 已创建：",
+            "insert" => "SQL 已执行，数据已写入：",
+            "delete" => "SQL 已执行，删除标记已写入：",
+            _ => "SQL 已执行：",
+        });
+        AppendSqlBlock(builder, executed.Sql);
+        if (executed.RowsAffected is not null)
+            builder.AppendLine($"影响行数/列数：{executed.RowsAffected.Value}。");
+        if (executed.ReturnedRows is not null)
+            builder.AppendLine($"返回行数：{executed.ReturnedRows.Value}。");
+        AppendCitation(builder, citationId);
+        return builder.ToString().Trim();
+    }
+
+    private static string BuildInferredCreateSqlFallbackAnswer(string sql)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("可以用这条 SonnetDB SQL 创建温湿度监测 measurement：");
+        AppendSqlBlock(builder, sql);
+        builder.AppendLine("说明：`time` 是写入数据时提供的毫秒时间戳；TAG 用于按设备或位置过滤，温度和湿度作为 FLOAT FIELD 存储。");
+        return builder.ToString().Trim();
+    }
+
+    private static void AppendSqlBlock(StringBuilder builder, string sql)
+    {
+        builder.AppendLine("```sql");
+        builder.AppendLine(sql.Trim());
+        builder.AppendLine("```");
+    }
+
+    private static void AppendNotes(StringBuilder builder, IReadOnlyList<string> notes)
+    {
+        foreach (var note in notes)
+        {
+            if (!string.IsNullOrWhiteSpace(note))
+                builder.AppendLine($"- {note}");
+        }
+    }
+
+    private static void AppendCitation(StringBuilder builder, string citationId)
+    {
+        if (!string.IsNullOrWhiteSpace(citationId))
+            builder.Append('[').Append(citationId).Append(']');
     }
 
     private static List<CopilotCitation> BuildRetrievalCitations(
@@ -1282,6 +1436,210 @@ internal sealed class CopilotAgent
             || lowered.Contains("删除数据", StringComparison.Ordinal)
             || lowered.Contains("delete from", StringComparison.Ordinal);
     }
+
+    private static bool LooksLikeCreateMeasurementIntent(string lowered)
+    {
+        return lowered.Contains("建表", StringComparison.Ordinal)
+            || lowered.Contains("建一个表", StringComparison.Ordinal)
+            || lowered.Contains("建一张表", StringComparison.Ordinal)
+            || lowered.Contains("新建表", StringComparison.Ordinal)
+            || lowered.Contains("创建表", StringComparison.Ordinal)
+            || lowered.Contains("创建 measurement", StringComparison.Ordinal)
+            || lowered.Contains("create table", StringComparison.Ordinal)
+            || lowered.Contains("create measurement", StringComparison.Ordinal)
+            || (lowered.Contains("建", StringComparison.Ordinal)
+                && (lowered.Contains("表", StringComparison.Ordinal)
+                    || lowered.Contains("measurement", StringComparison.Ordinal)));
+    }
+
+    private static string? TryBuildCreateMeasurementSql(string message)
+    {
+        var lowered = message.ToLowerInvariant();
+        if (!LooksLikeCreateMeasurementIntent(lowered))
+            return null;
+
+        var hasTemperature = lowered.Contains("温度", StringComparison.Ordinal)
+            || ContainsIdentifierToken(message, "temperature")
+            || ContainsIdentifierToken(message, "temp");
+        var hasHumidity = lowered.Contains("湿度", StringComparison.Ordinal)
+            || ContainsIdentifierToken(message, "humidity");
+
+        if (!hasTemperature && !hasHumidity)
+            return null;
+
+        var measurement = InferCreateMeasurementName(message, hasTemperature, hasHumidity);
+        var columns = new List<string>(4);
+        AddTagColumns(message, columns);
+
+        if (hasTemperature)
+        {
+            var name = ContainsIdentifierToken(message, "temperature") && !ContainsIdentifierToken(message, "temp")
+                ? "temperature"
+                : ContainsIdentifierToken(message, "temp")
+                    ? "temp"
+                    : "temperature";
+            AddUniqueColumn(columns, $"{name} FIELD FLOAT");
+        }
+
+        if (hasHumidity)
+            AddUniqueColumn(columns, "humidity FIELD FLOAT");
+
+        return $"CREATE MEASUREMENT {measurement} ({string.Join(", ", columns)})";
+    }
+
+    private static string InferCreateMeasurementName(string message, bool hasTemperature, bool hasHumidity)
+    {
+        var explicitName = TryFindIdentifierAfterAny(
+                message,
+                "名为",
+                "命名为",
+                "叫做",
+                "叫",
+                "表名",
+                "measurement",
+                "table")
+            ?? TryFindIdentifierBefore(message, "表")
+            ?? TryFindIdentifierBefore(message, "measurement");
+
+        if (explicitName is not null && !IsWeakInferredName(explicitName))
+            return explicitName;
+
+        return hasTemperature && hasHumidity
+            ? "sensor_temperature"
+            : "sensor_data";
+    }
+
+    private static void AddTagColumns(string message, List<string> columns)
+    {
+        if (ContainsIdentifierToken(message, "host"))
+            AddUniqueColumn(columns, "host TAG");
+        if (ContainsIdentifierToken(message, "device_id") || message.Contains("设备", StringComparison.Ordinal))
+            AddUniqueColumn(columns, "device_id TAG");
+        if (ContainsIdentifierToken(message, "sensor_id") || message.Contains("传感器", StringComparison.Ordinal))
+            AddUniqueColumn(columns, "sensor_id TAG");
+        if (ContainsIdentifierToken(message, "location") || message.Contains("位置", StringComparison.Ordinal))
+            AddUniqueColumn(columns, "location TAG");
+
+        if (columns.Count == 0)
+        {
+            AddUniqueColumn(columns, "device_id TAG");
+            AddUniqueColumn(columns, "location TAG");
+        }
+    }
+
+    private static void AddUniqueColumn(List<string> columns, string column)
+    {
+        var columnNameEnd = column.IndexOf(' ', StringComparison.Ordinal);
+        var columnName = columnNameEnd > 0 ? column[..columnNameEnd] : column;
+        if (!columns.Any(item => item.StartsWith(columnName + " ", StringComparison.OrdinalIgnoreCase)))
+            columns.Add(column);
+    }
+
+    private static string? TryFindIdentifierAfterAny(string text, params string[] markers)
+    {
+        foreach (var marker in markers)
+        {
+            var index = text.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            while (index >= 0)
+            {
+                var identifier = TryReadIdentifierForward(text, index + marker.Length);
+                if (identifier is not null)
+                    return identifier;
+
+                index = text.IndexOf(marker, index + marker.Length, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TryFindIdentifierBefore(string text, string marker)
+    {
+        var index = text.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        while (index >= 0)
+        {
+            var identifier = TryReadIdentifierBackward(text, index - 1);
+            if (identifier is not null)
+                return identifier;
+
+            index = text.IndexOf(marker, index + marker.Length, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return null;
+    }
+
+    private static string? TryReadIdentifierForward(string text, int start)
+    {
+        var index = start;
+        while (index < text.Length && IsForwardIdentifierSeparator(text[index]))
+            index++;
+
+        return TryReadIdentifierAt(text, index);
+    }
+
+    private static bool IsForwardIdentifierSeparator(char ch)
+        => char.IsWhiteSpace(ch)
+            || ch is ':' or '：' or '=' or '"' or '`' or '\'' or '“' or '”';
+
+    private static string? TryReadIdentifierBackward(string text, int start)
+    {
+        var end = start;
+        while (end >= 0 && char.IsWhiteSpace(text[end]))
+            end--;
+        if (end < 0 || !IsIdentifierPart(text[end]))
+            return null;
+
+        var begin = end;
+        while (begin >= 0 && IsIdentifierPart(text[begin]))
+            begin--;
+        begin++;
+
+        if (begin > end || !IsIdentifierStart(text[begin]))
+            return null;
+
+        return text[begin..(end + 1)];
+    }
+
+    private static string? TryReadIdentifierAt(string text, int index)
+    {
+        if (index < 0 || index >= text.Length || !IsIdentifierStart(text[index]))
+            return null;
+
+        var end = index + 1;
+        while (end < text.Length && IsIdentifierPart(text[end]))
+            end++;
+
+        return text[index..end];
+    }
+
+    private static bool ContainsIdentifierToken(string text, string token)
+    {
+        var index = text.IndexOf(token, StringComparison.OrdinalIgnoreCase);
+        while (index >= 0)
+        {
+            var beforeOk = index == 0 || !IsIdentifierPart(text[index - 1]);
+            var after = index + token.Length;
+            var afterOk = after >= text.Length || !IsIdentifierPart(text[after]);
+            if (beforeOk && afterOk)
+                return true;
+
+            index = text.IndexOf(token, index + token.Length, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
+
+    private static bool IsIdentifierStart(char ch)
+        => ch == '_' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+
+    private static bool IsIdentifierPart(char ch)
+        => IsIdentifierStart(ch) || (ch >= '0' && ch <= '9');
+
+    private static bool IsWeakInferredName(string identifier)
+        => identifier.Equals("for", StringComparison.OrdinalIgnoreCase)
+            || identifier.Equals("with", StringComparison.OrdinalIgnoreCase)
+            || identifier.Equals("need", StringComparison.OrdinalIgnoreCase)
+            || identifier.Equals("needs", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsReadOnlyStatement(SqlStatement statement)
         => statement is SelectStatement or ShowMeasurementsStatement or DescribeMeasurementStatement;
@@ -1494,7 +1852,7 @@ internal sealed class CopilotAgent
         - execute_sql(sql, maxRows?)            // 真正执行 CREATE MEASUREMENT / INSERT / DELETE / SELECT；写入需调用方具备写权限
 
         输出必须是严格 JSON，格式如下：
-        {"tools":[{"name":"draft_sql","sql":"CREATE MEASUREMENT cpu (host TAG, usage FIELD float64, temperature FIELD float64)"}]}
+        {"tools":[{"name":"draft_sql","sql":"CREATE MEASUREMENT cpu (host TAG, usage FIELD FLOAT, temperature FIELD FLOAT)"}]}
 
         规则：
         - 只能输出 JSON，不要附加解释、Markdown 或代码块。

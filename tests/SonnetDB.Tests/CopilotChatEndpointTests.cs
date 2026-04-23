@@ -296,6 +296,41 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
         Assert.Contains("改写 SQL", final.Answer ?? string.Empty, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task CopilotChat_WhenCreateMeasurementAnswerFails_ReturnsDeterministicSql()
+    {
+        _chatProvider!.Reset();
+        _chatProvider.PlannerHandler = static _ => """{"tools":[{"name":"list_measurements"}]}""";
+        _chatProvider.AnswerHandler = static _ => throw new InvalidOperationException("answer unavailable");
+
+        using var client = await CreateReaderClientAsync("reader_create_fallback");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
+        {
+            Content = JsonContent.Create(
+                new CopilotChatRequest(
+                    DatabaseName,
+                    Messages:
+                    [
+                        new AiMessage("user", "帮我写一个sql语句，建一个温度和湿度监测的表。"),
+                    ]),
+                ServerJsonContext.Default.CopilotChatRequest),
+        };
+
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var events = await ReadNdjsonEventsAsync(response);
+
+        Assert.Contains(events, static e => e.Type == "tool_call" && e.ToolName == "draft_sql");
+        var draftResult = Assert.Single(events, static e => e.Type == "tool_result" && e.ToolName == "draft_sql");
+        Assert.Contains("CREATE MEASUREMENT sensor_temperature", draftResult.ToolResult ?? string.Empty, StringComparison.Ordinal);
+
+        var final = Assert.Single(events, static e => e.Type == "final");
+        Assert.Contains("CREATE MEASUREMENT sensor_temperature", final.Answer ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("temperature FIELD FLOAT", final.Answer ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("humidity FIELD FLOAT", final.Answer ?? string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("请结合返回的结构化结果继续确认或缩小问题范围", final.Answer ?? string.Empty, StringComparison.Ordinal);
+    }
+
     private async Task<HttpClient> CreateReaderClientAsync(string userName)
     {
         using var admin = CreateClient(AdminToken);
@@ -414,7 +449,10 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
             Calls.Clear();
         }
 
-        public ValueTask<string> CompleteAsync(IReadOnlyList<AiMessage> messages, CancellationToken cancellationToken = default)
+        public ValueTask<string> CompleteAsync(
+            IReadOnlyList<AiMessage> messages,
+            string? modelOverride = null,
+            CancellationToken cancellationToken = default)
         {
             Calls.Add(messages.ToArray());
             var system = messages[0].Content;

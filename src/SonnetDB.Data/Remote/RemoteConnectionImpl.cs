@@ -72,6 +72,21 @@ internal sealed class RemoteConnectionImpl : IConnectionImpl
         if (_http is null || _state != ConnectionState.Open)
             throw new InvalidOperationException("连接未打开。");
 
+        // 客户端拦截 SQL Console 风格元命令：USE <db> 切换当前库；SELECT current_database() / SHOW CURRENT_DATABASE 返回当前库。
+        // 这两类命令不会发往服务端，避免命中 SqlParser 的"未知关键字"错误。
+        var meta = SqlMetaCommand.TryParse(sql, out var requestedDb);
+        if (meta == MetaKind.CurrentDatabase)
+        {
+            return MaterializedExecutionResult.FromSelect(SqlMetaCommand.BuildCurrentDatabaseResult(_database));
+        }
+        if (meta == MetaKind.UseDatabase)
+        {
+            // 远程模式下 USE 直接修改当前 Database；后续 Execute 会走 /v1/db/<新库>/sql。
+            // 不做服务端校验：若库不存在或当前用户无权限，下一条业务 SQL 会自然返回 404 / 403。
+            _database = requestedDb;
+            return MaterializedExecutionResult.FromSelect(SqlMetaCommand.BuildUseDatabaseResult(requestedDb));
+        }
+
         var url = $"v1/db/{Uri.EscapeDataString(_database)}/sql";
         var body = new SqlRequestBody { Sql = sql };
         var json = JsonSerializer.Serialize(body, RemoteJsonContext.Default.SqlRequestBody);

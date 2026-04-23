@@ -76,8 +76,21 @@ public sealed class SndbConnection : DbConnection
         => _impl is EmbeddedConnectionImpl emb ? emb.Tsdb : null;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// 远程模式下相当于执行 <c>USE &lt;databaseName&gt;</c>：仅修改当前连接的目标库路由，
+    /// 后续 <see cref="SndbCommand"/> 会发往 <c>POST /v1/db/{databaseName}/sql</c>；
+    /// 不会做服务端校验，若库不存在或无权限会在下一条 SQL 上自然报错。
+    /// 嵌入式模式下因 Data Source 等价于物理路径，此方法仍抛出 <see cref="NotSupportedException"/>。
+    /// </remarks>
     public override void ChangeDatabase(string databaseName)
-        => throw new NotSupportedException("SonnetDB 不支持 ChangeDatabase；请关闭连接后用新的 ConnectionString 重新打开。");
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(databaseName);
+        if (_impl is null || State != ConnectionState.Open)
+            throw new InvalidOperationException("连接未打开，无法切换数据库。");
+
+        using var cmd = new SndbCommand($"USE `{databaseName.Replace("`", "``")}`", this);
+        cmd.ExecuteNonQuery();
+    }
 
     /// <inheritdoc />
     public override void Open()

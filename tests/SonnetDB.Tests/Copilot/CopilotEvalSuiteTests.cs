@@ -799,7 +799,10 @@ public sealed class CopilotEvalSuiteTests : IAsyncLifetime
 
         public void Reset() => Calls.Clear();
 
-        public ValueTask<string> CompleteAsync(IReadOnlyList<AiMessage> messages, CancellationToken cancellationToken = default)
+        public ValueTask<string> CompleteAsync(
+            IReadOnlyList<AiMessage> messages,
+            string? modelOverride = null,
+            CancellationToken cancellationToken = default)
         {
             Calls.Add(messages.ToArray());
             var systemPrompt = messages.Count > 0 ? messages[0].Content : string.Empty;

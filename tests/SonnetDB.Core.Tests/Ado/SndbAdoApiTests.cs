@@ -418,4 +418,45 @@ public sealed class TsdbAdoApiTests : IDisposable
         }
         Assert.Equal(ConnectionState.Closed, c.State);
     }
+
+    // ── SQL Console 风格元命令（USE / current_database） ──────────────────────────
+
+    [Fact]
+    public void SelectCurrentDatabase_Embedded_ReturnsDataSourcePath()
+    {
+        using var c = OpenConn();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT current_database()";
+        var v = cmd.ExecuteScalar();
+        Assert.Equal(c.Database, v);
+    }
+
+    [Fact]
+    public void ShowCurrentDatabase_Embedded_ReturnsDataSourcePath()
+    {
+        using var c = OpenConn();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SHOW CURRENT_DATABASE";
+        using var reader = cmd.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal("current_database", reader.GetName(0));
+        Assert.Equal(c.Database, reader.GetValue(0));
+    }
+
+    [Fact]
+    public void Use_Embedded_Throws()
+    {
+        using var c = OpenConn();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "USE foo";
+        var ex = Assert.Throws<NotSupportedException>(() => cmd.ExecuteNonQuery());
+        Assert.Contains("USE", ex.Message);
+    }
+
+    [Fact]
+    public void ChangeDatabase_Embedded_Throws()
+    {
+        using var c = OpenConn();
+        Assert.Throws<NotSupportedException>(() => c.ChangeDatabase("foo"));
+    }
 }
