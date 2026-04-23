@@ -28,21 +28,21 @@ requires_tools:
 
 ## 推荐做法
 
-1. 维度（host, region, sensor_id）→ tag。  
-2. 数值采样（temperature, qps, latency_ms）→ field（float/int）。  
-3. 偶尔聚合的字符串（status, error_code）：基数 < 10000 → tag；否则 field。  
-4. 命名：snake_case，避免大写、空格、保留字。  
+1. 维度（host, region, sensor_id）→ tag。
+2. 数值采样（temperature, qps, latency_ms）→ field（float/int）。
+3. 偶尔聚合的字符串（status, error_code）：基数 < 10000 → tag；否则 field。
+4. 命名：snake_case，避免大写、空格、保留字。
 5. 时间列固定为 `time`，毫秒精度 `Int64`。
 
 ## 高基数红线
 
-- 单 measurement 唯一 tag 组合数 > 1,000,000 → 建议拆 measurement，按业务前缀。  
-- 把 trace_id / request_id 当 tag 是高基数地雷，请改成 field。  
+- 单 measurement 唯一 tag 组合数 > 1,000,000 → 建议拆 measurement，按业务前缀。
+- 把 trace_id / request_id 当 tag 是高基数地雷，请改成 field。
 - 想加新 tag 时，先 `query_sql SELECT count(distinct(...))` 做评估。
 
 ## 检查清单
 
-- [ ] 是否每个 measurement 都有时间过滤索引？  
-- [ ] tag 数 ≤ 8（推荐）  
-- [ ] 没有 NULLable tag（用空字符串占位）  
+- [ ] 是否每个 measurement 都有时间过滤索引？
+- [ ] tag 数 ≤ 8（推荐）
+- [ ] 没有 NULLable tag（用空字符串占位）
 - [ ] 写入前 batch 已按 tag 排序（提升压缩率）

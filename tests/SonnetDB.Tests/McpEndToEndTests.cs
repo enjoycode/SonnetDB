@@ -11,6 +11,7 @@ using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using SonnetDB.Configuration;
 using SonnetDB.Contracts;
+using SonnetDB.Hosting;
 using SonnetDB.Json;
 using Xunit;
 
@@ -27,6 +28,7 @@ public sealed class McpEndToEndTests : IAsyncLifetime
     private const string _adminToken = "mcp-admin-token";
     private const string _readOnlyToken = "mcp-readonly-token";
     private const string _dbName = "mcp_e2e";
+    private const string _hiddenDbName = "mcp_hidden";
 
     public async Task InitializeAsync()
     {
@@ -55,6 +57,7 @@ public sealed class McpEndToEndTests : IAsyncLifetime
 
         using var admin = CreateHttpClient(_adminToken);
         await CreateDatabaseAsync(admin, _dbName);
+        await CreateDatabaseAsync(admin, _hiddenDbName);
         await ExecuteSqlAsync(admin, "CREATE MEASUREMENT cpu (host TAG, usage FIELD FLOAT, temp FIELD INT)");
         await ExecuteSqlAsync(admin,
             "INSERT INTO cpu (time, host, usage, temp) VALUES " +
@@ -62,6 +65,10 @@ public sealed class McpEndToEndTests : IAsyncLifetime
             "(2000, 'h1', 0.7, 12), " +
             "(3000, 'h1', 0.9, 13)");
         await ExecuteSqlAsync(admin, "CREATE MEASUREMENT mem (host TAG, used FIELD INT)");
+
+        var registry = _app!.Services.GetRequiredService<TsdbRegistry>();
+        Assert.True(registry.TryGet(_dbName, out var tsdb));
+        _ = tsdb.FlushNow();
     }
 
     public async Task DisposeAsync()
@@ -86,7 +93,12 @@ public sealed class McpEndToEndTests : IAsyncLifetime
         var tools = await client.ListToolsAsync();
         var names = tools.Select(t => t.Name).OrderBy(static name => name, StringComparer.Ordinal).ToArray();
 
-        Assert.Equal(new[] { "describe_measurement", "list_measurements", "query_sql" }, names);
+        Assert.Contains("describe_measurement", names);
+        Assert.Contains("explain_sql", names);
+        Assert.Contains("list_databases", names);
+        Assert.Contains("list_measurements", names);
+        Assert.Contains("query_sql", names);
+        Assert.Contains("sample_rows", names);
     }
 
     [Fact]
@@ -143,6 +155,105 @@ public sealed class McpEndToEndTests : IAsyncLifetime
         Assert.Equal("tag", columns[0].GetProperty("columnType").GetString());
         Assert.Equal("usage", columns[1].GetProperty("name").GetString());
         Assert.Equal("float64", columns[1].GetProperty("dataType").GetString());
+    }
+
+    [Fact]
+    public async Task ListDatabases_WithDynamicUserGrant_ReturnsOnlyVisibleDatabases()
+    {
+        using var admin = CreateHttpClient(_adminToken);
+        await ExecuteSqlAsync(admin, "CREATE USER dbreader WITH PASSWORD 'p'");
+        await ExecuteSqlAsync(admin, $"GRANT READ ON DATABASE {_dbName} TO dbreader");
+
+        var token = await LoginAsync("dbreader", "p");
+
+        await using var client = await CreateMcpClientAsync(token);
+        var result = await client.CallToolAsync("list_databases", new Dictionary<string, object?>());
+
+        Assert.False(result.IsError.GetValueOrDefault());
+        var databases = result.StructuredContent!.Value.GetProperty("databases")
+            .EnumerateArray()
+            .Select(static element => element.GetString())
+            .ToArray();
+        Assert.Equal(new[] { _dbName }, databases);
+        Assert.Equal(_dbName, result.StructuredContent!.Value.GetProperty("currentDatabase").GetString());
+    }
+
+    [Fact]
+    public async Task SampleRows_WithLimit_ReturnsStructuredRows()
+    {
+        await using var client = await CreateMcpClientAsync();
+
+        var result = await client.CallToolAsync(
+            "sample_rows",
+            new Dictionary<string, object?>
+            {
+                ["measurement"] = "cpu",
+                ["n"] = 2,
+            });
+
+        Assert.False(result.IsError.GetValueOrDefault());
+        var structured = result.StructuredContent!.Value;
+        Assert.Equal(_dbName, structured.GetProperty("database").GetString());
+        Assert.Equal("cpu", structured.GetProperty("measurement").GetString());
+        Assert.Equal(2, structured.GetProperty("requestedRows").GetInt32());
+        Assert.Equal(2, structured.GetProperty("returnedRows").GetInt32());
+        Assert.True(structured.GetProperty("truncated").GetBoolean());
+
+        var columns = structured.GetProperty("columns").EnumerateArray().Select(static x => x.GetString()).ToArray();
+        Assert.Equal(new[] { "time", "host", "usage", "temp" }, columns);
+        Assert.Equal(2, structured.GetProperty("rows").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task ExplainSql_WithTimeAndTagFilter_ReturnsEstimatedScanStats()
+    {
+        await using var client = await CreateMcpClientAsync();
+
+        var result = await client.CallToolAsync(
+            "explain_sql",
+            new Dictionary<string, object?>
+            {
+                ["sql"] = "SELECT usage FROM cpu WHERE host = 'h1' AND time >= 1000 AND time <= 2000",
+            });
+
+        Assert.False(result.IsError.GetValueOrDefault());
+        var structured = result.StructuredContent!.Value;
+        Assert.Equal(_dbName, structured.GetProperty("database").GetString());
+        Assert.Equal("select", structured.GetProperty("statementType").GetString());
+        Assert.Equal("cpu", structured.GetProperty("measurement").GetString());
+        Assert.Equal(1, structured.GetProperty("matchedSeriesCount").GetInt32());
+        Assert.Equal(1, structured.GetProperty("estimatedSegmentCount").GetInt32());
+        Assert.Equal(1, structured.GetProperty("estimatedBlockCount").GetInt32());
+        Assert.Equal(2, structured.GetProperty("estimatedScannedRows").GetInt64());
+        Assert.Equal(0, structured.GetProperty("estimatedMemTableRows").GetInt64());
+        Assert.Equal(2, structured.GetProperty("estimatedSegmentRows").GetInt64());
+        Assert.True(structured.GetProperty("hasTimeFilter").GetBoolean());
+        Assert.Equal(1, structured.GetProperty("tagFilterCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task ListMeasurements_AfterSchemaChange_WithinCacheWindow_ReturnsCachedSnapshot()
+    {
+        await using var client = await CreateMcpClientAsync();
+
+        var first = await client.CallToolAsync(
+            "list_measurements",
+            new Dictionary<string, object?> { ["maxRows"] = 10 });
+        Assert.False(first.IsError.GetValueOrDefault());
+
+        using var admin = CreateHttpClient(_adminToken);
+        await ExecuteSqlAsync(admin, "CREATE MEASUREMENT disk (host TAG, used FIELD INT)");
+
+        var second = await client.CallToolAsync(
+            "list_measurements",
+            new Dictionary<string, object?> { ["maxRows"] = 10 });
+        Assert.False(second.IsError.GetValueOrDefault());
+
+        var measurements = second.StructuredContent!.Value.GetProperty("measurements")
+            .EnumerateArray()
+            .Select(static element => element.GetString())
+            .ToArray();
+        Assert.Equal(new[] { "cpu", "mem" }, measurements);
     }
 
     [Fact]

@@ -1,7 +1,10 @@
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using SonnetDB.Auth;
 using SonnetDB.Copilot;
+using SonnetDB.Hosting;
 using SonnetDB.Json;
+using SonnetDB.Query.Functions;
 using SonnetDB.Sql;
 using SonnetDB.Sql.Ast;
 using SonnetDB.Sql.Execution;
@@ -14,6 +17,39 @@ namespace SonnetDB.Mcp;
 [McpServerToolType]
 internal sealed class SonnetDbMcpTools
 {
+    /// <summary>
+    /// 列出当前凭据可见的数据库集合。
+    /// </summary>
+    [McpServerTool(
+        Name = "list_databases",
+        Title = "List Databases",
+        ReadOnly = true,
+        Idempotent = true,
+        OpenWorld = false,
+        UseStructuredContent = true)]
+    public static CallToolResult ListDatabases(
+        SonnetDbMcpContextAccessor contextAccessor,
+        TsdbRegistry registry,
+        GrantsStore grantsStore)
+    {
+        try
+        {
+            var context = contextAccessor.GetHttpContext();
+            var currentDatabase = contextAccessor.GetDatabaseName();
+            var visibleDatabases = DatabaseAccessEvaluator.GetVisibleDatabases(
+                context,
+                grantsStore,
+                registry.ListDatabases());
+
+            var payload = new McpDatabaseListResult(currentDatabase, visibleDatabases);
+            return SonnetDbMcpResults.Success(payload, ServerJsonContext.Default.McpDatabaseListResult);
+        }
+        catch (Exception ex)
+        {
+            return SonnetDbMcpResults.Error(ex.Message);
+        }
+    }
+
     /// <summary>
     /// 执行只读 SQL 查询。仅允许 <c>SELECT</c> / <c>SHOW MEASUREMENTS</c> / <c>SHOW TABLES</c> /
     /// <c>DESCRIBE [MEASUREMENT]</c>，并自动限制最大返回行数。
@@ -38,7 +74,7 @@ internal sealed class SonnetDbMcpTools
             var normalizedLimit = SonnetDbMcpResults.NormalizeToolRowLimit(maxRows);
             var statement = SqlParser.Parse(sql);
 
-            if (statement is not SelectStatement and not ShowMeasurementsStatement and not DescribeMeasurementStatement)
+            if (!IsReadOnlyMcpStatement(statement))
                 return SonnetDbMcpResults.Error(
                     "query_sql 仅支持 SELECT、SHOW MEASUREMENTS / SHOW TABLES 与 DESCRIBE [MEASUREMENT]。");
 
@@ -80,25 +116,23 @@ internal sealed class SonnetDbMcpTools
         UseStructuredContent = true)]
     public static CallToolResult ListMeasurements(
         int? maxRows,
-        SonnetDbMcpContextAccessor contextAccessor)
+        SonnetDbMcpContextAccessor contextAccessor,
+        SonnetDbMcpSchemaCache schemaCache)
     {
         try
         {
             var databaseName = contextAccessor.GetDatabaseName();
             var tsdb = contextAccessor.GetDatabase();
             var normalizedLimit = SonnetDbMcpResults.NormalizeToolRowLimit(maxRows);
-            var executionResult = SqlExecutor.ExecuteStatement(tsdb, new ShowMeasurementsStatement());
-            if (executionResult is not SelectExecutionResult selectResult)
-                return SonnetDbMcpResults.Error("SHOW MEASUREMENTS 未返回结果集。");
-
-            var names = new List<string>(Math.Min(selectResult.Rows.Count, normalizedLimit));
-            for (int i = 0; i < selectResult.Rows.Count && i < normalizedLimit; i++)
-                names.Add((string?)selectResult.Rows[i][0] ?? string.Empty);
+            var measurements = schemaCache.GetMeasurements(databaseName, tsdb);
+            var names = new List<string>(Math.Min(measurements.Count, normalizedLimit));
+            for (int i = 0; i < measurements.Count && i < normalizedLimit; i++)
+                names.Add(measurements[i]);
 
             var payload = new McpMeasurementListResult(
                 databaseName,
                 names,
-                Truncated: selectResult.Rows.Count > normalizedLimit);
+                Truncated: measurements.Count > normalizedLimit);
 
             return SonnetDbMcpResults.Success(payload, ServerJsonContext.Default.McpMeasurementListResult);
         }
@@ -120,28 +154,107 @@ internal sealed class SonnetDbMcpTools
         UseStructuredContent = true)]
     public static CallToolResult DescribeMeasurement(
         string name,
-        SonnetDbMcpContextAccessor contextAccessor)
+        SonnetDbMcpContextAccessor contextAccessor,
+        SonnetDbMcpSchemaCache schemaCache)
     {
         try
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(name);
             var databaseName = contextAccessor.GetDatabaseName();
             var tsdb = contextAccessor.GetDatabase();
-            var executionResult = SqlExecutor.ExecuteStatement(tsdb, new DescribeMeasurementStatement(name));
-            if (executionResult is not SelectExecutionResult selectResult)
-                return SonnetDbMcpResults.Error("DESCRIBE MEASUREMENT 未返回结果集。");
+            var payload = schemaCache.GetMeasurementSchema(databaseName, name, tsdb);
+            return SonnetDbMcpResults.Success(payload, ServerJsonContext.Default.McpMeasurementSchemaResult);
+        }
+        catch (Exception ex)
+        {
+            return SonnetDbMcpResults.Error(ex.Message);
+        }
+    }
 
-            var columns = new List<McpMeasurementColumnResult>(selectResult.Rows.Count);
-            foreach (var row in selectResult.Rows)
+    /// <summary>
+    /// 返回指定 measurement 的少量示例行。
+    /// </summary>
+    [McpServerTool(
+        Name = "sample_rows",
+        Title = "Sample Rows",
+        ReadOnly = true,
+        Idempotent = true,
+        OpenWorld = false,
+        UseStructuredContent = true)]
+    public static CallToolResult SampleRows(
+        string measurement,
+        int? n,
+        SonnetDbMcpContextAccessor contextAccessor)
+    {
+        try
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(measurement);
+
+            var databaseName = contextAccessor.GetDatabaseName();
+            var tsdb = contextAccessor.GetDatabase();
+            var normalizedLimit = SonnetDbMcpResults.NormalizeSampleRowLimit(n);
+
+            var statement = new SelectStatement(
+                Projections: [new SelectItem(StarExpression.Instance, Alias: null)],
+                Measurement: measurement,
+                Where: null,
+                GroupBy: [],
+                TableValuedFunction: null,
+                Pagination: new PaginationSpec(0, checked(normalizedLimit + 1)));
+
+            var executionResult = SqlExecutor.ExecuteStatement(tsdb, statement);
+            if (executionResult is not SelectExecutionResult selectResult)
+                return SonnetDbMcpResults.Error("sample_rows 未返回结果集。");
+
+            var (rows, truncated) = SonnetDbMcpResults.SliceRows(selectResult, normalizedLimit, canTruncate: true);
+            var payload = new McpSampleRowsResult(
+                Database: databaseName,
+                Measurement: measurement,
+                RequestedRows: normalizedLimit,
+                Columns: selectResult.Columns,
+                Rows: rows,
+                ReturnedRows: rows.Count,
+                Truncated: truncated);
+
+            return SonnetDbMcpResults.Success(payload, ServerJsonContext.Default.McpSampleRowsResult);
+        }
+        catch (Exception ex)
+        {
+            return SonnetDbMcpResults.Error(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 估算一条只读 SQL 将扫描的段数与行数。
+    /// </summary>
+    [McpServerTool(
+        Name = "explain_sql",
+        Title = "Explain SQL",
+        ReadOnly = true,
+        Idempotent = true,
+        OpenWorld = false,
+        UseStructuredContent = true)]
+    public static CallToolResult ExplainSql(
+        string sql,
+        SonnetDbMcpContextAccessor contextAccessor,
+        SonnetDbMcpExplainSqlService explainSqlService)
+    {
+        try
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+
+            var databaseName = contextAccessor.GetDatabaseName();
+            var tsdb = contextAccessor.GetDatabase();
+            var statement = SqlParser.Parse(sql);
+
+            if (!IsReadOnlyMcpStatement(statement))
             {
-                columns.Add(new McpMeasurementColumnResult(
-                    Name: (string?)row[0] ?? string.Empty,
-                    ColumnType: (string?)row[1] ?? string.Empty,
-                    DataType: (string?)row[2] ?? string.Empty));
+                return SonnetDbMcpResults.Error(
+                    "explain_sql 仅支持 SELECT、SHOW MEASUREMENTS / SHOW TABLES 与 DESCRIBE [MEASUREMENT]。");
             }
 
-            var payload = new McpMeasurementSchemaResult(databaseName, name, columns);
-            return SonnetDbMcpResults.Success(payload, ServerJsonContext.Default.McpMeasurementSchemaResult);
+            var payload = explainSqlService.Explain(databaseName, tsdb, statement);
+            return SonnetDbMcpResults.Success(payload, ServerJsonContext.Default.McpExplainSqlResult);
         }
         catch (Exception ex)
         {
@@ -156,6 +269,9 @@ internal sealed class SonnetDbMcpTools
         DescribeMeasurementStatement => "describe_measurement",
         _ => "unknown",
     };
+
+    private static bool IsReadOnlyMcpStatement(SqlStatement statement)
+        => statement is SelectStatement or ShowMeasurementsStatement or DescribeMeasurementStatement;
 
     /// <summary>
     /// 在 Copilot 知识库 <c>__copilot__.docs</c> 上做向量召回（PR #64）。

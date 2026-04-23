@@ -38,6 +38,12 @@
 - 回填 `ROADMAP.md` 的 PR #62 状态与 Milestone 13 里程碑进度：默认 `10k / 100k` 向量基准与 README 实测结果已闭环，`1M` 长测与外部库同机对比保留为显式 / 环境可选的后续补数项，不再阻塞 Milestone 14。
 
 ### Added
+- **PR #66 — MCP schema 工具增强 + 抽样 / explain（Milestone 14 第四切片）**
+  - MCP 新增只读工具：`list_databases()`、`sample_rows(measurement, n=5)`、`explain_sql(sql)`；其中 `list_databases()` 会按 `GrantsStore` 与当前 Bearer 身份过滤为“当前可见数据库”集合。
+  - 新增 `SonnetDbMcpSchemaCache`：对 `list_measurements` / `describe_measurement` 及对应 schema resources 统一提供 30 秒进程内缓存，降低 Copilot / MCP 高频探测时的重复 schema 开销。
+  - 新增 `SonnetDbMcpExplainSqlService`：对只读 SQL 估算 `matchedSeriesCount`、`estimatedSegmentCount`、`estimatedBlockCount` 与 `estimatedScannedRows`，覆盖普通 `SELECT`、`SHOW MEASUREMENTS`、`DESCRIBE MEASUREMENT`，并支持 `forecast(...)` / `knn(...)` 表值函数的主扫描字段估算。
+  - 端到端测试补齐：覆盖新工具返回结构、动态用户数据库可见性过滤，以及 schema 工具 30 秒缓存窗口内返回旧快照的行为。
+
 - **PR #65 — Copilot 技能库 + 技能路由（Milestone 14 第三切片）**
   - 新增 `SkillSourceScanner` / `SkillFrontmatter` / `SkillRegistry` / `SkillSearchService`：扫描 `copilot/skills/*.md`（含 YAML frontmatter：`name`/`description`/`triggers`/`requires_tools`），把 `description + triggers` 嵌入到 `__copilot__.skills(name TAG, description, triggers, requires_tools, path, body, embedding VECTOR(384))`，并维护 `skills_state` 做 mtime/fingerprint 增量同步。
   - 新增 `CopilotSkillsIngestionService`（`BackgroundService`）：服务端启动时按 `Copilot.Skills.AutoIngestOnStartup` 自动执行一次技能库摄入，未就绪 / 未启用则安全跳过。

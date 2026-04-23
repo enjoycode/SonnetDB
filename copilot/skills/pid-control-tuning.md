@@ -19,10 +19,10 @@ requires_tools:
 
 ## 推荐流程
 
-1. **采集开环响应**：把执行机构按阶跃信号驱动，用 `query_sql` 抓取 1～2 个时间常数的过程量曲线。  
-2. **估算时间常数 τ 与延迟 L**：`docs_search query="ziegler nichols"` 获取经验公式。  
-3. **初始 Kp/Ki/Kd**：使用 Ziegler-Nichols 表格作为起点，再按 0.5～1.5 的系数微调。  
-4. **在线观察**：`SELECT setpoint, pv, output FROM control_loop ORDER BY time DESC LIMIT 200` 看是否有过冲、震荡。  
+1. **采集开环响应**：把执行机构按阶跃信号驱动，用 `query_sql` 抓取 1～2 个时间常数的过程量曲线。
+2. **估算时间常数 τ 与延迟 L**：`docs_search query="ziegler nichols"` 获取经验公式。
+3. **初始 Kp/Ki/Kd**：使用 Ziegler-Nichols 表格作为起点，再按 0.5～1.5 的系数微调。
+4. **在线观察**：`SELECT setpoint, pv, output FROM control_loop ORDER BY time DESC LIMIT 200` 看是否有过冲、震荡。
 5. **抗积分饱和**：当 output 持续顶到上下限时，把积分项 reset，或加入 anti-windup。
 
 ## SonnetDB 内置函数
@@ -34,6 +34,6 @@ requires_tools:
 
 ## 提示
 
-- Kp 太大 → 高频震荡；Kp 太小 → 响应慢。  
-- Ki 引入相位滞后 90°，过大易振荡；为零会有稳态误差。  
+- Kp 太大 → 高频震荡；Kp 太小 → 响应慢。
+- Ki 引入相位滞后 90°，过大易振荡；为零会有稳态误差。
 - Kd 对噪声敏感，必要时加一个一阶低通（`ema(...)`）。

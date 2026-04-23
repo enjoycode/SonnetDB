@@ -1,8 +1,6 @@
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using SonnetDB.Json;
-using SonnetDB.Sql.Ast;
-using SonnetDB.Sql.Execution;
 
 namespace SonnetDB.Mcp;
 
@@ -20,21 +18,22 @@ internal sealed class SonnetDbMcpResources
         Name = "measurements",
         Title = "Measurement List",
         MimeType = "application/json")]
-    public static TextResourceContents GetMeasurements(SonnetDbMcpContextAccessor contextAccessor)
+    public static TextResourceContents GetMeasurements(
+        SonnetDbMcpContextAccessor contextAccessor,
+        SonnetDbMcpSchemaCache schemaCache)
     {
         var databaseName = contextAccessor.GetDatabaseName();
         var tsdb = contextAccessor.GetDatabase();
-        var executionResult = SqlExecutor.ExecuteStatement(tsdb, new ShowMeasurementsStatement());
-        var selectResult = (SelectExecutionResult)executionResult!;
+        var measurements = schemaCache.GetMeasurements(databaseName, tsdb);
 
-        var names = new List<string>(Math.Min(selectResult.Rows.Count, SonnetDbMcpResults.ResourceRowLimit));
-        for (int i = 0; i < selectResult.Rows.Count && i < SonnetDbMcpResults.ResourceRowLimit; i++)
-            names.Add((string?)selectResult.Rows[i][0] ?? string.Empty);
+        var names = new List<string>(Math.Min(measurements.Count, SonnetDbMcpResults.ResourceRowLimit));
+        for (int i = 0; i < measurements.Count && i < SonnetDbMcpResults.ResourceRowLimit; i++)
+            names.Add(measurements[i]);
 
         var payload = new McpMeasurementListResult(
             databaseName,
             names,
-            Truncated: selectResult.Rows.Count > SonnetDbMcpResults.ResourceRowLimit);
+            Truncated: measurements.Count > SonnetDbMcpResults.ResourceRowLimit);
 
         return SonnetDbMcpResults.Resource(
             "sonnetdb://schema/measurements",
@@ -52,25 +51,14 @@ internal sealed class SonnetDbMcpResources
         MimeType = "application/json")]
     public static TextResourceContents GetMeasurementSchema(
         string name,
-        SonnetDbMcpContextAccessor contextAccessor)
+        SonnetDbMcpContextAccessor contextAccessor,
+        SonnetDbMcpSchemaCache schemaCache)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
         var databaseName = contextAccessor.GetDatabaseName();
         var tsdb = contextAccessor.GetDatabase();
-        var executionResult = SqlExecutor.ExecuteStatement(tsdb, new DescribeMeasurementStatement(name));
-        var selectResult = (SelectExecutionResult)executionResult!;
-
-        var columns = new List<McpMeasurementColumnResult>(selectResult.Rows.Count);
-        foreach (var row in selectResult.Rows)
-        {
-            columns.Add(new McpMeasurementColumnResult(
-                Name: (string?)row[0] ?? string.Empty,
-                ColumnType: (string?)row[1] ?? string.Empty,
-                DataType: (string?)row[2] ?? string.Empty));
-        }
-
-        var payload = new McpMeasurementSchemaResult(databaseName, name, columns);
+        var payload = schemaCache.GetMeasurementSchema(databaseName, name, tsdb);
         return SonnetDbMcpResults.Resource(
             $"sonnetdb://schema/measurement/{name}",
             payload,

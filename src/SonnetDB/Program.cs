@@ -172,6 +172,8 @@ public static class Program
         builder.Services.AddSingleton<ServerMetrics>();
         builder.Services.AddSingleton<EventBroadcaster>();
         builder.Services.AddSingleton<SonnetDbMcpContextAccessor>();
+        builder.Services.AddSingleton<SonnetDbMcpSchemaCache>();
+        builder.Services.AddSingleton<SonnetDbMcpExplainSqlService>();
         builder.Services.AddSingleton(sp =>
         {
             var registry = new TsdbRegistry(serverOptions.DataRoot, sp.GetRequiredService<EventBroadcaster>());

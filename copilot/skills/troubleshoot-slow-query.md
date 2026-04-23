@@ -20,11 +20,11 @@ requires_tools:
 
 ## 流程
 
-1. 用 `query_sql` 拿到原始 SQL，复制一份当前条件。  
-2. 检查 **时间过滤**：是否带 `WHERE time >= ... AND time < ...`？没有就先加。  
-3. 检查 **tag 等值**：把高基数 tag（如 host, device_id）放在 `WHERE` 中等值过滤，避免全表扫描。  
-4. `describe_measurement` 看一下 schema：是不是把高基数维度建成 `field` 而不是 `tag`？  
-5. 看返回行数：如果几十万行说明缺聚合，加 `GROUP BY time(...)`。  
+1. 用 `query_sql` 拿到原始 SQL，复制一份当前条件。
+2. 检查 **时间过滤**：是否带 `WHERE time >= ... AND time < ...`？没有就先加。
+3. 检查 **tag 等值**：把高基数 tag（如 host, device_id）放在 `WHERE` 中等值过滤，避免全表扫描。
+4. `describe_measurement` 看一下 schema：是不是把高基数维度建成 `field` 而不是 `tag`？
+5. 看返回行数：如果几十万行说明缺聚合，加 `GROUP BY time(...)`。
 6. 客户端计时与服务端 `?explain=true` 对比，定位是网络、解码还是执行慢。
 
 ## 经验法则
@@ -38,5 +38,5 @@ requires_tools:
 
 ## 进一步
 
-- 启用 `metrics` HTTP endpoint，看 `query_latency_p99`。  
+- 启用 `metrics` HTTP endpoint，看 `query_latency_p99`。
 - `docs_search query="performance"` 拉相关章节。

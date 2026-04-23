@@ -18,6 +18,11 @@ internal sealed record McpMeasurementColumnResult(string Name, string ColumnType
 internal sealed record McpMeasurementListResult(string Database, IReadOnlyList<string> Measurements, bool Truncated);
 
 /// <summary>
+/// MCP tool <c>list_databases</c> 的返回体。
+/// </summary>
+internal sealed record McpDatabaseListResult(string CurrentDatabase, IReadOnlyList<string> Databases);
+
+/// <summary>
 /// MCP tool/resource 的 measurement schema 返回体。
 /// </summary>
 internal sealed record McpMeasurementSchemaResult(
@@ -95,6 +100,34 @@ internal sealed record McpSkillLoadResult(
     string Source);
 
 /// <summary>
+/// MCP tool <c>sample_rows</c> 的返回体。
+/// </summary>
+internal sealed record McpSampleRowsResult(
+    string Database,
+    string Measurement,
+    int RequestedRows,
+    IReadOnlyList<string> Columns,
+    IReadOnlyList<IReadOnlyList<JsonElementValue>> Rows,
+    int ReturnedRows,
+    bool Truncated);
+
+/// <summary>
+/// MCP tool <c>explain_sql</c> 的返回体。
+/// </summary>
+internal sealed record McpExplainSqlResult(
+    string Database,
+    string StatementType,
+    string? Measurement,
+    int MatchedSeriesCount,
+    int EstimatedSegmentCount,
+    int EstimatedBlockCount,
+    long EstimatedScannedRows,
+    long EstimatedMemTableRows,
+    long EstimatedSegmentRows,
+    bool HasTimeFilter,
+    int TagFilterCount);
+
+/// <summary>
 /// MCP 工具/资源的辅助方法。
 /// </summary>
 internal static class SonnetDbMcpResults
@@ -102,18 +135,23 @@ internal static class SonnetDbMcpResults
     public const int DefaultToolRowLimit = 100;
     public const int MaxToolRowLimit = 1000;
     public const int ResourceRowLimit = 500;
+    public const int DefaultSampleRowLimit = 5;
+    public const int MaxSampleRowLimit = 100;
 
     /// <summary>
     /// 校验并规范化工具的最大返回行数。
     /// </summary>
     public static int NormalizeToolRowLimit(int? requestedLimit)
     {
-        var limit = requestedLimit ?? DefaultToolRowLimit;
-        if (limit <= 0)
-            throw new InvalidOperationException("maxRows 必须大于 0。");
-        if (limit > MaxToolRowLimit)
-            throw new InvalidOperationException($"maxRows 不能超过 {MaxToolRowLimit}。");
-        return limit;
+        return NormalizePositiveLimit(requestedLimit, DefaultToolRowLimit, MaxToolRowLimit, "maxRows");
+    }
+
+    /// <summary>
+    /// 校验并规范化抽样工具的最大返回行数。
+    /// </summary>
+    public static int NormalizeSampleRowLimit(int? requestedLimit)
+    {
+        return NormalizePositiveLimit(requestedLimit, DefaultSampleRowLimit, MaxSampleRowLimit, "n");
     }
 
     /// <summary>
@@ -230,4 +268,14 @@ internal static class SonnetDbMcpResults
         decimal number => new JsonElementValue(ScalarKind.Double, DoubleValue: (double)number),
         _ => new JsonElementValue(ScalarKind.String, StringValue: value.ToString()),
     };
+
+    private static int NormalizePositiveLimit(int? requestedLimit, int defaultLimit, int maxLimit, string parameterName)
+    {
+        var limit = requestedLimit ?? defaultLimit;
+        if (limit <= 0)
+            throw new InvalidOperationException($"{parameterName} 必须大于 0。");
+        if (limit > maxLimit)
+            throw new InvalidOperationException($"{parameterName} 不能超过 {maxLimit}。");
+        return limit;
+    }
 }

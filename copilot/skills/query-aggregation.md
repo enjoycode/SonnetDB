@@ -33,14 +33,14 @@ ORDER BY bucket;
 
 ## 步骤
 
-1. 调用 `describe_measurement` 确认列名与数据类型。  
-2. 用 `query_sql` 先做一次小窗口的 sample 查询（例如 `LIMIT 5`）确认结果结构。  
-3. 在 SELECT 中显式给聚合列起别名（`AS avg_temp`），让客户端字段名稳定。  
-4. 始终带 `WHERE time >= ...` 做时间裁剪；对裸 `SELECT *` 务必在 `query_sql` 上加 `maxRows`。  
+1. 调用 `describe_measurement` 确认列名与数据类型。
+2. 用 `query_sql` 先做一次小窗口的 sample 查询（例如 `LIMIT 5`）确认结果结构。
+3. 在 SELECT 中显式给聚合列起别名（`AS avg_temp`），让客户端字段名稳定。
+4. 始终带 `WHERE time >= ...` 做时间裁剪；对裸 `SELECT *` 务必在 `query_sql` 上加 `maxRows`。
 5. `GROUP BY time(...)` 的桶大小要参考查询区间：>30 天用 1h；>1 天用 5m；最近 1 小时用 5s/10s。
 
 ## 反模式
 
-- 不带时间过滤的全表聚合（容易扫描整个 segment）。  
-- 把 tag 列放进聚合函数：tag 应放进 `GROUP BY`。  
+- 不带时间过滤的全表聚合（容易扫描整个 segment）。
+- 把 tag 列放进聚合函数：tag 应放进 `GROUP BY`。
 - 在客户端用 `SUM` 替代数据库聚合：会跨网络传送原始点。
