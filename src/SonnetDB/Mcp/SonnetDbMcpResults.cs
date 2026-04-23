@@ -48,6 +48,53 @@ internal sealed record McpDatabaseStatsResult(
     long CheckpointLsn);
 
 /// <summary>
+/// MCP tool <c>docs_search</c> 的单条命中（PR #64）。
+/// </summary>
+internal sealed record McpDocsSearchHit(
+    string Source,
+    string Title,
+    string Section,
+    string Content,
+    double Score);
+
+/// <summary>
+/// MCP tool <c>docs_search</c> 的返回体（PR #64）。
+/// </summary>
+internal sealed record McpDocsSearchResult(
+    string Query,
+    int Requested,
+    IReadOnlyList<McpDocsSearchHit> Hits);
+
+/// <summary>
+/// MCP tool <c>skill_search</c> 的单条命中（PR #65）。
+/// </summary>
+internal sealed record McpSkillSearchHit(
+    string Name,
+    string Description,
+    IReadOnlyList<string> Triggers,
+    IReadOnlyList<string> RequiresTools,
+    double Score);
+
+/// <summary>
+/// MCP tool <c>skill_search</c> 的返回体（PR #65）。
+/// </summary>
+internal sealed record McpSkillSearchResult(
+    string Query,
+    int Requested,
+    IReadOnlyList<McpSkillSearchHit> Hits);
+
+/// <summary>
+/// MCP tool <c>skill_load</c> 的返回体（PR #65）。
+/// </summary>
+internal sealed record McpSkillLoadResult(
+    string Name,
+    string Description,
+    IReadOnlyList<string> Triggers,
+    IReadOnlyList<string> RequiresTools,
+    string Body,
+    string Source);
+
+/// <summary>
 /// MCP 工具/资源的辅助方法。
 /// </summary>
 internal static class SonnetDbMcpResults

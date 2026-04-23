@@ -24,6 +24,27 @@ public sealed class CopilotOptions
     /// 文档摄入 / 检索配置。
     /// </summary>
     public CopilotDocsOptions Docs { get; set; } = new();
+
+    /// <summary>
+    /// 技能库（PR #65）配置。
+    /// </summary>
+    public CopilotSkillsOptions Skills { get; set; } = new();
+}
+
+/// <summary>
+/// 技能库摄入 / 检索配置（PR #65）。
+/// </summary>
+public sealed class CopilotSkillsOptions
+{
+    /// <summary>
+    /// 服务端启动后是否自动执行一次后台技能库增量摄入。默认 <c>true</c>。
+    /// </summary>
+    public bool AutoIngestOnStartup { get; set; } = true;
+
+    /// <summary>
+    /// 技能根目录。默认 <c>./copilot/skills</c>。
+    /// </summary>
+    public string Root { get; set; } = "./copilot/skills";
 }
 
 /// <summary>

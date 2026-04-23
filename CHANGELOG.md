@@ -38,6 +38,28 @@
 - 回填 `ROADMAP.md` 的 PR #62 状态与 Milestone 13 里程碑进度：默认 `10k / 100k` 向量基准与 README 实测结果已闭环，`1M` 长测与外部库同机对比保留为显式 / 环境可选的后续补数项，不再阻塞 Milestone 14。
 
 ### Added
+- **PR #65 — Copilot 技能库 + 技能路由（Milestone 14 第三切片）**
+  - 新增 `SkillSourceScanner` / `SkillFrontmatter` / `SkillRegistry` / `SkillSearchService`：扫描 `copilot/skills/*.md`（含 YAML frontmatter：`name`/`description`/`triggers`/`requires_tools`），把 `description + triggers` 嵌入到 `__copilot__.skills(name TAG, description, triggers, requires_tools, path, body, embedding VECTOR(384))`，并维护 `skills_state` 做 mtime/fingerprint 增量同步。
+  - 新增 `CopilotSkillsIngestionService`（`BackgroundService`）：服务端启动时按 `Copilot.Skills.AutoIngestOnStartup` 自动执行一次技能库摄入，未就绪 / 未启用则安全跳过。
+  - HTTP 端点：`POST /v1/copilot/skills/reload`（仅 server admin 触发增量摄入）；`POST /v1/copilot/skills/search` 走向量召回；`GET /v1/copilot/skills/list` 列出全部技能；`GET /v1/copilot/skills/{name}` 读取完整 markdown body；与 `/v1/copilot/docs/*` 一致地在 `Copilot.Embedding` 未就绪时返回 `503`。
+  - MCP 工具：在 `/mcp/{db}` 上新增只读 `skill_search(query, k=5)` 与 `skill_load(name)`，结构化返回技能元数据与完整正文，方便 Agent 在对话开始时按问题召回少量技能并装配进上下文。
+  - CLI：`sndb copilot skills [reload|list|show <name>]`，复用 `SONNETDB_COPILOT_URL` / `SONNETDB_COPILOT_TOKEN` 环境变量。
+  - 首批入库 6 个技能：`query-aggregation` / `pid-control-tuning` / `forecast-howto` / `troubleshoot-slow-query` / `schema-design` / `bulk-ingest`，覆盖聚合、控制整定、预测、慢查询排查、Schema 设计与批量导入场景。
+
+- **PR #64 — Copilot 文档摄入管线 + Knowledge 库（Milestone 14 第二切片）**
+  - 新建系统级嵌入式 `Tsdb` 实例 `__copilot__`（按需创建），自动创建 `docs(time, source TAG, section TAG, title TAG, content STRING, embedding VECTOR(384))` measurement，dogfooding Milestone 13 的 `VECTOR(384)` + `knn(...)` 召回。
+  - 新增 `DocsSourceScanner` / `DocsChunker` / `DocsIngestor` / `DocsSearchService`：扫描 `docs/*.md` 与 `web/admin/help/`，按 H2/H3 切片（≤ 800 字 / 100 字 overlap） → 嵌入 → 批量入库；`mtime` + 内容哈希做增量识别，避免重复嵌入。
+  - 新增 `CopilotDocsIngestionService`（`BackgroundService`）：服务端启动时按 `Copilot.Docs.AutoIngestOnStartup` 自动执行一次摄入，未就绪 / 未启用则安全跳过。
+  - HTTP 端点：`POST /v1/copilot/docs/ingest`（仅 server admin）触发增量摄入；`POST /v1/copilot/docs/search` 走向量召回返回命中片段；两者均在 `Copilot.Embedding` 未就绪时返回 `503`。
+  - MCP 工具：在 `/mcp/{db}` 上新增只读 `docs_search(query, k=5)`，返回结构化的命中片段（source / section / title / content / score）。
+  - CLI：`sndb copilot ingest [--root ./docs]... [--endpoint] [--token] [--force] [--dry-run]`，通过 `SONNETDB_COPILOT_URL` / `SONNETDB_COPILOT_TOKEN` 环境变量便捷接入远端服务端。
+
+- **PR #63 — `SonnetDB.Copilot` 命名空间骨架 + Embedding/Chat Provider 抽象（Milestone 14 第一切片）**
+  - 新增 `SonnetDB.Copilot` 命名空间（位于现有 `src/SonnetDB/` 项目内，不新建项目）：`IEmbeddingProvider` / `IChatProvider` 抽象、`CopilotOptions` 配置模型与 DI 装配。
+  - 提供两类 provider 骨架：`LocalOnnxEmbeddingProvider`（默认 `bge-small-zh-v1.5`，模型缺失时返回未就绪而非抛异常）与 `OpenAICompatibleEmbeddingProvider` / `OpenAICompatibleChatProvider`（兼容 OpenAI / Azure OpenAI / DashScope / 智谱 / Moonshot / DeepSeek / SiliconFlow / 火山方舟等任意 OpenAI-compat 网关）。
+  - 配置节 `SonnetDBServer__Copilot__*`：`Enabled` / `Embedding.Provider` / `Embedding.Endpoint` / `Embedding.ApiKey` / `Embedding.Model` / `Chat.*`，支持环境变量与 `appsettings.json` 同时配置。
+  - `/healthz` 输出新增 `copilot` 子节，暴露 `enabled` / `embedding_ready` / `chat_ready` 与诊断原因，便于上层判定是否启用 Copilot 流程；不接入任何业务流程，纯骨架不破坏既有功能。
+
 - **PR #62 — 向量召回基准骨架（Milestone 13 第七切片）**
   - `tests/SonnetDB.Benchmarks` 新增 `VectorRecallBenchmark`，覆盖 SonnetDB 自身 `384-dim` 向量的 brute-force Top10、HNSW Top10 与平均 `Recall@10`。
   - 默认档位为 `10k / 100k`；设置环境变量 `SONNETDB_VECTOR_BENCH_INCLUDE_1M=1` 后可额外启用 `1M` 数据集，避免日常基准意外占满内存。

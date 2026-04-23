@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -54,7 +55,7 @@ internal sealed partial class DocsChunker
                 chunks.Add(new DocsChunk(
                     Source: sourceFile.Source,
                     Title: section.Title,
-                    Section: section.Section,
+                    Section: section.Heading,
                     Content: pieces[index],
                     ChunkIndex: chunks.Count,
                     TotalChunks: 0));
@@ -177,7 +178,7 @@ internal sealed partial class DocsChunker
     private static string NormalizeWhitespace(string text)
         => WhitespaceRegex().Replace(text ?? string.Empty, " ").Trim();
 
-    private sealed record Section(string Title, string Section, string Content);
+    private sealed record Section(string Title, string Heading, string Content);
 
     [GeneratedRegex("<script[\\s\\S]*?</script>|<style[\\s\\S]*?</style>", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex ScriptRegex();

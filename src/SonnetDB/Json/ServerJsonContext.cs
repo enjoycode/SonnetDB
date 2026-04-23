@@ -39,6 +39,11 @@ namespace SonnetDB.Json;
 [JsonSerializable(typeof(McpMeasurementListResult))]
 [JsonSerializable(typeof(McpMeasurementSchemaResult))]
 [JsonSerializable(typeof(McpSqlQueryResult))]
+[JsonSerializable(typeof(McpDocsSearchHit))]
+[JsonSerializable(typeof(McpDocsSearchResult))]
+[JsonSerializable(typeof(McpSkillSearchHit))]
+[JsonSerializable(typeof(McpSkillSearchResult))]
+[JsonSerializable(typeof(McpSkillLoadResult))]
 // ---- Schema API ----
 [JsonSerializable(typeof(SchemaResponse))]
 [JsonSerializable(typeof(MeasurementInfo))]
@@ -69,4 +74,20 @@ namespace SonnetDB.Json;
 [JsonSerializable(typeof(OpenAiChatCompletionResponse))]
 [JsonSerializable(typeof(OpenAiChatCompletionChoice))]
 [JsonSerializable(typeof(OpenAiChatCompletionMessage))]
+// ---- Copilot 公开 API（PR #64）----
+[JsonSerializable(typeof(CopilotIngestRequest))]
+[JsonSerializable(typeof(CopilotIngestResponse))]
+[JsonSerializable(typeof(CopilotSearchRequest))]
+[JsonSerializable(typeof(CopilotSearchResponse))]
+[JsonSerializable(typeof(CopilotSearchHit))]
+[JsonSerializable(typeof(List<CopilotSearchHit>))]
+// ---- Copilot 技能库 API（PR #65）----
+[JsonSerializable(typeof(CopilotSkillsIngestRequest))]
+[JsonSerializable(typeof(CopilotSkillsIngestResponse))]
+[JsonSerializable(typeof(CopilotSkillsSearchRequest))]
+[JsonSerializable(typeof(CopilotSkillsSearchResponse))]
+[JsonSerializable(typeof(CopilotSkillsSearchHit))]
+[JsonSerializable(typeof(List<CopilotSkillsSearchHit>))]
+[JsonSerializable(typeof(CopilotSkillLoadResponse))]
+[JsonSerializable(typeof(CopilotSkillsListResponse))]
 internal sealed partial class ServerJsonContext : JsonSerializerContext;

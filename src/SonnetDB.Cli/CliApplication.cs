@@ -54,6 +54,7 @@ internal sealed class CliApplication
                 "local"   => RunLocal(args),
                 "remote"  => RunRemote(args),
                 "connect" => RunConnect(args),
+                "copilot" => new CopilotCommandRunner(_output, _error).Run(args),
                 _ => FailParse($"未知命令 '{command}'。"),
             };
         }
@@ -757,6 +758,7 @@ SonnetDB CLI 0.1.0
   sndb remote  remove --profile dev
   sndb connect <profile-name> [--command "<sql>" | --file ./q.sql | --repl]
   sndb connect --default [--command "<sql>" | --file ./q.sql | --repl]
+  sndb copilot ingest [--root ./docs]... [--endpoint http://host] [--token t] [--force] [--dry-run]
 
 示例:
   sndb local  --path ./demo-data --save-profile home --default

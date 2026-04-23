@@ -1,5 +1,6 @@
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using SonnetDB.Copilot;
 using SonnetDB.Json;
 using SonnetDB.Sql;
 using SonnetDB.Sql.Ast;
@@ -155,4 +156,116 @@ internal sealed class SonnetDbMcpTools
         DescribeMeasurementStatement => "describe_measurement",
         _ => "unknown",
     };
+
+    /// <summary>
+    /// 在 Copilot 知识库 <c>__copilot__.docs</c> 上做向量召回（PR #64）。
+    /// 仅当 Copilot 启用且 embedding provider 已就绪时可用。
+    /// </summary>
+    [McpServerTool(
+        Name = "docs_search",
+        Title = "Search Copilot Docs",
+        ReadOnly = true,
+        Idempotent = true,
+        OpenWorld = false,
+        UseStructuredContent = true)]
+    public static async Task<CallToolResult> DocsSearchAsync(
+        string query,
+        int? k,
+        DocsSearchService docsSearchService,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(query);
+            var requested = k is null or <= 0 ? 5 : Math.Min(k.Value, 50);
+
+            var hits = await docsSearchService.SearchAsync(query, requested, cancellationToken).ConfigureAwait(false);
+            var payload = new McpDocsSearchResult(
+                Query: query,
+                Requested: requested,
+                Hits: hits
+                    .Select(static h => new McpDocsSearchHit(h.Source, h.Title, h.Section, h.Content, h.Score))
+                    .ToArray());
+
+            return SonnetDbMcpResults.Success(payload, ServerJsonContext.Default.McpDocsSearchResult);
+        }
+        catch (Exception ex)
+        {
+            return SonnetDbMcpResults.Error(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 在 Copilot 技能库 <c>__copilot__.skills</c> 上做向量召回（PR #65）。
+    /// 返回 top-K 技能的元数据（不含完整 body），由调用方决定是否进一步 <c>skill_load</c>。
+    /// </summary>
+    [McpServerTool(
+        Name = "skill_search",
+        Title = "Search Copilot Skills",
+        ReadOnly = true,
+        Idempotent = true,
+        OpenWorld = false,
+        UseStructuredContent = true)]
+    public static async Task<CallToolResult> SkillSearchAsync(
+        string query,
+        int? k,
+        SkillSearchService skillSearchService,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(query);
+            var requested = k is null or <= 0 ? 5 : Math.Min(k.Value, 50);
+
+            var hits = await skillSearchService.SearchAsync(query, requested, cancellationToken).ConfigureAwait(false);
+            var payload = new McpSkillSearchResult(
+                Query: query,
+                Requested: requested,
+                Hits: hits
+                    .Select(static h => new McpSkillSearchHit(h.Name, h.Description, h.Triggers, h.RequiresTools, h.Score))
+                    .ToArray());
+
+            return SonnetDbMcpResults.Success(payload, ServerJsonContext.Default.McpSkillSearchResult);
+        }
+        catch (Exception ex)
+        {
+            return SonnetDbMcpResults.Error(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 按名称加载完整的 Copilot 技能 markdown body，供调用方插入到对话上下文中（PR #65）。
+    /// </summary>
+    [McpServerTool(
+        Name = "skill_load",
+        Title = "Load Copilot Skill",
+        ReadOnly = true,
+        Idempotent = true,
+        OpenWorld = false,
+        UseStructuredContent = true)]
+    public static CallToolResult SkillLoad(
+        string name,
+        SkillRegistry skillRegistry)
+    {
+        try
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(name);
+            var skill = skillRegistry.Load(name);
+            if (skill is null)
+                return SonnetDbMcpResults.Error($"未找到技能 '{name}'。");
+
+            var payload = new McpSkillLoadResult(
+                skill.Name,
+                skill.Description,
+                skill.Triggers,
+                skill.RequiresTools,
+                skill.Body,
+                skill.Source);
+            return SonnetDbMcpResults.Success(payload, ServerJsonContext.Default.McpSkillLoadResult);
+        }
+        catch (Exception ex)
+        {
+            return SonnetDbMcpResults.Error(ex.Message);
+        }
+    }
 }
