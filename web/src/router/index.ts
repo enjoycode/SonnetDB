@@ -5,7 +5,6 @@ import LoginView from '@/views/LoginView.vue';
 import AppShell from '@/views/AppShell.vue';
 import DashboardView from '@/views/DashboardView.vue';
 import SqlConsoleView from '@/views/SqlConsoleView.vue';
-import CopilotChatView from '@/views/CopilotChatView.vue';
 import DatabasesView from '@/views/DatabasesView.vue';
 import EventsView from '@/views/EventsView.vue';
 import UsersView from '@/views/UsersView.vue';
@@ -37,7 +36,6 @@ const router = createRouter({
       children: [
         { path: 'dashboard', name: 'dashboard', component: DashboardView },
         { path: 'sql', name: 'sql', component: SqlConsoleView },
-        { path: 'chat', name: 'chat', component: CopilotChatView },
         { path: 'databases', name: 'databases', component: DatabasesView },
         { path: 'events', name: 'events', component: EventsView },
         { path: 'users', name: 'users', component: UsersView, meta: { admin: true } },

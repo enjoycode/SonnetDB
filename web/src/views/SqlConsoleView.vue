@@ -47,49 +47,6 @@
         <n-text v-else-if="ranOnce && !errorMsg" depth="3">语句已执行，没有结果集。</n-text>
       </n-space>
     </n-card>
-
-    <!-- AI 助手面板（仅 AI 启用时显示） -->
-    <n-card v-if="aiEnabled" :bordered="false" size="small">
-      <template #header>
-        <span>Copilot
-          <n-tag size="tiny" type="info" style="margin-left: 8px; vertical-align: middle">
-            {{ aiStatus?.provider }} / {{ aiStatus?.model }}
-          </n-tag>
-        </span>
-      </template>
-
-      <n-space vertical :size="10">
-        <n-input
-          v-model:value="aiPrompt"
-          type="textarea"
-          :autosize="{ minRows: 2, maxRows: 5 }"
-          placeholder="用自然语言描述你的查询需求，例如：查询最近一小时每个设备的平均温度..."
-        />
-
-        <n-space>
-          <n-button
-            type="primary"
-            :loading="aiRunning"
-            :disabled="!aiPrompt.trim()"
-            @click="generateSql"
-          >
-            生成 SQL
-          </n-button>
-          <n-button
-            :loading="aiRunning"
-            :disabled="resultRows.length === 0"
-            @click="analyzeResults"
-          >
-            分析结果
-          </n-button>
-          <n-button v-if="aiRunning" text type="error" @click="aiAbort?.abort()">停止</n-button>
-        </n-space>
-
-        <n-scrollbar v-if="aiResponse" style="max-height: 240px">
-          <pre class="ai-response">{{ aiResponse }}</pre>
-        </n-scrollbar>
-      </n-space>
-    </n-card>
   </n-space>
 </template>
 
@@ -97,7 +54,6 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import {
   NCard, NSpace, NButton, NSelect, NAlert, NDataTable, NText,
-  NInput, NScrollbar, NTag,
   type DataTableColumns, type SelectOption,
 } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
@@ -106,7 +62,6 @@ import {
 } from '@/api/sql';
 import { listDatabases } from '@/api/server';
 import { fetchSchema, type MeasurementInfo } from '@/api/schema';
-import { fetchAiStatus, streamAiChat, type AiStatusResponse } from '@/api/ai';
 import SqlEditor from '@/components/SqlEditor.vue';
 import { useSqlConsoleStore } from '@/stores/sqlConsole';
 
@@ -124,14 +79,6 @@ const lastMeta = ref('');
 const resultColumns = ref<DataTableColumns<Record<string, unknown>>>([]);
 const resultRows = ref<Record<string, unknown>[]>([]);
 const currentSchema = ref<MeasurementInfo[]>([]);
-
-// AI 状态
-const aiEnabled = ref(false);
-const aiStatus = ref<AiStatusResponse | null>(null);
-const aiPrompt = ref('');
-const aiResponse = ref('');
-const aiRunning = ref(false);
-const aiAbort = ref<AbortController | null>(null);
 
 const dbOptions = computed<SelectOption[]>(() => {
   const options: SelectOption[] = auth.isSuperuser
@@ -244,80 +191,9 @@ async function applyPendingExecution(): Promise<void> {
   }
 }
 
-// ---- AI ----
-
-/**
- * 去掉模型偶尔回复的 ```sql ... ``` / ``` ... ``` 代码围栏，只保留 SQL 主体。
- * 服务端 system prompt 已要求不要 Markdown，但部分模型仍会包，做一层防御。
- */
-function stripCodeFence(text: string): string {
-  const fenced = text.match(/^\s*```(?:sql|SQL)?\s*\n?([\s\S]*?)\n?\s*```\s*$/);
-  if (fenced && fenced[1] !== undefined) return fenced[1];
-  return text;
-}
-
-async function generateSql(): Promise<void> {
-  if (!aiPrompt.value.trim() || aiRunning.value) return;
-  aiResponse.value = '';
-  aiRunning.value = true;
-  const ac = new AbortController();
-  aiAbort.value = ac;
-
-  const db = targetDb.value !== CONTROL_PLANE_KEY ? targetDb.value : undefined;
-  const messages = [{ role: 'user', content: aiPrompt.value }];
-
-  let generated = '';
-  try {
-    for await (const token of streamAiChat(auth.state?.token ?? '', messages, db, 'sql_gen')) {
-      if (ac.signal.aborted) break;
-      generated += token;
-      aiResponse.value = generated;
-    }
-    if (generated.trim()) {
-      sql.value = stripCodeFence(generated).trim();
-    }
-  } catch (e: unknown) {
-    aiResponse.value = `错误：${e instanceof Error ? e.message : String(e)}`;
-  } finally {
-    aiRunning.value = false;
-    aiAbort.value = null;
-  }
-}
-
-async function analyzeResults(): Promise<void> {
-  if (resultRows.value.length === 0 || aiRunning.value) return;
-  aiResponse.value = '';
-  aiRunning.value = true;
-  const ac = new AbortController();
-  aiAbort.value = ac;
-
-  const preview = resultRows.value.slice(0, 20);
-  const content = `SQL: ${sql.value}\n列: ${resultColumns.value.map((c) => String((c as { key: string }).key)).join(', ')}\n数据（前${preview.length}行）:\n${JSON.stringify(preview, null, 2)}`;
-
-  let reply = '';
-  try {
-    for await (const token of streamAiChat(auth.state?.token ?? '', [{ role: 'user', content }], undefined, 'analyze')) {
-      if (ac.signal.aborted) break;
-      reply += token;
-      aiResponse.value = reply;
-    }
-  } catch (e: unknown) {
-    aiResponse.value = `错误：${e instanceof Error ? e.message : String(e)}`;
-  } finally {
-    aiRunning.value = false;
-    aiAbort.value = null;
-  }
-}
-
 onMounted(async () => {
   normalizeTarget();
-  await Promise.all([
-    reloadDbs(),
-    fetchAiStatus(auth.api).then((s) => {
-      aiStatus.value = s;
-      aiEnabled.value = s.enabled;
-    }).catch(() => { /* AI 未配置时静默 */ }),
-  ]);
+  await reloadDbs();
   if (targetDb.value && targetDb.value !== CONTROL_PLANE_KEY) {
     await loadSchema(targetDb.value);
   }
@@ -327,15 +203,4 @@ onMounted(async () => {
 
 <style scoped>
 .meta { color: #888; font-size: 12px; }
-.ai-response {
-  font-size: 13px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin: 0;
-  padding: 8px;
-  background: #f8f8f8;
-  border-radius: 4px;
-  font-family: inherit;
-  line-height: 1.6;
-}
 </style>

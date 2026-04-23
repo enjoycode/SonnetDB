@@ -196,7 +196,14 @@ public static class Program
         builder.Services.AddSingleton(_ => new UserStore(systemDirectory));
         builder.Services.AddSingleton(_ => new GrantsStore(systemDirectory));
         builder.Services.AddSingleton(_ => new InstallationStore(systemDirectory));
-        builder.Services.AddSingleton(_ => new AiConfigStore(systemDirectory));
+        builder.Services.AddSingleton(_ =>
+        {
+            var store = new AiConfigStore(systemDirectory);
+            // M16/M2：启动时把已持久化的 AI 配置（国际版/国内版 + ApiKey + Model）
+            // 同步到 CopilotChatOptions，让 /v1/copilot/chat 直接就绪。
+            AiCopilotBridge.Apply(store.Get(), serverOptions.Copilot.Chat, serverOptions.Copilot.Embedding);
+            return store;
+        });
         builder.Services.AddSingleton(serverOptions.Copilot);
         builder.Services.AddSingleton(serverOptions.Copilot.Embedding);
         builder.Services.AddSingleton(serverOptions.Copilot.Chat);
@@ -550,7 +557,14 @@ public static class Program
         // ---- AI 助手 ----
         var aiConfigStore = app.Services.GetRequiredService<AiConfigStore>();
         var httpClientFactory = app.Services.GetRequiredService<IHttpClientFactory>();
-        AiEndpointHandler.Map(app, aiConfigStore, grants, registry, httpClientFactory);
+        AiEndpointHandler.Map(
+            app,
+            aiConfigStore,
+            grants,
+            registry,
+            httpClientFactory,
+            serverOptions.Copilot.Chat,
+            serverOptions.Copilot.Embedding);
         CopilotChatEndpointHandler.Map(
             app,
             copilotReadiness,

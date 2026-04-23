@@ -693,8 +693,12 @@ onMounted(() => {
 
 .copilot-dock {
   position: fixed;
-  width: 380px;
-  height: 540px;
+  width: 420px;
+  /* M3：浮窗高度按窗口高度的黄金比例（≈61.8%）自适应，
+     避免在大屏上显得过小，同时保留最小/最大边界。 */
+  height: 61.8vh;
+  min-height: 480px;
+  max-height: calc(100vh - 48px);
   background: #fff;
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 12px;

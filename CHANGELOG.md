@@ -10,6 +10,10 @@
 - **新手引导 / 提示词模板（M10）**：新增 `web/src/copilot/starters.ts` 定义 `COPILOT_STARTERS` 集合（建表 / 写入 / 聚合 / 向量 / 预测 / PID / 排查共 7 大分类、指定路由 `routeKeys` 过滤）与 `pickStarters(routeKey, max)` 函数；CopilotDock 空白态从原来的 3 条硬编码 `<li>` 重构为 `grid-template-columns: repeat(auto-fill, minmax(140px, 1fr))` 的 starter 卡片（分类胶囊 + 标题 + tooltip 说明），点击后 `prompt` 填入输入框，路由感知下会优先提示当前页面（`sql` / `databases` / `dashboard`）独有的模板。
 
 ### Fixed
+- **Copilot 浮窗调用 503 `chat.endpoint_invalid`**：Web Admin 的「Copilot 设置」保存的 `AiOptions`（国际版 / 国内版 + ApiKey + Model）原本只持久化到 `<DataRoot>/.system/ai-config.json`，并未同步到 `CopilotChatOptions` / `CopilotEmbeddingOptions` 单例，导致 `/v1/copilot/chat` 走的 `CopilotReadiness.EvaluateChat` 因 `Endpoint` 为空一直返回 `copilot_not_ready: chat.endpoint_invalid`。新增 `AiCopilotBridge.Apply`，在 `AiConfigStore` 构造时（启动加载已有配置）和 `PUT /v1/admin/ai-config` 保存后，立即把 provider URL（`https://sonnet.vip/v1/` 或 `https://ai.sonnetdb.com/v1/`）、ApiKey、Model 写入 `CopilotChatOptions`，并对 `provider=openai` 的 embedding 选项做空值回填。
+- **SQL Console 移除内嵌 Copilot 面板（M16）**：删除 `SqlConsoleView.vue` 内的 AI 助手卡片（`生成 SQL` / `分析结果`）及相关脚本和样式，统一由全局右下角 CopilotDock 浮窗提供问答能力，避免双入口造成的体验割裂。
+- **下线 `Copilot Chat` 顶层菜单（M16）**：从 `AppShell.vue` 主导航与 `router/index.ts` 移除 `chat` 路由，删除 `views/CopilotChatView.vue`；Copilot 已通过全局 CopilotDock 浮窗在所有页面随时可呼出。
+- **CopilotDock 浮窗按窗口高度自适应（M16）**：把固定 `380×540` 调整为 `width: 420px; height: 61.8vh`（黄金比例），新增 `min-height: 480px` 与 `max-height: calc(100vh - 48px)` 边界，避免在大屏上显得过小、在小屏上溢出。
 - 重写首页欢迎页为产品介绍页：去掉安装/帮助导向叙述，改为展示数据库简介、核心功能、产品形态和路线图对应能力，并保留进入后台入口。
 - 修复 Production 模式下 `GET /admin/` 自重定向死循环（`ERR_TOO_MANY_REDIRECTS`）：原 `UseDefaultFiles({ RequestPath = "/admin" })` 未提供针对 `wwwroot/admin` 的 `FileProvider`，与 `MapGet("/admin")` / `MapFallbackToFile` 共同作用导致 Vite 构建产物无法被正确解析；现改为使用专用 `PhysicalFileProvider(wwwroot/admin)` 的 `UseStaticFiles`，并显式 `MapGet("/admin/")` 直接返回 `index.html`。
 - 修复访问根路径 `/`（产品宣传首页）被 Bearer 认证中间件拦截返回 `401`：将 `/`、`/favicon.ico`、`/robots.txt` 加入匿名白名单，使 `MapHomePage()` 渲染的官网首页可直接访问。

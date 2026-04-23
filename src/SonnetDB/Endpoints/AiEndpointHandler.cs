@@ -36,7 +36,9 @@ internal static class AiEndpointHandler
         AiConfigStore configStore,
         GrantsStore grantsStore,
         TsdbRegistry registry,
-        IHttpClientFactory httpClientFactory)
+        IHttpClientFactory httpClientFactory,
+        CopilotChatOptions copilotChatOptions,
+        CopilotEmbeddingOptions copilotEmbeddingOptions)
     {
         app.MapGet("/v1/ai/status", () =>
         {
@@ -84,14 +86,18 @@ internal static class AiEndpointHandler
             }
 
             var existing = configStore.Get();
-            configStore.Save(new AiOptions
+            var updated = new AiOptions
             {
                 Enabled = req.Enabled,
                 Provider = req.Provider,
                 ApiKey = req.ApiKey ?? existing.ApiKey,
                 Model = req.Model,
                 TimeoutSeconds = req.TimeoutSeconds > 0 ? req.TimeoutSeconds : existing.TimeoutSeconds,
-            });
+            };
+            configStore.Save(updated);
+
+            // M16/M2：同步到 Copilot 子系统选项，使 /v1/copilot/chat 依赖的 readiness/Provider 立即生效。
+            AiCopilotBridge.Apply(updated, copilotChatOptions, copilotEmbeddingOptions);
 
             ctx.Response.StatusCode = StatusCodes.Status204NoContent;
         }));
