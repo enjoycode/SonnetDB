@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import {
   NCard, NSpace, NButton, NSelect, NAlert, NDataTable, NText,
   NInput, NScrollbar, NTag,
@@ -99,8 +99,10 @@ import { listDatabases } from '@/api/server';
 import { fetchSchema, type MeasurementInfo } from '@/api/schema';
 import { fetchAiStatus, streamAiChat, type AiStatusResponse } from '@/api/ai';
 import SqlEditor from '@/components/SqlEditor.vue';
+import { useSqlConsoleStore } from '@/stores/sqlConsole';
 
 const auth = useAuthStore();
+const sqlConsole = useSqlConsoleStore();
 
 const CONTROL_PLANE_KEY = '__control_plane__';
 const targetDb = ref<string>('');
@@ -214,6 +216,20 @@ function clear(): void {
   ranOnce.value = false;
 }
 
+async function applyPendingExecution(): Promise<void> {
+  const pending = sqlConsole.consumeExecution();
+  if (!pending) return;
+
+  targetDb.value = pending.db;
+  sql.value = pending.sql;
+  await loadSchema(pending.db);
+  await nextTick();
+
+  if (pending.runImmediately) {
+    await run();
+  }
+}
+
 // ---- AI ----
 
 async function generateSql(): Promise<void> {
@@ -281,6 +297,7 @@ onMounted(async () => {
   if (targetDb.value && targetDb.value !== CONTROL_PLANE_KEY) {
     await loadSchema(targetDb.value);
   }
+  await applyPendingExecution();
 });
 </script>
 

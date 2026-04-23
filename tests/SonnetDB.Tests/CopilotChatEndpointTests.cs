@@ -28,6 +28,7 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
     private string? _dataRoot;
     private string? _docsRoot;
     private string? _skillsRoot;
+    private FakeChatProvider? _chatProvider;
 
     public async Task InitializeAsync()
     {
@@ -82,6 +83,7 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
         options.Copilot.Docs.AutoIngestOnStartup = false;
         options.Copilot.Skills.Root = _skillsRoot;
         options.Copilot.Skills.AutoIngestOnStartup = false;
+        _chatProvider = new FakeChatProvider();
 
         _app = Program.BuildApp(
             ["--Kestrel:Endpoints:Http:Url=http://127.0.0.1:0"],
@@ -89,7 +91,7 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
             services =>
             {
                 services.AddSingleton<IEmbeddingProvider, FakeEmbeddingProvider>();
-                services.AddSingleton<IChatProvider, FakeChatProvider>();
+                services.AddSingleton<IChatProvider>(_chatProvider);
             });
         await _app.StartAsync();
 
@@ -144,6 +146,7 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
     [Fact]
     public async Task CopilotChat_WithReadGrant_ReturnsNdjsonEvents()
     {
+        _chatProvider!.Reset();
         using var client = await CreateReaderClientAsync("reader_ndjson");
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
         {
@@ -156,17 +159,7 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/x-ndjson", response.Content.Headers.ContentType?.MediaType);
 
-        using var stream = await response.Content.ReadAsStreamAsync();
-        using var reader = new StreamReader(stream);
-        var events = new List<CopilotChatEvent>();
-        while (await reader.ReadLineAsync() is { Length: > 0 } line)
-        {
-            var evt = JsonSerializer.Deserialize(line, ServerJsonContext.Default.CopilotChatEvent);
-            Assert.NotNull(evt);
-            events.Add(evt!);
-            if (evt!.Type == "done")
-                break;
-        }
+        var events = await ReadNdjsonEventsAsync(response);
 
         Assert.Equal(["start", "retrieval", "tool_call", "tool_result", "final", "done"], events.Select(static e => e.Type));
 
@@ -182,6 +175,7 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
     [Fact]
     public async Task CopilotChatStream_WithReadGrant_ReturnsSseEvents()
     {
+        _chatProvider!.Reset();
         using var client = await CreateReaderClientAsync("reader_sse");
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat/stream")
         {
@@ -219,6 +213,87 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
         Assert.Contains("host", final.Answer ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.True(final.Citations?.Count >= 3);
         Assert.Equal("done", events[^1].Type);
+    }
+
+    [Fact]
+    public async Task CopilotChat_WithMessagesHistory_TrimsOldContextAndKeepsRecentTurns()
+    {
+        _chatProvider!.Reset();
+        _chatProvider.PlannerHandler = static _ => """{"tools":[]}""";
+        _chatProvider.AnswerHandler = static _ => "我已经结合最近上下文总结完成。[C1]";
+
+        const string oldMarker = "OLDCTX_MARKER_12345";
+        using var client = await CreateReaderClientAsync("reader_history");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
+        {
+            Content = JsonContent.Create(
+                new CopilotChatRequest(
+                    DatabaseName,
+                    Messages:
+                    [
+                        new AiMessage("user", string.Concat(Enumerable.Repeat(oldMarker, 900))),
+                        new AiMessage("assistant", "这一段旧回答也应该被裁掉。"),
+                        new AiMessage("user", "上一次你告诉我 cpu measurement 里有 host 和 usage。"),
+                        new AiMessage("assistant", "对，cpu 里有 host(tag)、usage(float64) 和 temp(int64)。"),
+                        new AiMessage("user", "那请基于刚才的上下文，再帮我总结一下字段。"),
+                    ]),
+                ServerJsonContext.Default.CopilotChatRequest),
+        };
+
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var events = await ReadNdjsonEventsAsync(response);
+
+        var start = Assert.Single(events, static e => e.Type == "start");
+        Assert.Contains("裁剪", start.Message ?? string.Empty, StringComparison.Ordinal);
+
+        var answerPrompt = _chatProvider.Calls
+            .Select(static call => call[1].Content)
+            .Last(static prompt => prompt.Contains("当前用户问题：", StringComparison.Ordinal));
+        Assert.DoesNotContain(oldMarker, answerPrompt, StringComparison.Ordinal);
+        Assert.Contains("cpu 里有 host(tag)、usage(float64) 和 temp(int64)。", answerPrompt, StringComparison.Ordinal);
+        Assert.Contains("那请基于刚才的上下文，再帮我总结一下字段。", answerPrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CopilotChat_WhenQuerySqlFails_RetriesWithRewrittenSql()
+    {
+        _chatProvider!.Reset();
+        _chatProvider.PlannerHandler = static _ => """{"tools":[{"name":"query_sql","sql":"SELECT * FROM missing_cpu"}]}""";
+        _chatProvider.RepairHandler = messages =>
+        {
+            Assert.Contains("SELECT * FROM missing_cpu", messages[1].Content, StringComparison.Ordinal);
+            Assert.Contains("missing_cpu", messages[1].Content, StringComparison.Ordinal);
+            return "SELECT * FROM cpu LIMIT 2";
+        };
+        _chatProvider.AnswerHandler = static _ => "我已经根据执行错误改写 SQL，并完成查询。[C1][C2]";
+
+        using var client = await CreateReaderClientAsync("reader_retry");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
+        {
+            Content = JsonContent.Create(
+                new CopilotChatRequest(
+                    DatabaseName,
+                    Messages:
+                    [
+                        new AiMessage("user", "帮我查询 cpu 最近两条记录。"),
+                    ]),
+                ServerJsonContext.Default.CopilotChatRequest),
+        };
+
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var events = await ReadNdjsonEventsAsync(response);
+
+        var retry = Assert.Single(events, static e => e.Type == "tool_retry");
+        Assert.Equal(1, retry.Attempt);
+        Assert.Contains("SELECT * FROM cpu LIMIT 2", retry.ToolArguments ?? string.Empty, StringComparison.Ordinal);
+
+        var toolResult = Assert.Single(events, static e => e.Type == "tool_result");
+        Assert.Contains("SELECT * FROM cpu LIMIT 2", toolResult.ToolArguments ?? string.Empty, StringComparison.Ordinal);
+
+        var final = Assert.Single(events, static e => e.Type == "final");
+        Assert.Contains("改写 SQL", final.Answer ?? string.Empty, StringComparison.Ordinal);
     }
 
     private async Task<HttpClient> CreateReaderClientAsync(string userName)
@@ -292,6 +367,23 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
         }
     }
 
+    private static async Task<List<CopilotChatEvent>> ReadNdjsonEventsAsync(HttpResponseMessage response)
+    {
+        using var stream = await response.Content.ReadAsStreamAsync();
+        using var reader = new StreamReader(stream);
+        var events = new List<CopilotChatEvent>();
+        while (await reader.ReadLineAsync() is { Length: > 0 } line)
+        {
+            var evt = JsonSerializer.Deserialize(line, ServerJsonContext.Default.CopilotChatEvent);
+            Assert.NotNull(evt);
+            events.Add(evt!);
+            if (evt!.Type == "done")
+                break;
+        }
+
+        return events;
+    }
+
     private sealed class FakeEmbeddingProvider : IEmbeddingProvider
     {
         public ValueTask<float[]> EmbedAsync(string text, CancellationToken cancellationToken = default)
@@ -306,18 +398,45 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
 
     private sealed class FakeChatProvider : IChatProvider
     {
+        public Func<IReadOnlyList<AiMessage>, string>? PlannerHandler { get; set; }
+
+        public Func<IReadOnlyList<AiMessage>, string>? RepairHandler { get; set; }
+
+        public Func<IReadOnlyList<AiMessage>, string>? AnswerHandler { get; set; }
+
+        public List<IReadOnlyList<AiMessage>> Calls { get; } = [];
+
+        public void Reset()
+        {
+            PlannerHandler = null;
+            RepairHandler = null;
+            AnswerHandler = null;
+            Calls.Clear();
+        }
+
         public ValueTask<string> CompleteAsync(IReadOnlyList<AiMessage> messages, CancellationToken cancellationToken = default)
         {
+            Calls.Add(messages.ToArray());
             var system = messages[0].Content;
             if (system.Contains("工具规划器", StringComparison.Ordinal))
             {
                 return ValueTask.FromResult(
-                    """
-                    {"tools":[{"name":"describe_measurement","measurement":"cpu"}]}
-                    """);
+                    PlannerHandler?.Invoke(messages)
+                    ?? """
+                       {"tools":[{"name":"describe_measurement","measurement":"cpu"}]}
+                       """);
             }
 
-            return ValueTask.FromResult("cpu measurement 包含 host(tag)、usage(float64) 和 temp(int64)。[C1][C2][C3]");
+            if (system.Contains("SQL 纠错器", StringComparison.Ordinal))
+            {
+                return ValueTask.FromResult(
+                    RepairHandler?.Invoke(messages)
+                    ?? "SELECT * FROM cpu LIMIT 5");
+            }
+
+            return ValueTask.FromResult(
+                AnswerHandler?.Invoke(messages)
+                ?? "cpu measurement 包含 host(tag)、usage(float64) 和 temp(int64)。[C1][C2][C3]");
         }
     }
 }

@@ -9,6 +9,7 @@
 - 重写首页欢迎页为产品介绍页：去掉安装/帮助导向叙述，改为展示数据库简介、核心功能、产品形态和路线图对应能力，并保留进入后台入口。
 - 修复 Production 模式下 `GET /admin/` 自重定向死循环（`ERR_TOO_MANY_REDIRECTS`）：原 `UseDefaultFiles({ RequestPath = "/admin" })` 未提供针对 `wwwroot/admin` 的 `FileProvider`，与 `MapGet("/admin")` / `MapFallbackToFile` 共同作用导致 Vite 构建产物无法被正确解析；现改为使用专用 `PhysicalFileProvider(wwwroot/admin)` 的 `UseStaticFiles`，并显式 `MapGet("/admin/")` 直接返回 `index.html`。
 - 修复访问根路径 `/`（产品宣传首页）被 Bearer 认证中间件拦截返回 `401`：将 `/`、`/favicon.ico`、`/robots.txt` 加入匿名白名单，使 `MapHomePage()` 渲染的官网首页可直接访问。
+- **Milestone 14 核查与修复**：核查 PR #63 ~ #69 的实际落地情况，确认 `SonnetDB.Copilot` 命名空间骨架、文档/技能摄入管线、MCP 工具增强、单轮/多轮 Agent 编排、Web Admin Chat Tab 与 nightly eval 套件均已落库；修复 `tests/SonnetDB.Tests/Copilot/copilot-eval-scenarios.json` 中 5 个场景（`metadata_show_measurements_sql` / `query_cpu_time_filter` / `analytics_changepoint_cusum` / `troubleshoot_explain_slow_query_log` / `troubleshoot_multiturn_sample_memory`）的 `answerSummary` 与 `expectedAnswerContains` 不一致问题，使 nightly eval 准确率从 86.11% 恢复到 100%（≥ 95% 阈值），citation 命中率 100%，p95 延迟 < 20 ms。同步把 `ROADMAP.md` 中 PR #66 / #67 / #69 与 Milestone 14 总览状态由 📋 回填为 ✅。
 
 ### Changed (品牌重命名 / Breaking)
 - **项目重命名 `TSLite` → `SonnetDB`**：因与其他品牌名称冲突，全仓代码、命名空间、包名、Docker 镜像、文档、CI 脚本统一改名为 `SonnetDB`。
@@ -38,6 +39,13 @@
 - 回填 `ROADMAP.md` 的 PR #62 状态与 Milestone 13 里程碑进度：默认 `10k / 100k` 向量基准与 README 实测结果已闭环，`1M` 长测与外部库同机对比保留为显式 / 环境可选的后续补数项，不再阻塞 Milestone 14。
 
 ### Added
+- **PR #68 — Copilot 多轮对话 + SQL 自我纠错 + Web Admin Chat（Milestone 14 第六切片）**
+  - `POST /v1/copilot/chat` / `/v1/copilot/chat/stream` 请求体升级为兼容 `message` 与 `messages[]` 两种模式；服务端会对最近对话按 token 预算裁剪，只保留最新且最相关的上下文进入 planner / answer prompt，支持多轮追问。
+  - `CopilotAgent` 新增 `query_sql` 自我纠错回路：当模型规划出来的只读 SQL 在解析、校验或执行阶段失败时，会封装为 `SqlExecutionException` 回喂给模型改写，最多重试 3 轮，并通过 `tool_retry` 事件把错误与改写后的 SQL 流式回传前端。
+  - Web Admin 新增 `Copilot Chat` 页面与路由，接入 `/v1/copilot/chat/stream` SSE 事件流，实时展示检索/工具执行过程，支持 skill/citation 折叠查看，以及将候选 SQL 一键发送到 `SQL Console` 并立即执行。
+  - `SQL Console` 新增跨页面待执行 SQL 队列，允许 Chat 页把修正后的查询直接落到控制台执行；前端构建已随路由与页面一并通过。
+  - 测试补齐：新增多轮 history 裁剪回归用例与 `query_sql` 自动重写回归用例，确认历史上下文按预算收敛、失败 SQL 会触发改写并闭环返回结果。
+
 - **PR #67 — Copilot 单轮问答闭环（Milestone 14 第五切片）**
   - 新增内部 `CopilotAgent` 编排器：对单轮问题执行 docs/skills 召回、工具规划、只读工具执行与最终回答生成，串起 `IEmbeddingProvider`、`IChatProvider`、技能库、文档库与现有 MCP 只读工具语义。
   - 新增 HTTP 端点：`POST /v1/copilot/chat` 返回 `application/x-ndjson` 事件流，`POST /v1/copilot/chat/stream` 返回 `text/event-stream` SSE；统一输出 `start` / `retrieval` / `tool_call` / `tool_result` / `final` / `error` / `done` 事件，并在最终回答中附带 `citations`。

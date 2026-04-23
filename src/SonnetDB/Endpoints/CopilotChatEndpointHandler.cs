@@ -10,7 +10,7 @@ using SonnetDB.Json;
 namespace SonnetDB.Endpoints;
 
 /// <summary>
-/// PR #67：Copilot 单轮聊天端点。
+/// PR #67 / #68：Copilot 聊天端点。
 /// </summary>
 internal static class CopilotChatEndpointHandler
 {
@@ -54,9 +54,16 @@ internal static class CopilotChatEndpointHandler
         }
 
         var req = await ReadJsonAsync(ctx, ServerJsonContext.Default.CopilotChatRequest).ConfigureAwait(false);
-        if (req is null || string.IsNullOrWhiteSpace(req.Db) || string.IsNullOrWhiteSpace(req.Message))
+        if (req is null || string.IsNullOrWhiteSpace(req.Db))
         {
-            await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体需包含 db 与 message。").ConfigureAwait(false);
+            await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体需包含 db。").ConfigureAwait(false);
+            return;
+        }
+
+        var messages = NormalizeMessages(req);
+        if (messages.Count == 0)
+        {
+            await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体需包含 message 或 messages。").ConfigureAwait(false);
             return;
         }
 
@@ -91,7 +98,7 @@ internal static class CopilotChatEndpointHandler
 
         try
         {
-            await foreach (var evt in copilotAgent.RunAsync(context, req.Message, req.DocsK, req.SkillsK, ctx.RequestAborted).ConfigureAwait(false))
+            await foreach (var evt in copilotAgent.RunAsync(context, messages, req.DocsK, req.SkillsK, ctx.RequestAborted).ConfigureAwait(false))
             {
                 if (sse)
                 {
@@ -176,5 +183,20 @@ internal static class CopilotChatEndpointHandler
         {
             return null;
         }
+    }
+
+    private static List<AiMessage> NormalizeMessages(CopilotChatRequest request)
+    {
+        if (request.Messages is { Count: > 0 })
+        {
+            return request.Messages
+                .Where(static message => !string.IsNullOrWhiteSpace(message.Content))
+                .Select(static message => new AiMessage(message.Role, message.Content.Trim()))
+                .ToList();
+        }
+
+        return string.IsNullOrWhiteSpace(request.Message)
+            ? []
+            : [new AiMessage("user", request.Message.Trim())];
     }
 }

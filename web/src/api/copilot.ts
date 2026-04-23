@@ -1,0 +1,87 @@
+export interface CopilotMessage {
+  role: string;
+  content: string;
+}
+
+export interface CopilotCitation {
+  id: string;
+  kind: string;
+  title: string;
+  source: string;
+  snippet: string;
+}
+
+export interface CopilotChatEvent {
+  type: string;
+  message?: string;
+  answer?: string;
+  toolName?: string;
+  toolArguments?: string;
+  toolResult?: string;
+  skillNames?: string[];
+  toolNames?: string[];
+  citations?: CopilotCitation[];
+  attempt?: number;
+}
+
+export interface CopilotChatRequest {
+  db: string;
+  messages: CopilotMessage[];
+  docsK?: number;
+  skillsK?: number;
+}
+
+export async function* streamCopilotChat(
+  token: string,
+  request: CopilotChatRequest,
+  signal?: AbortSignal,
+): AsyncGenerator<CopilotChatEvent, void, unknown> {
+  const resp = await fetch('/v1/copilot/chat/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(request),
+    signal,
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Copilot 请求失败 ${resp.status}: ${text}`);
+  }
+
+  const reader = resp.body?.getReader();
+  if (!reader) throw new Error('无法读取 Copilot 响应流');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice('data: '.length);
+        if (!data || data === '[DONE]') {
+          if (data === '[DONE]') return;
+          continue;
+        }
+
+        try {
+          yield JSON.parse(data) as CopilotChatEvent;
+        } catch {
+          // 忽略无法解析的中间行
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}

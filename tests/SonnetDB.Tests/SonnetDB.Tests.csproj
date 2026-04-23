@@ -24,4 +24,10 @@
     <ProjectReference Include="..\..\src\SonnetDB.Data\SonnetDB.Data.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Copilot\copilot-eval-scenarios.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

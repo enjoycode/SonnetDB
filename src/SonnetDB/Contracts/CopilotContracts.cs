@@ -110,15 +110,17 @@ public sealed record CopilotSkillLoadResponse(
 public sealed record CopilotSkillsListResponse(IReadOnlyList<CopilotSkillsSearchHit> Skills);
 
 /// <summary>
-/// Copilot 单轮聊天请求体（PR #67）。
+/// Copilot 聊天请求体（PR #67 / #68）。
 /// </summary>
 /// <param name="Db">目标数据库名。</param>
-/// <param name="Message">用户问题。</param>
+/// <param name="Message">兼容旧客户端的单条用户问题；若同时提供 <paramref name="Messages"/>，以后者为准。</param>
+/// <param name="Messages">多轮对话历史，通常按 <c>user/assistant</c> 交替排列，最后一条应为当前用户问题。</param>
 /// <param name="DocsK">文档召回条数；为空时使用服务端默认值。</param>
 /// <param name="SkillsK">技能召回条数；为空时使用服务端默认值。</param>
 public sealed record CopilotChatRequest(
     string Db,
-    string Message,
+    string? Message = null,
+    List<AiMessage>? Messages = null,
     int? DocsK = null,
     int? SkillsK = null);
 
@@ -138,9 +140,9 @@ public sealed record CopilotCitation(
     string Snippet);
 
 /// <summary>
-/// Copilot 聊天流中的单条事件（PR #67）。
+/// Copilot 聊天流中的单条事件（PR #67 / #68）。
 /// </summary>
-/// <param name="Type">事件类型：<c>start</c> / <c>retrieval</c> / <c>tool_call</c> / <c>tool_result</c> / <c>final</c> / <c>error</c> / <c>done</c>。</param>
+/// <param name="Type">事件类型：<c>start</c> / <c>retrieval</c> / <c>tool_call</c> / <c>tool_retry</c> / <c>tool_result</c> / <c>final</c> / <c>error</c> / <c>done</c>。</param>
 /// <param name="Message">阶段性说明或错误消息。</param>
 /// <param name="Answer">最终回答文本，仅 <c>final</c> 事件使用。</param>
 /// <param name="ToolName">工具名，仅工具相关事件使用。</param>
@@ -149,6 +151,7 @@ public sealed record CopilotCitation(
 /// <param name="SkillNames">召回到的技能名列表。</param>
 /// <param name="ToolNames">召回技能建议使用的工具名列表。</param>
 /// <param name="Citations">当前事件附带的 citations。</param>
+/// <param name="Attempt">当前重试或执行轮次；仅工具重试相关事件使用。</param>
 public sealed record CopilotChatEvent(
     string Type,
     string? Message = null,
@@ -158,4 +161,5 @@ public sealed record CopilotChatEvent(
     string? ToolResult = null,
     IReadOnlyList<string>? SkillNames = null,
     IReadOnlyList<string>? ToolNames = null,
-    IReadOnlyList<CopilotCitation>? Citations = null);
+    IReadOnlyList<CopilotCitation>? Citations = null,
+    int? Attempt = null);

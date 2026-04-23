@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using SonnetDB.Contracts;
 using SonnetDB.Engine;
+using SonnetDB.Exceptions;
 using SonnetDB.Json;
 using SonnetDB.Mcp;
 using SonnetDB.Sql;
@@ -14,7 +15,7 @@ using SonnetDB.Sql.Execution;
 namespace SonnetDB.Copilot;
 
 /// <summary>
-/// PR #67：单轮 Copilot 问答编排器。
+/// PR #67 / #68：Copilot 问答编排器。
 /// </summary>
 internal sealed class CopilotAgent
 {
@@ -24,6 +25,8 @@ internal sealed class CopilotAgent
     private const int MaxSkillsK = 8;
     private const int MaxLoadedSkills = 3;
     private const int MaxPlannedTools = 3;
+    private const int HistoryTokenBudget = 1200;
+    private const int MaxSqlRepairAttempts = 3;
 
     private readonly DocsSearchService _docsSearchService;
     private readonly SkillSearchService _skillSearchService;
@@ -53,28 +56,30 @@ internal sealed class CopilotAgent
 
     public async IAsyncEnumerable<CopilotChatEvent> RunAsync(
         CopilotAgentContext context,
-        string message,
+        IReadOnlyList<AiMessage> messages,
         int? docsK = null,
         int? skillsK = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(context);
-        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        ArgumentNullException.ThrowIfNull(messages);
 
-        var normalizedMessage = message.Trim();
+        var conversation = PrepareConversation(messages);
         var effectiveDocsK = NormalizeLimit(docsK, DefaultDocsK, MaxDocsK);
         var effectiveSkillsK = NormalizeLimit(skillsK, DefaultSkillsK, MaxSkillsK);
 
         yield return new CopilotChatEvent(
             Type: "start",
-            Message: $"开始处理数据库 '{context.DatabaseName}' 上的问题。");
+            Message: conversation.WasTrimmed
+                ? $"开始处理数据库 '{context.DatabaseName}' 上的问题，历史消息已按 token 预算裁剪为 {conversation.Messages.Count} 条。"
+                : $"开始处理数据库 '{context.DatabaseName}' 上的问题。");
 
         var docs = effectiveDocsK > 0
-            ? await _docsSearchService.SearchAsync(normalizedMessage, effectiveDocsK, cancellationToken).ConfigureAwait(false)
+            ? await _docsSearchService.SearchAsync(conversation.RetrievalQuery, effectiveDocsK, cancellationToken).ConfigureAwait(false)
             : [];
 
         var skillHits = effectiveSkillsK > 0
-            ? await _skillSearchService.SearchAsync(normalizedMessage, effectiveSkillsK, cancellationToken).ConfigureAwait(false)
+            ? await _skillSearchService.SearchAsync(conversation.RetrievalQuery, effectiveSkillsK, cancellationToken).ConfigureAwait(false)
             : [];
 
         var loadedSkills = LoadTopSkills(skillHits);
@@ -93,7 +98,7 @@ internal sealed class CopilotAgent
             ToolNames: suggestedToolNames.Length > 0 ? suggestedToolNames : null,
             Citations: retrievalCitations.Count > 0 ? retrievalCitations : null);
 
-        var plan = await PlanToolsAsync(context, normalizedMessage, docs, loadedSkills, cancellationToken).ConfigureAwait(false);
+        var plan = await PlanToolsAsync(context, conversation, docs, loadedSkills, cancellationToken).ConfigureAwait(false);
         var observations = new List<CopilotToolObservation>(plan.Count);
 
         foreach (var tool in plan)
@@ -105,17 +110,28 @@ internal sealed class CopilotAgent
                 ToolName: tool.Name,
                 ToolArguments: toolArguments);
 
-            var observation = ExecuteTool(context, tool);
-            var citation = BuildToolCitation(tool, observation, ref nextCitationNumber);
-            var captured = new CopilotToolObservation(tool.Name, toolArguments, observation, citation);
+            var execution = await ExecuteToolAsync(
+                context,
+                conversation,
+                docs,
+                loadedSkills,
+                tool,
+                cancellationToken).ConfigureAwait(false);
+
+            foreach (var evt in execution.Events)
+                yield return evt;
+
+            var finalToolArguments = FormatToolArguments(execution.Tool);
+            var citation = BuildToolCitation(execution.Tool, execution.ResultJson, ref nextCitationNumber);
+            var captured = new CopilotToolObservation(execution.Tool.Name, finalToolArguments, execution.ResultJson, citation);
             observations.Add(captured);
 
             yield return new CopilotChatEvent(
                 Type: "tool_result",
-                Message: $"工具 {tool.Name} 已返回结果。",
-                ToolName: tool.Name,
-                ToolArguments: toolArguments,
-                ToolResult: observation,
+                Message: $"工具 {execution.Tool.Name} 已返回结果。",
+                ToolName: execution.Tool.Name,
+                ToolArguments: finalToolArguments,
+                ToolResult: execution.ResultJson,
                 Citations: [citation]);
         }
 
@@ -125,7 +141,7 @@ internal sealed class CopilotAgent
 
         var answer = await GenerateAnswerAsync(
             context,
-            normalizedMessage,
+            conversation,
             docs,
             loadedSkills,
             observations,
@@ -141,6 +157,31 @@ internal sealed class CopilotAgent
         yield return new CopilotChatEvent(
             Type: "done",
             Message: "completed");
+    }
+
+    private static CopilotConversation PrepareConversation(IReadOnlyList<AiMessage> messages)
+    {
+        var normalized = NormalizeMessages(messages);
+        if (normalized.Count == 0)
+            throw new ArgumentException("Copilot messages cannot be empty.", nameof(messages));
+
+        var trimmed = TrimConversation(normalized);
+        var latestUserIndex = FindLatestUserMessageIndex(trimmed);
+        if (latestUserIndex < 0)
+            throw new ArgumentException("Copilot messages must contain at least one user message.", nameof(messages));
+
+        var activeMessages = trimmed.Take(latestUserIndex + 1).ToArray();
+        var history = latestUserIndex == 0
+            ? []
+            : activeMessages[..latestUserIndex];
+        var latestUserMessage = activeMessages[latestUserIndex].Content;
+
+        return new CopilotConversation(
+            Messages: activeMessages,
+            History: history,
+            LatestUserMessage: latestUserMessage,
+            RetrievalQuery: BuildRetrievalQuery(activeMessages),
+            WasTrimmed: trimmed.Count != normalized.Count || activeMessages.Length != normalized.Count);
     }
 
     private IReadOnlyList<SkillLoadResult> LoadTopSkills(IReadOnlyList<SkillSearchHit> skillHits)
@@ -161,13 +202,13 @@ internal sealed class CopilotAgent
 
     private async Task<IReadOnlyList<CopilotToolInvocation>> PlanToolsAsync(
         CopilotAgentContext context,
-        string message,
+        CopilotConversation conversation,
         IReadOnlyList<DocsSearchResult> docs,
         IReadOnlyList<SkillLoadResult> loadedSkills,
         CancellationToken cancellationToken)
     {
         var measurements = _schemaCache.GetMeasurements(context.DatabaseName, context.Database);
-        var plannerPrompt = BuildPlannerPrompt(context, message, docs, loadedSkills);
+        var plannerPrompt = BuildPlannerPrompt(context, conversation, docs, loadedSkills);
 
         try
         {
@@ -179,7 +220,7 @@ internal sealed class CopilotAgent
                 cancellationToken).ConfigureAwait(false);
 
             if (TryParsePlan(response, out var plan) && plan is not null)
-                return SanitizePlan(plan.Tools, measurements, message);
+                return SanitizePlan(plan.Tools, measurements, conversation.LatestUserMessage);
 
             _logger.LogWarning("Copilot planner returned non-JSON content: {Response}", response);
         }
@@ -188,19 +229,19 @@ internal sealed class CopilotAgent
             _logger.LogWarning(ex, "Copilot planner failed, falling back to heuristics.");
         }
 
-        return BuildHeuristicPlan(message, measurements);
+        return BuildHeuristicPlan(conversation.LatestUserMessage, measurements);
     }
 
     private async Task<string> GenerateAnswerAsync(
         CopilotAgentContext context,
-        string message,
+        CopilotConversation conversation,
         IReadOnlyList<DocsSearchResult> docs,
         IReadOnlyList<SkillLoadResult> loadedSkills,
         IReadOnlyList<CopilotToolObservation> observations,
         IReadOnlyList<CopilotCitation> citations,
         CancellationToken cancellationToken)
     {
-        var prompt = BuildAnswerPrompt(context, message, docs, loadedSkills, observations, citations);
+        var prompt = BuildAnswerPrompt(context, conversation, docs, loadedSkills, observations, citations);
 
         try
         {
@@ -406,20 +447,42 @@ internal sealed class CopilotAgent
             : [new CopilotToolInvocation("list_measurements", SonnetDbMcpResults.DefaultToolRowLimit, null, null, null)];
     }
 
-    private string ExecuteTool(CopilotAgentContext context, CopilotToolInvocation tool)
+    private async Task<CopilotToolExecutionResult> ExecuteToolAsync(
+        CopilotAgentContext context,
+        CopilotConversation conversation,
+        IReadOnlyList<DocsSearchResult> docs,
+        IReadOnlyList<SkillLoadResult> loadedSkills,
+        CopilotToolInvocation tool,
+        CancellationToken cancellationToken)
     {
-        return tool.Name switch
+        switch (tool.Name)
         {
-            "list_databases" => SerializeToolResult(
-                new McpDatabaseListResult(context.DatabaseName, context.VisibleDatabases),
-                ServerJsonContext.Default.McpDatabaseListResult),
-            "list_measurements" => ExecuteListMeasurements(context, tool),
-            "describe_measurement" => ExecuteDescribeMeasurement(context, tool),
-            "sample_rows" => ExecuteSampleRows(context, tool),
-            "explain_sql" => ExecuteExplainSql(context, tool),
-            "query_sql" => ExecuteQuerySql(context, tool),
-            _ => throw new InvalidOperationException($"不支持的 Copilot 工具 '{tool.Name}'。"),
-        };
+            case "list_databases":
+                return new CopilotToolExecutionResult(
+                    tool,
+                    SerializeToolResult(
+                        new McpDatabaseListResult(context.DatabaseName, context.VisibleDatabases),
+                        ServerJsonContext.Default.McpDatabaseListResult),
+                    []);
+            case "list_measurements":
+                return new CopilotToolExecutionResult(tool, ExecuteListMeasurements(context, tool), []);
+            case "describe_measurement":
+                return new CopilotToolExecutionResult(tool, ExecuteDescribeMeasurement(context, tool), []);
+            case "sample_rows":
+                return new CopilotToolExecutionResult(tool, ExecuteSampleRows(context, tool), []);
+            case "explain_sql":
+                return new CopilotToolExecutionResult(tool, ExecuteExplainSql(context, tool), []);
+            case "query_sql":
+                return await ExecuteQuerySqlWithRepairAsync(
+                    context,
+                    conversation,
+                    docs,
+                    loadedSkills,
+                    tool,
+                    cancellationToken).ConfigureAwait(false);
+            default:
+                throw new InvalidOperationException($"不支持的 Copilot 工具 '{tool.Name}'。");
+        }
     }
 
     private string ExecuteListMeasurements(CopilotAgentContext context, CopilotToolInvocation tool)
@@ -491,15 +554,117 @@ internal sealed class CopilotAgent
         return SerializeToolResult(payload, ServerJsonContext.Default.McpExplainSqlResult);
     }
 
-    private string ExecuteQuerySql(CopilotAgentContext context, CopilotToolInvocation tool)
+    private async Task<CopilotToolExecutionResult> ExecuteQuerySqlWithRepairAsync(
+        CopilotAgentContext context,
+        CopilotConversation conversation,
+        IReadOnlyList<DocsSearchResult> docs,
+        IReadOnlyList<SkillLoadResult> loadedSkills,
+        CopilotToolInvocation tool,
+        CancellationToken cancellationToken)
+    {
+        var currentTool = tool;
+        var events = new List<CopilotChatEvent>();
+
+        for (var attempt = 1; attempt <= MaxSqlRepairAttempts; attempt++)
+        {
+            try
+            {
+                return new CopilotToolExecutionResult(currentTool, TryExecuteQuerySql(context, currentTool), events);
+            }
+            catch (SqlExecutionException ex) when (attempt < MaxSqlRepairAttempts)
+            {
+                var rewrittenSql = await RepairSqlAsync(
+                    context,
+                    conversation,
+                    docs,
+                    loadedSkills,
+                    currentTool,
+                    ex,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (string.IsNullOrWhiteSpace(rewrittenSql)
+                    || string.Equals(
+                        CollapseWhitespace(rewrittenSql),
+                        CollapseWhitespace(currentTool.Sql ?? string.Empty),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    var errorPayload = BuildSqlErrorPayload(ex, attempt, final: true);
+                    events.Add(new CopilotChatEvent(
+                        Type: "tool_retry",
+                        Message: $"query_sql 第 {attempt} 次失败后未得到可用的改写 SQL。",
+                        ToolName: currentTool.Name,
+                        ToolArguments: FormatToolArguments(currentTool),
+                        ToolResult: errorPayload,
+                        Attempt: attempt));
+                    return new CopilotToolExecutionResult(currentTool, errorPayload, events);
+                }
+
+                currentTool = currentTool with { Sql = rewrittenSql };
+                events.Add(new CopilotChatEvent(
+                    Type: "tool_retry",
+                    Message: $"query_sql 第 {attempt} 次执行失败，已依据错误信息改写 SQL 并重试。",
+                    ToolName: currentTool.Name,
+                    ToolArguments: FormatToolArguments(currentTool),
+                    ToolResult: BuildSqlErrorPayload(ex, attempt, final: false),
+                    Attempt: attempt));
+            }
+            catch (SqlExecutionException ex)
+            {
+                return new CopilotToolExecutionResult(currentTool, BuildSqlErrorPayload(ex, attempt, final: true), events);
+            }
+        }
+
+        throw new InvalidOperationException("query_sql 修复循环意外结束。");
+    }
+
+    private async Task<string?> RepairSqlAsync(
+        CopilotAgentContext context,
+        CopilotConversation conversation,
+        IReadOnlyList<DocsSearchResult> docs,
+        IReadOnlyList<SkillLoadResult> loadedSkills,
+        CopilotToolInvocation tool,
+        SqlExecutionException exception,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var prompt = BuildSqlRepairPrompt(context, conversation, docs, loadedSkills, tool, exception);
+            var response = await _chatProvider.CompleteAsync(
+                [
+                    new AiMessage("system", SqlRepairSystemPrompt),
+                    new AiMessage("user", prompt),
+                ],
+                cancellationToken).ConfigureAwait(false);
+            return TryExtractSql(response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Copilot SQL repair failed for sql={Sql}.", tool.Sql);
+            return null;
+        }
+    }
+
+    private static string TryExecuteQuerySql(CopilotAgentContext context, CopilotToolInvocation tool)
     {
         var sql = tool.Sql
             ?? throw new InvalidOperationException("query_sql 缺少 sql 参数。");
         var maxRows = tool.MaxRows ?? SonnetDbMcpResults.DefaultToolRowLimit;
-        var statement = SqlParser.Parse(sql);
+
+        SqlStatement statement;
+        try
+        {
+            statement = SqlParser.Parse(sql);
+        }
+        catch (SqlParseException ex)
+        {
+            throw new SqlExecutionException(sql, "parse", ex.Message, ex);
+        }
+
         if (!IsReadOnlyStatement(statement))
         {
-            throw new InvalidOperationException(
+            throw new SqlExecutionException(
+                sql,
+                "validate",
                 "query_sql 仅支持 SELECT、SHOW MEASUREMENTS / SHOW TABLES 与 DESCRIBE [MEASUREMENT]。");
         }
 
@@ -508,9 +673,18 @@ internal sealed class CopilotAgent
         if (statement is SelectStatement select)
             executable = SonnetDbMcpResults.ApplyToolRowLimit(select, maxRows, out canTruncate);
 
-        var executionResult = SqlExecutor.ExecuteStatement(context.Database, executable);
+        object? executionResult;
+        try
+        {
+            executionResult = SqlExecutor.ExecuteStatement(context.Database, executable);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or ArgumentException)
+        {
+            throw new SqlExecutionException(sql, "execute", ex.Message, ex);
+        }
+
         if (executionResult is not SelectExecutionResult selectResult)
-            throw new InvalidOperationException("只读 SQL 未返回结果集。");
+            throw new SqlExecutionException(sql, "execute", "只读 SQL 未返回结果集。");
 
         var (rows, truncated) = SonnetDbMcpResults.SliceRows(selectResult, maxRows, canTruncate);
         var payload = new McpSqlQueryResult(
@@ -526,7 +700,7 @@ internal sealed class CopilotAgent
 
     private static string BuildPlannerPrompt(
         CopilotAgentContext context,
-        string message,
+        CopilotConversation conversation,
         IReadOnlyList<DocsSearchResult> docs,
         IReadOnlyList<SkillLoadResult> loadedSkills)
     {
@@ -534,8 +708,9 @@ internal sealed class CopilotAgent
         builder.AppendLine($"当前数据库：{context.DatabaseName}");
         builder.AppendLine($"当前可见数据库：{string.Join(", ", context.VisibleDatabases)}");
         builder.AppendLine();
-        builder.AppendLine("用户问题：");
-        builder.AppendLine(message);
+        AppendConversationHistory(builder, conversation.History);
+        builder.AppendLine("当前用户问题：");
+        builder.AppendLine(conversation.LatestUserMessage);
         builder.AppendLine();
 
         if (loadedSkills.Count > 0)
@@ -577,7 +752,7 @@ internal sealed class CopilotAgent
 
     private static string BuildAnswerPrompt(
         CopilotAgentContext context,
-        string message,
+        CopilotConversation conversation,
         IReadOnlyList<DocsSearchResult> docs,
         IReadOnlyList<SkillLoadResult> loadedSkills,
         IReadOnlyList<CopilotToolObservation> observations,
@@ -587,8 +762,9 @@ internal sealed class CopilotAgent
         builder.AppendLine($"当前数据库：{context.DatabaseName}");
         builder.AppendLine($"当前可见数据库：{string.Join(", ", context.VisibleDatabases)}");
         builder.AppendLine();
-        builder.AppendLine("用户问题：");
-        builder.AppendLine(message);
+        AppendConversationHistory(builder, conversation.History);
+        builder.AppendLine("当前用户问题：");
+        builder.AppendLine(conversation.LatestUserMessage);
         builder.AppendLine();
 
         if (loadedSkills.Count > 0)
@@ -652,6 +828,61 @@ internal sealed class CopilotAgent
             }
         }
 
+        return builder.ToString().Trim();
+    }
+
+    private string BuildSqlRepairPrompt(
+        CopilotAgentContext context,
+        CopilotConversation conversation,
+        IReadOnlyList<DocsSearchResult> docs,
+        IReadOnlyList<SkillLoadResult> loadedSkills,
+        CopilotToolInvocation tool,
+        SqlExecutionException exception)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"当前数据库：{context.DatabaseName}");
+        builder.AppendLine($"当前可见数据库：{string.Join(", ", context.VisibleDatabases)}");
+        builder.AppendLine($"已知 measurements：{string.Join(", ", _schemaCache.GetMeasurements(context.DatabaseName, context.Database))}");
+        builder.AppendLine();
+        AppendConversationHistory(builder, conversation.History);
+        builder.AppendLine("当前用户问题：");
+        builder.AppendLine(conversation.LatestUserMessage);
+        builder.AppendLine();
+        builder.AppendLine("失败 SQL：");
+        builder.AppendLine(tool.Sql);
+        builder.AppendLine();
+        builder.AppendLine($"失败阶段：{exception.Phase}");
+        builder.AppendLine("错误消息：");
+        builder.AppendLine(exception.Message);
+        builder.AppendLine();
+
+        if (loadedSkills.Count > 0)
+        {
+            builder.AppendLine("已加载技能摘要：");
+            foreach (var skill in loadedSkills)
+            {
+                builder.Append("- ");
+                builder.Append(skill.Name);
+                builder.Append("：");
+                builder.AppendLine(Truncate(CollapseWhitespace($"{skill.Description} {skill.Body}"), 320));
+            }
+            builder.AppendLine();
+        }
+
+        if (docs.Count > 0)
+        {
+            builder.AppendLine("文档摘要：");
+            foreach (var doc in docs.Take(3))
+            {
+                builder.Append("- ");
+                builder.Append(doc.Source);
+                builder.Append("：");
+                builder.AppendLine(Truncate(CollapseWhitespace(doc.Content), 240));
+            }
+            builder.AppendLine();
+        }
+
+        builder.AppendLine("请返回修正后的只读 SQL。不要解释，不要 Markdown，不要 JSON。");
         return builder.ToString().Trim();
     }
 
@@ -809,6 +1040,102 @@ internal sealed class CopilotAgent
         _ => "unknown",
     };
 
+    private static List<AiMessage> NormalizeMessages(IReadOnlyList<AiMessage> messages)
+    {
+        var normalized = new List<AiMessage>(messages.Count);
+        foreach (var message in messages)
+        {
+            if (message is null || string.IsNullOrWhiteSpace(message.Content))
+                continue;
+
+            var role = NormalizeRole(message.Role);
+            if (role is null)
+                continue;
+
+            normalized.Add(new AiMessage(role, message.Content.Trim()));
+        }
+
+        return normalized;
+    }
+
+    private static IReadOnlyList<AiMessage> TrimConversation(IReadOnlyList<AiMessage> messages)
+    {
+        if (messages.Count == 0)
+            return [];
+
+        var remaining = HistoryTokenBudget;
+        var reversed = new List<AiMessage>(messages.Count);
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            var message = messages[i];
+            var content = reversed.Count == 0
+                ? TruncateToTokenBudget(message.Content, Math.Max(64, remaining))
+                : message.Content;
+            var estimatedTokens = EstimateTokens(content) + 4;
+
+            if (reversed.Count > 0 && estimatedTokens > remaining)
+                break;
+
+            reversed.Add(new AiMessage(message.Role, content));
+            remaining = Math.Max(0, remaining - estimatedTokens);
+        }
+
+        reversed.Reverse();
+        return reversed;
+    }
+
+    private static int FindLatestUserMessageIndex(IReadOnlyList<AiMessage> messages)
+    {
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(messages[i].Role, "user", StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static string BuildRetrievalQuery(IReadOnlyList<AiMessage> messages)
+    {
+        var builder = new StringBuilder();
+        foreach (var message in messages.TakeLast(4))
+        {
+            builder.Append(message.Role);
+            builder.Append(": ");
+            builder.AppendLine(Truncate(CollapseWhitespace(message.Content), 220));
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static string? NormalizeRole(string? role)
+    {
+        if (string.IsNullOrWhiteSpace(role))
+            return "user";
+
+        return role.Trim().ToLowerInvariant() switch
+        {
+            "user" => "user",
+            "assistant" => "assistant",
+            "system" => "system",
+            _ => null,
+        };
+    }
+
+    private static int EstimateTokens(string text)
+        => string.IsNullOrWhiteSpace(text) ? 0 : Math.Max(1, (text.Length + 3) / 4);
+
+    private static string TruncateToTokenBudget(string text, int tokenBudget)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var maxChars = Math.Max(32, tokenBudget * 4);
+        return text.Length <= maxChars
+            ? text
+            : text[..maxChars].TrimEnd() + "...";
+    }
+
     private static string FormatToolArguments(CopilotToolInvocation tool)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -827,6 +1154,43 @@ internal sealed class CopilotAgent
         writer.WriteEndObject();
         writer.Flush();
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string BuildSqlErrorPayload(SqlExecutionException exception, int attempt, bool final)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using var writer = new Utf8JsonWriter(buffer);
+        writer.WriteStartObject();
+        writer.WriteString("error", "sql_error");
+        writer.WriteString("phase", exception.Phase);
+        writer.WriteString("message", exception.Message);
+        writer.WriteString("sql", exception.Sql);
+        writer.WriteNumber("attempt", attempt);
+        writer.WriteBoolean("final", final);
+        writer.WriteEndObject();
+        writer.Flush();
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static void AppendConversationHistory(StringBuilder builder, IReadOnlyList<AiMessage> history)
+    {
+        if (history.Count == 0)
+            return;
+
+        builder.AppendLine("最近对话历史：");
+        foreach (var message in history)
+        {
+            builder.Append("- ");
+            builder.Append(message.Role switch
+            {
+                "assistant" => "assistant",
+                "system" => "system",
+                _ => "user",
+            });
+            builder.Append("：");
+            builder.AppendLine(Truncate(CollapseWhitespace(message.Content), 320));
+        }
+        builder.AppendLine();
     }
 
     private static string CollapseWhitespace(string text)
@@ -884,6 +1248,16 @@ internal sealed class CopilotAgent
         - 不要编造不存在的 measurement 名称。
         """;
 
+    private const string SqlRepairSystemPrompt =
+        """
+        你是 SonnetDB Copilot 的 SQL 纠错器。
+        请根据失败 SQL、错误消息、对话上下文和文档/技能摘要，把 SQL 改写成可执行的只读 SQL。
+        规则：
+        - 只允许输出一条 SELECT、SHOW MEASUREMENTS / SHOW TABLES 或 DESCRIBE [MEASUREMENT]。
+        - 只能输出 SQL 本身，不要解释、Markdown、代码块或 JSON。
+        - 不要编造不存在的 measurement、列名或函数。
+        """;
+
     private const string AnswerSystemPrompt =
         """
         你是 SonnetDB Copilot 的最终回答器。
@@ -897,7 +1271,7 @@ internal sealed class CopilotAgent
 }
 
 /// <summary>
-/// Copilot 单轮执行上下文。
+/// Copilot 执行上下文。
 /// </summary>
 /// <param name="DatabaseName">当前数据库名。</param>
 /// <param name="Database">当前数据库实例。</param>
@@ -906,6 +1280,16 @@ internal sealed record CopilotAgentContext(
     string DatabaseName,
     Tsdb Database,
     IReadOnlyList<string> VisibleDatabases);
+
+/// <summary>
+/// 多轮对话的规范化结果。
+/// </summary>
+internal sealed record CopilotConversation(
+    IReadOnlyList<AiMessage> Messages,
+    IReadOnlyList<AiMessage> History,
+    string LatestUserMessage,
+    string RetrievalQuery,
+    bool WasTrimmed);
 
 /// <summary>
 /// 工具规划结果。
@@ -940,3 +1324,11 @@ internal sealed record CopilotToolObservation(
     string ArgumentsJson,
     string ResultJson,
     CopilotCitation Citation);
+
+/// <summary>
+/// 工具执行与修复后的最终结果。
+/// </summary>
+internal sealed record CopilotToolExecutionResult(
+    CopilotToolInvocation Tool,
+    string ResultJson,
+    IReadOnlyList<CopilotChatEvent> Events);
