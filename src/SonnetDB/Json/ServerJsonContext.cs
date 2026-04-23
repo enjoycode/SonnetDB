@@ -1,5 +1,6 @@
 ﻿using System.Text.Json.Serialization;
 using SonnetDB.Contracts;
+using SonnetDB.Copilot;
 using SonnetDB.Mcp;
 
 namespace SonnetDB.Json;
@@ -60,4 +61,12 @@ namespace SonnetDB.Json;
 [JsonSerializable(typeof(OpenAiChoice))]
 [JsonSerializable(typeof(OpenAiDelta))]
 [JsonSerializable(typeof(List<OpenAiChoice>))]
+// ---- Copilot OpenAI-compatible 内部协议 ----
+[JsonSerializable(typeof(OpenAiEmbeddingRequest))]
+[JsonSerializable(typeof(OpenAiEmbeddingResponse))]
+[JsonSerializable(typeof(OpenAiEmbeddingItem))]
+[JsonSerializable(typeof(OpenAiChatCompletionRequest))]
+[JsonSerializable(typeof(OpenAiChatCompletionResponse))]
+[JsonSerializable(typeof(OpenAiChatCompletionChoice))]
+[JsonSerializable(typeof(OpenAiChatCompletionMessage))]
 internal sealed partial class ServerJsonContext : JsonSerializerContext;

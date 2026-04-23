@@ -10,6 +10,7 @@ using ModelContextProtocol.AspNetCore;
 using SonnetDB.Auth;
 using SonnetDB.Configuration;
 using SonnetDB.Contracts;
+using SonnetDB.Copilot;
 using SonnetDB.Endpoints;
 using SonnetDB.Hosting;
 using SonnetDB.Json;
@@ -80,6 +81,48 @@ public static class Program
         if (!string.IsNullOrWhiteSpace(helpDocsRoot))
             options.HelpDocsRoot = helpDocsRoot;
 
+        var copilot = section.GetSection("Copilot");
+        var copilotEnabled = copilot["Enabled"];
+        if (bool.TryParse(copilotEnabled, out var enabled))
+            options.Copilot.Enabled = enabled;
+
+        var embedding = copilot.GetSection("Embedding");
+        var embeddingProvider = embedding["Provider"];
+        if (!string.IsNullOrWhiteSpace(embeddingProvider))
+            options.Copilot.Embedding.Provider = embeddingProvider;
+        var localModelPath = embedding["LocalModelPath"];
+        if (!string.IsNullOrWhiteSpace(localModelPath))
+            options.Copilot.Embedding.LocalModelPath = localModelPath;
+        var embeddingEndpoint = embedding["Endpoint"];
+        if (!string.IsNullOrWhiteSpace(embeddingEndpoint))
+            options.Copilot.Embedding.Endpoint = embeddingEndpoint;
+        var embeddingApiKey = embedding["ApiKey"];
+        if (!string.IsNullOrWhiteSpace(embeddingApiKey))
+            options.Copilot.Embedding.ApiKey = embeddingApiKey;
+        var embeddingModel = embedding["Model"];
+        if (!string.IsNullOrWhiteSpace(embeddingModel))
+            options.Copilot.Embedding.Model = embeddingModel;
+        var embeddingTimeoutSeconds = embedding["TimeoutSeconds"];
+        if (int.TryParse(embeddingTimeoutSeconds, out var embeddingTimeout))
+            options.Copilot.Embedding.TimeoutSeconds = embeddingTimeout;
+
+        var chat = copilot.GetSection("Chat");
+        var chatProvider = chat["Provider"];
+        if (!string.IsNullOrWhiteSpace(chatProvider))
+            options.Copilot.Chat.Provider = chatProvider;
+        var chatEndpoint = chat["Endpoint"];
+        if (!string.IsNullOrWhiteSpace(chatEndpoint))
+            options.Copilot.Chat.Endpoint = chatEndpoint;
+        var chatApiKey = chat["ApiKey"];
+        if (!string.IsNullOrWhiteSpace(chatApiKey))
+            options.Copilot.Chat.ApiKey = chatApiKey;
+        var chatModel = chat["Model"];
+        if (!string.IsNullOrWhiteSpace(chatModel))
+            options.Copilot.Chat.Model = chatModel;
+        var chatTimeoutSeconds = chat["TimeoutSeconds"];
+        if (int.TryParse(chatTimeoutSeconds, out var chatTimeout))
+            options.Copilot.Chat.TimeoutSeconds = chatTimeout;
+
         var tokens = section.GetSection("Tokens");
         foreach (var child in tokens.GetChildren())
         {
@@ -119,7 +162,29 @@ public static class Program
         builder.Services.AddSingleton(_ => new GrantsStore(systemDirectory));
         builder.Services.AddSingleton(_ => new InstallationStore(systemDirectory));
         builder.Services.AddSingleton(_ => new AiConfigStore(systemDirectory));
+        builder.Services.AddSingleton(serverOptions.Copilot);
+        builder.Services.AddSingleton(serverOptions.Copilot.Embedding);
+        builder.Services.AddSingleton(serverOptions.Copilot.Chat);
+        builder.Services.AddSingleton<CopilotReadiness>();
         builder.Services.AddHttpClient();
+        builder.Services.AddSingleton<IEmbeddingProvider>(sp =>
+        {
+            var options = sp.GetRequiredService<CopilotEmbeddingOptions>();
+            if (string.Equals(options.Provider, "openai", StringComparison.OrdinalIgnoreCase))
+                return new OpenAICompatibleEmbeddingProvider(options, sp.GetRequiredService<IHttpClientFactory>());
+            if (string.Equals(options.Provider, "local", StringComparison.OrdinalIgnoreCase))
+                return new LocalOnnxEmbeddingProvider(options);
+
+            throw new InvalidOperationException($"Unsupported copilot embedding provider '{options.Provider}'.");
+        });
+        builder.Services.AddSingleton<IChatProvider>(sp =>
+        {
+            var options = sp.GetRequiredService<CopilotChatOptions>();
+            if (string.Equals(options.Provider, "openai", StringComparison.OrdinalIgnoreCase))
+                return new OpenAICompatibleChatProvider(options, sp.GetRequiredService<IHttpClientFactory>());
+
+            throw new InvalidOperationException($"Unsupported copilot chat provider '{options.Provider}'.");
+        });
         builder.Services.AddSingleton<SonnetDB.Sql.Execution.IControlPlane>(sp =>
             new ControlPlane(
                 sp.GetRequiredService<UserStore>(),
@@ -187,6 +252,7 @@ public static class Program
         var grants = app.Services.GetRequiredService<GrantsStore>();
         var metrics = app.Services.GetRequiredService<ServerMetrics>();
         var installation = app.Services.GetRequiredService<InstallationStore>();
+        var copilotReadiness = app.Services.GetRequiredService<CopilotReadiness>();
 
         // ---- Vue SPA：根 / 承载产品官网，/admin/* 承载管理后台 ----
         app.MapSpa();
@@ -195,7 +261,8 @@ public static class Program
         // ---- 健康 / 指标 ----
         app.MapGet("/healthz", () =>
         {
-            var resp = new HealthResponse("ok", registry.Count, metrics.UptimeSeconds);
+            var readiness = copilotReadiness.Evaluate();
+            var resp = new HealthResponse("ok", registry.Count, metrics.UptimeSeconds, readiness.Enabled, readiness.Ready);
             return Results.Json(resp, ServerJsonContext.Default.HealthResponse);
         });
 

@@ -95,7 +95,9 @@ public sealed record DatabaseListResponse(IReadOnlyList<string> Databases);
 /// <param name="Status">固定为 <c>"ok"</c>。</param>
 /// <param name="Databases">已加载的数据库数量。</param>
 /// <param name="UptimeSeconds">服务端运行秒数。</param>
-public sealed record HealthResponse(string Status, int Databases, double UptimeSeconds);
+/// <param name="CopilotEnabled">Copilot 子系统是否启用。</param>
+/// <param name="CopilotReady">Copilot 子系统是否已满足基础就绪条件。</param>
+public sealed record HealthResponse(string Status, int Databases, double UptimeSeconds, bool CopilotEnabled, bool CopilotReady);
 
 /// <summary>
 /// <c>POST /v1/db/{db}/measurements/{m}/{lp|json|bulk}</c> 批量入库的成功响应。

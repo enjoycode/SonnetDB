@@ -39,6 +39,11 @@ public sealed class ServerOptions
     /// SSE <c>metrics</c> 通道的快照推送周期（秒）。默认 <c>5</c>。
     /// </summary>
     public int MetricsTickSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// Copilot 子系统配置。
+    /// </summary>
+    public CopilotOptions Copilot { get; set; } = new();
 }
 
 /// <summary>
