@@ -30,19 +30,19 @@
 - Server Admin UI 从“嵌入式资源”切换为官方 SPA 模式：开发期由 `SpaProxy` 自动启动 `web` 的 `npm run dev`，发布期改为 Static Web Assets 输出到 `/admin/`，以便更贴近 ASP.NET Core 推荐做法并减少 AOT 发布链路的额外定制。
 
 ### Planned
-- **Milestone 13 — 向量类型与嵌入式向量索引（剩余规划）**：PR #58 ~ #61（`VECTOR(dim)` / 距离函数 / `knn(...)` brute-force + HNSW 召回）已完成；剩余计划聚焦 PR #62，即向量召回基准与外部对比补数。
 - **Milestone 14 — SonnetDB Copilot：MCP 工具 + 知识库 + 智能体**：基于 Microsoft Agent Framework 新建独立项目 `src/SonnetDB.Copilot/`，复用现有 `/mcp/{db}` 工具集 + Milestone 13 的向量召回，把"用户文档 / 技能库 / 数据库 schema"统一存入 `__copilot__` 系统库（dogfooding）。Embedding/Chat 走统一 `IEmbeddingProvider` / `IChatProvider` 抽象，**本地 ONNX（bge-small-zh）** 与 **OpenAI 兼容端点（国际 / 国内任意 OpenAI-compat 网关）** 同时支持，可按部署场景切换。新增 HTTP 端点 `POST /v1/copilot/chat`（NDJSON / SSE 流式）+ Web Admin Chat Tab。详见 ROADMAP PR #63 ~ #69。
 
 ### Fixed
 - 回填 `ROADMAP.md` 的 PR #60 状态与 Milestone 13 进度，统一为与现有代码、测试和 `docs/vector-search.md` 一致的已实现状态。
 - 修正 `KnnExecutor` 在 HNSW + 时间范围过滤下“部分 ANN 命中后再精确补扫”时可能把同一点重复计入候选的问题，并补充 compaction 后 `.SDBVIDX` sidecar 仍可加载使用的回归测试。
+- 回填 `ROADMAP.md` 的 PR #62 状态与 Milestone 13 里程碑进度：默认 `10k / 100k` 向量基准与 README 实测结果已闭环，`1M` 长测与外部库同机对比保留为显式 / 环境可选的后续补数项，不再阻塞 Milestone 14。
 
 ### Added
-- **PR #62 — 向量召回基准骨架（Milestone 13 第七切片，进行中）**
+- **PR #62 — 向量召回基准骨架（Milestone 13 第七切片）**
   - `tests/SonnetDB.Benchmarks` 新增 `VectorRecallBenchmark`，覆盖 SonnetDB 自身 `384-dim` 向量的 brute-force Top10、HNSW Top10 与平均 `Recall@10`。
   - 默认档位为 `10k / 100k`；设置环境变量 `SONNETDB_VECTOR_BENCH_INCLUDE_1M=1` 后可额外启用 `1M` 数据集，避免日常基准意外占满内存。
   - `HnswVectorBlockIndex` 新增直接基于连续 `float32` 向量 payload 建图的重载，减少基准场景为构图额外复制 `DataPoint[]` 的内存开销。
-  - `tests/SonnetDB.Benchmarks/README.md` 与根 `README.md` 已补回 `10k / 100k` 两档实测耗时；`1M` 档位与 `sqlite-vec` / `pgvector` 同机粗略对比仍待后续长测补数。
+  - `tests/SonnetDB.Benchmarks/README.md` 与根 `README.md` 已补回 `10k / 100k` 两档实测耗时；`1M` 档位保留为显式长测入口，`sqlite-vec` / `pgvector` 同机粗略对比在 README 中保留结果区，后续如具备环境可单独补数。
 
 - **PR #61 — HNSW 段内 ANN sidecar 索引（Milestone 13 第六切片）**
   - `CREATE MEASUREMENT` 新增向量索引声明语法：`embedding FIELD VECTOR(384) WITH INDEX hnsw(m=16, ef=200)`；AST、`SqlParser`、`SqlExecutor`、`MeasurementSchema` 与 `MeasurementSchemaCodec` 已贯通，schema 文件格式升级到 v3 并兼容读取 v1/v2。

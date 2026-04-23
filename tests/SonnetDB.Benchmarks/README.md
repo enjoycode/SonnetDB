@@ -149,7 +149,8 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 说明：
 
 - 当前实现优先覆盖 **SonnetDB 自身的 brute-force vs HNSW** 算法对比，便于持续回归。
-- `sqlite-vec`、`pgvector (IVF/HNSW)` 的同机粗略对比需要额外外部环境，本仓库先预留结果区，后续补数时统一刷新。
+- `1M` 属于显式长测档位，仅在设置 `SONNETDB_VECTOR_BENCH_INCLUDE_1M=1` 时启用，不作为日常回归必跑项。
+- `sqlite-vec`、`pgvector (IVF/HNSW)` 的同机粗略对比需要额外外部环境；本仓库已预留结果区，后续如具备环境可单独补数。
 
 ---
 
@@ -236,7 +237,7 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 | Hnsw_RecallAt10 (batch average)  |  100k   |  2.504 ms |    TBD    |
 ```
 
-> 当前已回填 `10k / 100k` 两档的 BenchmarkDotNet 实测耗时（Windows 11 / Intel Core Ultra 9 185H / .NET 10.0.7，`IterationCount=3`、`WarmupCount=1`）。`1M` 档位在本机长测时耗时过长，本轮未继续等待；`sqlite-vec` / `pgvector` 同机粗略对比也仍待补。
+> 当前已回填 `10k / 100k` 两档的 BenchmarkDotNet 实测耗时（Windows 11 / Intel Core Ultra 9 185H / .NET 10.0.7，`IterationCount=3`、`WarmupCount=1`）。`1M` 保留为显式长测入口，不作为日常回归必跑项；`sqlite-vec` / `pgvector` 同机粗略对比在本 README 中保留结果区，后续如具备环境可单独补数。
 >
 > 说明：`Hnsw_RecallAt10` 这一行的 `Mean` 是“计算平均 Recall@10 这段逻辑本身的耗时”，而不是 Recall 数值；BenchmarkDotNet 摘要不会直接展示该方法的返回值，因此 `Recall@10` 列本轮暂保留 `TBD`，后续通过单独 probe 补齐。
 

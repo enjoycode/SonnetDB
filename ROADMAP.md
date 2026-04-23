@@ -289,9 +289,9 @@ db.Functions.RegisterAggregate(new KalmanAggregate()); // 实现 IAggregateFunct
 | #59 | **向量距离函数（Tier 1 标量 + Tier 2 聚合）**：实现 `cosine_distance(a,b)` `l2_distance(a,b)` `inner_product(a,b)` `vector_norm(a)`；新增聚合 `centroid(vec)`（按维度求均值，可合并）；`SqlParser` 支持 `<=>` `<->` `<#>` 三个 PostgreSQL/pgvector 兼容运算符（解析为对应函数调用） | ✅ |
 | #60 | **`KNN` 表值函数 + brute-force 召回**：新增 `knn(measurement, column, query_vector, k[, metric])` TVF，返回 `(time, distance, ...tags, ...fields)`；`KnnExecutor` 对 MemTable + 全量 Segment 做段级时间窗剪枝后的顺扫，使用 `Parallel.ForEach` 并行扫描候选序列并在最终阶段按距离升序取 Top-K；`WHERE` 支持 tag 等值过滤与时间范围过滤；`docs/vector-search.md` 给出端到端用法示例 | ✅ |
 | #61 | **HNSW 段内 ANN 索引（可选构建）**：`SegmentWriter` 在 flush/compaction 阶段对 `VECTOR` 列可选构建 HNSW 图（`SDBVIDX` 边表 sidecar 文件，不污染 `.SDBSEG`）；`SegmentReader` 检测到 `.SDBVIDX` 自动启用 ANN，否则降级为 brute-force；通过 `CREATE MEASUREMENT (... embedding VECTOR(384) WITH INDEX hnsw(m=16, ef=200))` 声明 | ✅ |
-| #62 | **向量基准 + 对比**：`tests/SonnetDB.Benchmarks` 新增 `VectorRecallBenchmark`，10k / 100k / 1M 384-dim 向量的 brute-force 顺扫 vs HNSW 召回延迟 + Recall@10；与 sqlite-vec、pgvector（IVF/HNSW）粗略同机对比写入 README | 🚧 |
+| #62 | **向量基准 + 对比**：`tests/SonnetDB.Benchmarks` 新增 `VectorRecallBenchmark`，默认覆盖 `10k / 100k` 384-dim 向量的 brute-force 顺扫 vs HNSW 延迟回归，并通过环境变量显式开启 `1M` 长测档位；README 已回填 SonnetDB 自身实测耗时，并为 `sqlite-vec`、`pgvector`（IVF/HNSW）预留同机粗略对比结果区 | ✅ |
 
-**推进顺序**：PR #58 ✅ → #59 ✅ → #60 ✅ → #61 ✅；Milestone 14 的向量检索前置已满足，当前继续推进 #62（向量基准与外部对比收尾）。
+**推进顺序**：PR #58 ✅ → #59 ✅ → #60 ✅ → #61 ✅ → #62 ✅。Milestone 13 的向量检索前置已闭环；后续若具备合适的长测 / 外部数据库环境，可继续补 `1M` 与 `sqlite-vec` / `pgvector` 结果，但不再阻塞 Milestone 14。
 
 ---
 
@@ -460,11 +460,11 @@ PR #70（GEOPOINT 类型）
 | 10 | 扩展和第三方 | #40, #41 + #42~#45 批量入库专题 | 🚧（#42~#45 ✅） |
 | 11 | 写入快路径（PR #45 瓶颈收尾） | #46 ~ #49 | ✅ |
 | 12 | 函数与算子扩展（PID / Forecast / UDF） | #50 ~ #57 | ✅ |
-| 13 | 向量类型与嵌入式向量索引（Copilot 知识库底座） | #58 ~ #62 | 🚧（#58~#61 ✅，#62 🚧） |
+| 13 | 向量类型与嵌入式向量索引（Copilot 知识库底座） | #58 ~ #62 | ✅ |
 | 14 | SonnetDB Copilot：MCP 工具 + 知识库 + 智能体 | #63 ~ #69 | 📋 |
 | 15 | 地理空间类型与轨迹分析 | #70 ~ #77 | 📋 |
 
-**当前推进顺序**：Milestone 13（向量类型）已完成 PR #58 ~ #61，Copilot 知识库所需的 `VECTOR` / 距离函数 / `knn(...)` / HNSW sidecar 前置已具备；当前聚焦 PR #62（向量基准与 README 对比补数）。Milestone 15（地理空间）无硬性前置，可与 Milestone 13/14 并行启动，建议在 PR #70（GEOPOINT 类型）合并后跟进后续 PR。
+**当前推进顺序**：Milestone 13（向量类型）已完成 PR #58 ~ #62，Copilot 知识库所需的 `VECTOR` / 距离函数 / `knn(...)` / HNSW sidecar / 向量基准入口均已具备。当前主线转向 Milestone 14（Copilot）；Milestone 15（地理空间）无硬性前置，可与 Milestone 14 并行启动，建议在 PR #70（GEOPOINT 类型）合并后跟进后续 PR。
 
 ---
 
