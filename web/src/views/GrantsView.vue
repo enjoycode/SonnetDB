@@ -76,7 +76,9 @@ async function reload(): Promise<void> {
 
 async function onGrant(): Promise<void> {
   if (!form.user || !form.db || !form.permission) { message.error('请填写用户、数据库与权限。'); return; }
-  const sql = `GRANT ${form.permission} ON DATABASE ${form.db} TO ${form.user}`;
+  const escapedDb = form.db.replace(/"/g, '""');
+  const escapedUser = form.user.replace(/"/g, '""');
+  const sql = `GRANT ${form.permission} ON DATABASE "${escapedDb}" TO "${escapedUser}"`;
   const rs = await execControlPlaneSql(auth.api, sql);
   if (rs.error) { message.error(rs.error.message); return; }
   message.success(`已授权 ${form.user}@${form.db} ${form.permission}`);
@@ -84,7 +86,9 @@ async function onGrant(): Promise<void> {
 }
 
 async function onRevoke(user: string, db: string): Promise<void> {
-  const rs = await execControlPlaneSql(auth.api, `REVOKE ON DATABASE ${db} FROM ${user}`);
+  const escapedDb = db.replace(/"/g, '""');
+  const escapedUser = user.replace(/"/g, '""');
+  const rs = await execControlPlaneSql(auth.api, `REVOKE ON DATABASE "${escapedDb}" FROM "${escapedUser}"`);
   if (rs.error) { message.error(rs.error.message); return; }
   message.success(`已撤销 ${user}@${db}`);
   await reload();
