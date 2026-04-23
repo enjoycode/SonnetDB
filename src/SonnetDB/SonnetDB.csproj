@@ -51,6 +51,11 @@
     </None>
   </ItemGroup>
 
+  <!-- Copilot prompt 模板：作为嵌入式资源打包，运行时通过 PromptTemplates 读取 -->
+  <ItemGroup>
+    <EmbeddedResource Include="Copilot\Prompts\*.md" />
+  </ItemGroup>
+
   <PropertyGroup>
     <AdminUiSourceDir>$(MSBuildThisFileDirectory)..\..\web</AdminUiSourceDir>
     <AdminUiDistDir>$(AdminUiSourceDir)\dist</AdminUiDistDir>

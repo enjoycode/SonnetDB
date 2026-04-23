@@ -443,6 +443,44 @@ PR #70（GEOPOINT 类型）
 
 ---
 
+## Milestone 16 — Copilot 产品化升级（嵌入式 AI 助手 UX）
+
+> **背景**：Milestone 14 已经把 Copilot 的服务端能力（MCP 工具 / 知识库摄入 / Agent 编排 / Eval）全部跑通，但用户在实际使用时仍遇到三类问题：
+> 1. **首次启动 503**：默认 `local` provider 需要手工下载 ONNX，导致开箱即用失败；
+> 2. **知识库不可见**：`docs/` 已自动摄入但 UI 没有展示，用户以为没建；
+> 3. **UX 散落**：Copilot 入口只在"AI 设置"页 chat tab，且 SQL Console 生成的 SQL 是 MySQL 方言、不带 SonnetDB 语法（CREATE MEASUREMENT / VECTOR / TAG / FIELD）。
+>
+> 本 Milestone 把 Copilot 推进到**真正可日常使用的一等公民**：零依赖就绪、全局浮窗、会话历史、上下文感知、权限审批、模型可选、SQL 生成对齐 SonnetDB 方言。
+
+### PR 列表
+
+| PR | 主题 | 状态 |
+|----|------|------|
+| #78 | **M1：内置零依赖 embedding + readiness 放宽**：新增 `BuiltinHashEmbeddingProvider`（SHA-256 哈希投影 → 384 维 L2 归一化向量）；`CopilotEmbeddingOptions.Provider` 默认 `builtin`；`CopilotReadiness` 接受 `builtin`；DI 工厂在 `local` 模型缺失时自动降级 | ✅ |
+| #79 | **M1.5：知识库可视化 status 端点**：新增 `GET /v1/copilot/knowledge/status`，返回 provider / fallback / 维度 / docs roots / 已索引文件数 / 块数 / 最近摄入时间 / 技能数；`DocsIngestor.GetIndexStateAsync()` + `BuiltinHashEmbeddingProvider.IsFallback` | ✅ |
+| #80 | **M2：SQL 生成走 Copilot Agent + SonnetDB 方言**：Web Admin SQL Console 的 `generateSql()` 改为调用 `/v1/copilot/chat`（带当前 db / 现有 measurement schema 上下文），让 Copilot Agent 通过 `draft_sql` 工具生成 SonnetDB 语法（`CREATE MEASUREMENT … (time, x TAG, y FIELD FLOAT64, z FIELD VECTOR(384))`、`INSERT`、`SELECT … knn(...)`）；`/v1/ai/chat` 兜底通道也加上 SonnetDB SQL system prompt | 📋 |
+| #81 | **M3：SNDBCopilot → Copilot 文案统一**：`AppShell.vue` 菜单 `SNDBCopilot` → `Copilot`、`AiSettingsView` 卡片标题 `SNDBCopilot 设置` → `Copilot 设置`；保留路由 key `ai-settings` 不变（避免破坏书签） | 📋 |
+| #82 | **M4：全局 CopilotDock 浮窗 + 知识库卡片**：在 `AppShell.vue` 右下角注入 `CopilotDock.vue`（可拖拽 / 折叠 / 全屏切换）；任意页面均可呼出；AiSettingsView 增加"知识库"卡片消费 `/v1/copilot/knowledge/status` + "立即重建索引"按钮（POST `/v1/copilot/docs/ingest {force:true}`） | 📋 |
+| #83 | **M5：会话历史**：服务端用 `__copilot__.conversations`（`id TAG, title TAG, created_at, updated_at, message_count, summary FIELD STRING`）+ `__copilot__.messages` 持久化；新增 `GET/POST/DELETE /v1/copilot/conversations[/{id}]`；CopilotDock 左侧抽屉显示历史列表 + 新建/删除/查看 | 📋 |
+| #84 | **M6：页面上下文感知**：CopilotDock 自动捕获当前路由 + 选中文本 / 当前 SQL / 当前数据库 / 当前 measurement，作为 `context` 字段塞入 `/v1/copilot/chat` 请求；Agent system prompt 模板支持 `{{page.route}}` / `{{page.selection}}` 变量 | 📋 |
+| #85 | **M7：权限选择器 + 写操作审批**：CopilotDock 顶部下拉 `read-only / read-write / admin`；`execute_sql` 工具调用前 UI 弹"将执行以下 SQL，确认？"对话框，显示 SQL + 影响行数预估；服务端按选择的权限 token 作为最大 ceiling 强制约束 | 📋 |
+| #86 | **M8：模型选择器**：CopilotDock 下拉选择 chat 模型（`/v1/ai/config` 已有 endpoint/key/model 列表的扩展）；`/v1/copilot/chat` 请求体新增可选 `modelOverride`，覆盖 `CopilotOptions.Chat.Model` | 📋 |
+| #87 | **M9：SQL Console 语法高亮回归**：核查 `web/src/components/SqlEditor.vue`（CodeMirror 6 + `@codemirror/lang-sql`）当前 `StandardSQL` dialect 是否高亮失效；扩展 dialect 增加 SonnetDB 关键字（`MEASUREMENT` / `TAG` / `FIELD` / `VECTOR` / `knn` / `time_bucket` / `forecast` / `pid_*`） | 📋 |
+| #88 | **M10：新手引导 / 提示词模板**：CopilotDock 空白态显示分类的 starter prompt 卡片（"建表"/"批量写入"/"时间窗聚合"/"向量检索"/"PID 调参"/"故障排查"）；点击直接填入输入框；模板 JSON 来自 `__copilot__.prompts` 系统库或前端 `web/src/copilot/starters.ts` | 📋 |
+
+### 推进顺序
+
+```
+PR #78 ✅ → #79 ✅ → #80（M2）→ #81（M3）→ #82（M4）
+  → #83（M5 会话历史）→ #84（M6 上下文）
+  → #85（M7 权限）→ #86（M8 模型）
+  → #87（M9 高亮）→ #88（M10 引导）
+```
+
+**前置依赖**：Milestone 14 已合并；本 Milestone 不破坏 SonnetDB Core 的二进制格式，全部为 `src/SonnetDB`（API 层）+ `web/`（前端）+ Copilot 子系统的扩展。
+
+---
+
 ## 里程碑总览
 
 | Milestone | 主题 | PR 范围 | 状态 |
@@ -463,6 +501,7 @@ PR #70（GEOPOINT 类型）
 | 13 | 向量类型与嵌入式向量索引（Copilot 知识库底座） | #58 ~ #62 | ✅ |
 | 14 | SonnetDB Copilot：MCP 工具 + 知识库 + 智能体 | #63 ~ #69 | ✅ |
 | 15 | 地理空间类型与轨迹分析 | #70 ~ #77 | 📋 |
+| 16 | Copilot 产品化升级（嵌入式 AI 助手 UX） | #78 ~ #88 | 🚧（#78、#79 ✅） |
 
 **当前推进顺序**：Milestone 13（向量类型）已完成 PR #58 ~ #62，Copilot 知识库所需的 `VECTOR` / 距离函数 / `knn(...)` / HNSW sidecar / 向量基准入口均已具备。当前主线转向 Milestone 14（Copilot）；Milestone 15（地理空间）无硬性前置，可与 Milestone 14 并行启动，建议在 PR #70（GEOPOINT 类型）合并后跟进后续 PR。
 

@@ -241,6 +241,16 @@ async function applyPendingExecution(): Promise<void> {
 
 // ---- AI ----
 
+/**
+ * 去掉模型偶尔回复的 ```sql ... ``` / ``` ... ``` 代码围栏，只保留 SQL 主体。
+ * 服务端 system prompt 已要求不要 Markdown，但部分模型仍会包，做一层防御。
+ */
+function stripCodeFence(text: string): string {
+  const fenced = text.match(/^\s*```(?:sql|SQL)?\s*\n?([\s\S]*?)\n?\s*```\s*$/);
+  if (fenced && fenced[1] !== undefined) return fenced[1];
+  return text;
+}
+
 async function generateSql(): Promise<void> {
   if (!aiPrompt.value.trim() || aiRunning.value) return;
   aiResponse.value = '';
@@ -259,7 +269,7 @@ async function generateSql(): Promise<void> {
       aiResponse.value = generated;
     }
     if (generated.trim()) {
-      sql.value = generated.trim();
+      sql.value = stripCodeFence(generated).trim();
     }
   } catch (e: unknown) {
     aiResponse.value = `错误：${e instanceof Error ? e.message : String(e)}`;

@@ -10,7 +10,9 @@
 
 > 可以通过 SQL 语句进行 `INSERT` 和 `SELECT` 时序数据，单文件持久化，零外部依赖，嵌入式进程内运行。
 
-当前 Milestone：**Milestone 0 — 项目脚手架**（详见 [ROADMAP.md](ROADMAP.md)）。
+当前 Milestone：**Milestone 16 — Copilot 产品化升级（嵌入式 AI 助手 UX）**（详见 [ROADMAP.md](ROADMAP.md)）。
+
+> 进行中子任务：M2（SQL 生成走 Copilot Agent + SonnetDB 方言）→ M3（文案统一）→ M4（全局 CopilotDock 浮窗）→ M5（会话历史）→ M6（页面上下文感知）→ M7（权限选择 + 写审批）→ M8（模型选择器）→ M9（SQL Console 高亮回归）→ M10（新手引导 / 提示词模板）。M1（内置零依赖 embedding）与 M1.5（知识库可视化端点）已完成。
 
 ---
 

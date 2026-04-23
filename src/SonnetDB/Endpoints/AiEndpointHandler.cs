@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using SonnetDB.Auth;
 using SonnetDB.Configuration;
 using SonnetDB.Contracts;
+using SonnetDB.Copilot;
 using SonnetDB.Engine;
 using SonnetDB.Hosting;
 using SonnetDB.Json;
@@ -105,11 +106,19 @@ internal static class AiEndpointHandler
             }
 
             string? sqlGenPrompt = null;
-            if (req.Mode == "sql_gen" && req.Db is not null)
+            if (req.Mode == "sql_gen")
             {
-                sqlGenPrompt = await TryBuildAuthorizedSqlGenPromptAsync(ctx, req.Db, registry, grantsStore).ConfigureAwait(false);
-                if (sqlGenPrompt is null)
-                    return;
+                if (req.Db is not null)
+                {
+                    sqlGenPrompt = await TryBuildAuthorizedSqlGenPromptAsync(ctx, req.Db, registry, grantsStore).ConfigureAwait(false);
+                    if (sqlGenPrompt is null)
+                        return;
+                }
+                else
+                {
+                    // 控制面（未指定 db）也要给出 SonnetDB 方言的系统提示，避免回退到 MySQL/PG 语法。
+                    sqlGenPrompt = BuildSqlGenPromptWithoutDb();
+                }
             }
 
             var cfg = configStore.Get();
@@ -186,34 +195,36 @@ internal static class AiEndpointHandler
 
     private static string BuildSqlGenPrompt(string db, Tsdb tsdb)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("你是 SonnetDB 时序数据库的 SQL 专家。");
-        sb.AppendLine($"数据库 \"{db}\" 的表结构如下：");
-        sb.AppendLine();
-
-        foreach (var measurement in tsdb.Measurements.Snapshot())
+        var measurements = tsdb.Measurements.Snapshot();
+        string measurementsBlock;
+        if (measurements.Count == 0)
         {
-            sb.Append($"表名: {measurement.Name}");
-            var tags = string.Join(", ", measurement.TagColumns.Select(column => column.Name));
-            var fields = string.Join(", ", measurement.FieldColumns.Select(column => $"{column.Name}({column.DataType})"));
-            if (!string.IsNullOrEmpty(tags))
-                sb.Append($"  标签: {tags}");
-            if (!string.IsNullOrEmpty(fields))
-                sb.Append($"  字段: {fields}");
-            sb.AppendLine();
+            measurementsBlock = "（空，需要先用 CREATE MEASUREMENT 建表）";
+        }
+        else
+        {
+            var sb = new StringBuilder();
+            foreach (var measurement in measurements)
+            {
+                sb.Append("- ").Append(measurement.Name).Append(" (time");
+                foreach (var tag in measurement.TagColumns)
+                    sb.Append(", ").Append(tag.Name).Append(" TAG");
+                foreach (var field in measurement.FieldColumns)
+                    sb.Append(", ").Append(field.Name).Append(" FIELD ").Append(field.DataType);
+                sb.AppendLine(")");
+            }
+            measurementsBlock = sb.ToString().TrimEnd();
         }
 
-        sb.AppendLine();
-        sb.AppendLine("SonnetDB SQL 规则：");
-        sb.AppendLine("- 时间戳列名为 ts（Unix 毫秒或 ISO-8601 字符串）");
-        sb.AppendLine("- 标签（tag）用于过滤和 GROUP BY");
-        sb.AppendLine("- 聚合函数：avg(), min(), max(), sum(), count(), first(), last()");
-        sb.AppendLine("- 时间函数：date_trunc('minute'/'hour'/'day', ts), now()");
-        sb.AppendLine("- 示例：SELECT avg(temperature) FROM sensors WHERE ts >= '2025-01-01' GROUP BY location");
-        sb.AppendLine();
-        sb.AppendLine("请根据用户的自然语言描述生成 SQL 语句。只返回 SQL，不包含任何解释或 Markdown 代码块。");
-        return sb.ToString();
+        return PromptTemplates.Render("sql-gen", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["db"] = db,
+            ["measurements"] = measurementsBlock,
+        });
     }
+
+    private static string BuildSqlGenPromptWithoutDb()
+        => PromptTemplates.Load("sql-gen-no-db");
 
     private static async Task ProxyOpenAiAsync(
         HttpContext ctx,
