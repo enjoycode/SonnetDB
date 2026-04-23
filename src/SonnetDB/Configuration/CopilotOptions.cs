@@ -19,6 +19,11 @@ public sealed class CopilotOptions
     /// Chat provider 配置。
     /// </summary>
     public CopilotChatOptions Chat { get; set; } = new();
+
+    /// <summary>
+    /// 文档摄入 / 检索配置。
+    /// </summary>
+    public CopilotDocsOptions Docs { get; set; } = new();
 }
 
 /// <summary>
@@ -86,4 +91,35 @@ public sealed class CopilotChatOptions
     /// 请求超时（秒）。默认 <c>60</c>。
     /// </summary>
     public int TimeoutSeconds { get; set; } = 60;
+}
+
+/// <summary>
+/// 文档摄入 / 检索配置。
+/// </summary>
+public sealed class CopilotDocsOptions
+{
+    /// <summary>
+    /// 服务端启动后是否自动执行一次后台增量摄入。默认 <c>true</c>。
+    /// </summary>
+    public bool AutoIngestOnStartup { get; set; } = true;
+
+    /// <summary>
+    /// 文档根目录列表。默认优先扫描仓库源码文档 <c>./docs</c>，其次兼容 <c>./web/help</c> 与运行时生成目录。
+    /// </summary>
+    public List<string> Roots { get; set; } =
+    [
+        "./docs",
+        "./web/help",
+        "./src/SonnetDB/wwwroot/help",
+    ];
+
+    /// <summary>
+    /// 单块最大字符数。默认 <c>800</c>。
+    /// </summary>
+    public int ChunkSize { get; set; } = 800;
+
+    /// <summary>
+    /// 相邻块重叠字符数。默认 <c>100</c>。
+    /// </summary>
+    public int ChunkOverlap { get; set; } = 100;
 }

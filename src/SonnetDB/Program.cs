@@ -123,6 +123,8 @@ public static class Program
         if (int.TryParse(chatTimeoutSeconds, out var chatTimeout))
             options.Copilot.Chat.TimeoutSeconds = chatTimeout;
 
+        LoadCopilotDocsOptions(copilot.GetSection("Docs"), options.Copilot.Docs);
+
         var tokens = section.GetSection("Tokens");
         foreach (var child in tokens.GetChildren())
         {
@@ -130,6 +132,32 @@ public static class Program
                 options.Tokens[child.Key] = child.Value;
         }
         return options;
+    }
+
+    private static void LoadCopilotDocsOptions(IConfigurationSection docs, CopilotDocsOptions options)
+    {
+        var autoIngestOnStartup = docs["AutoIngestOnStartup"];
+        if (bool.TryParse(autoIngestOnStartup, out var autoIngest))
+            options.AutoIngestOnStartup = autoIngest;
+
+        var chunkSize = docs["ChunkSize"];
+        if (int.TryParse(chunkSize, out var parsedChunkSize))
+            options.ChunkSize = parsedChunkSize;
+
+        var chunkOverlap = docs["ChunkOverlap"];
+        if (int.TryParse(chunkOverlap, out var parsedChunkOverlap))
+            options.ChunkOverlap = parsedChunkOverlap;
+
+        var roots = docs.GetSection("Roots");
+        var parsedRoots = new List<string>();
+        foreach (var child in roots.GetChildren())
+        {
+            if (!string.IsNullOrWhiteSpace(child.Value))
+                parsedRoots.Add(child.Value);
+        }
+
+        if (parsedRoots.Count > 0)
+            options.Roots = parsedRoots;
     }
 
     private static void Configure(WebApplicationBuilder builder, ServerOptions serverOptions)
@@ -165,6 +193,7 @@ public static class Program
         builder.Services.AddSingleton(serverOptions.Copilot);
         builder.Services.AddSingleton(serverOptions.Copilot.Embedding);
         builder.Services.AddSingleton(serverOptions.Copilot.Chat);
+        builder.Services.AddSingleton(serverOptions.Copilot.Docs);
         builder.Services.AddSingleton<CopilotReadiness>();
         builder.Services.AddHttpClient();
         builder.Services.AddSingleton<IEmbeddingProvider>(sp =>
