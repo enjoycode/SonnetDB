@@ -348,12 +348,9 @@ public sealed class SqlLexer
                 _position++;
                 continue;
             }
-            // 行注释 -- ...
-            if (ch == '-' && Peek(1) == '-')
+            if (IsLineCommentStart())
             {
-                _position += 2;
-                while (_position < _source.Length && _source[_position] != '\n')
-                    _position++;
+                SkipToEndOfLine();
                 continue;
             }
             // 块注释 /* ... */
@@ -370,6 +367,66 @@ public sealed class SqlLexer
             }
             return;
         }
+    }
+
+    private bool IsLineCommentStart()
+    {
+        var ch = _source[_position];
+        if (ch == '-' && Peek(1) == '-')
+            return true;
+
+        if (ch == '/' && Peek(1) == '/')
+            return true;
+
+        return IsRemCommentStart();
+    }
+
+    private bool IsRemCommentStart()
+    {
+        if (!StartsWithIgnoreCase("rem"))
+            return false;
+
+        var next = Peek(3);
+        if (next != '\0' && !char.IsWhiteSpace(next))
+            return false;
+
+        return IsAtLineStartOrAfterStatementTerminator();
+    }
+
+    private void SkipToEndOfLine()
+    {
+        _position += StartsWithIgnoreCase("rem") ? 3 : 2;
+        while (_position < _source.Length && _source[_position] != '\n' && _source[_position] != '\r')
+            _position++;
+    }
+
+    private bool StartsWithIgnoreCase(string value)
+    {
+        if (_position + value.Length > _source.Length)
+            return false;
+
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.ToUpperInvariant(_source[_position + i]) != char.ToUpperInvariant(value[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private bool IsAtLineStartOrAfterStatementTerminator()
+    {
+        for (var index = _position - 1; index >= 0; index--)
+        {
+            var ch = _source[index];
+            if (ch == '\n' || ch == '\r')
+                return true;
+
+            if (!char.IsWhiteSpace(ch))
+                return ch == ';';
+        }
+
+        return true;
     }
 
     private char Peek(int offset)

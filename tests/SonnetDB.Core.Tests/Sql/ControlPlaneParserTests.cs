@@ -155,6 +155,19 @@ public sealed class ControlPlaneParserTests
     }
 
     [Fact]
+    public void Parse_Script_SkipsRemCommentAfterStatement()
+    {
+        var stmts = SqlParser.ParseScript(
+            "CREATE DATABASE demo;\n" +
+            "REM cleanup is manual\n" +
+            "SHOW DATABASES;");
+
+        Assert.Equal(2, stmts.Count);
+        Assert.IsType<CreateDatabaseStatement>(stmts[0]);
+        Assert.IsType<ShowDatabasesStatement>(stmts[1]);
+    }
+
+    [Fact]
     public void Parse_ShowUsers()
     {
         var stmt = SqlParser.Parse("SHOW USERS");

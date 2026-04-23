@@ -42,7 +42,11 @@
       </n-layout-header>
 
       <n-layout-content content-style="padding:24px;">
-        <router-view />
+        <router-view v-slot="{ Component }">
+          <KeepAlive include="SqlConsoleView">
+            <component :is="Component" />
+          </KeepAlive>
+        </router-view>
       </n-layout-content>
     </n-layout>
     <CopilotDock v-if="auth.isAuthenticated" />

@@ -105,6 +105,34 @@ public class SqlLexerTests
     }
 
     [Fact]
+    public void Tokenize_DoubleSlashLineCommentIsSkipped()
+    {
+        var tokens = SqlLexer.Tokenize("SELECT // comment\r\n* FROM t");
+        Assert.Equal(TokenKind.KeywordSelect, tokens[0].Kind);
+        Assert.Equal(TokenKind.Star, tokens[1].Kind);
+        Assert.Equal(TokenKind.KeywordFrom, tokens[2].Kind);
+    }
+
+    [Fact]
+    public void Tokenize_RemCommentAtLineStartIsSkipped()
+    {
+        var tokens = SqlLexer.Tokenize("REM bootstrap\r\nSELECT * FROM t");
+        Assert.Equal(TokenKind.KeywordSelect, tokens[0].Kind);
+        Assert.Equal(TokenKind.Star, tokens[1].Kind);
+        Assert.Equal(TokenKind.KeywordFrom, tokens[2].Kind);
+    }
+
+    [Fact]
+    public void Tokenize_RemIdentifier_IsNotTreatedAsComment()
+    {
+        var tokens = SqlLexer.Tokenize("SELECT rem FROM t");
+        Assert.Equal(TokenKind.KeywordSelect, tokens[0].Kind);
+        Assert.Equal(TokenKind.IdentifierLiteral, tokens[1].Kind);
+        Assert.Equal("rem", tokens[1].Text);
+        Assert.Equal(TokenKind.KeywordFrom, tokens[2].Kind);
+    }
+
+    [Fact]
     public void Tokenize_BlockCommentIsSkipped()
     {
         var tokens = SqlLexer.Tokenize("SELECT /* hi\nthere */ * FROM t");

@@ -239,6 +239,8 @@ import {
 import { useAuthStore } from '@/stores/auth';
 import { useCopilotSessionsStore, type CopilotSession } from '@/stores/copilotSessions';
 import { useSqlConsoleStore } from '@/stores/sqlConsole';
+import { buildClientResultSet } from '@/api/sqlMeta';
+import type { SqlResultSet } from '@/api/sql';
 import { listDatabases } from '@/api/server';
 import {
   streamCopilotChat,
@@ -246,6 +248,7 @@ import {
   triggerCopilotDocsIngest,
   fetchCopilotModels,
   type CopilotKnowledgeStatus,
+  type CopilotChatEvent,
   type CopilotMessage,
 } from '@/api/copilot';
 import { pickStarters, type CopilotStarter } from '@/copilot/starters';
@@ -488,6 +491,250 @@ function onKeydown(e: KeyboardEvent): void {
   }
 }
 
+const SqlToolNames = new Set(['draft_sql', 'query_sql', 'execute_sql']);
+const copilotToolTabs = new Map<string, string>();
+const copilotSqlSeen = new Set<string>();
+
+interface ToolArgumentsPayload {
+  sql?: string;
+  maxRows?: number;
+}
+
+interface DraftSqlPayload {
+  database?: string;
+  statementType?: string;
+  sql?: string;
+  measurement?: string | null;
+  isWrite?: boolean;
+  measurementExists?: boolean | null;
+  notes?: string[];
+}
+
+interface QuerySqlPayload {
+  database?: string;
+  statementType?: string;
+  columns?: string[];
+  rows?: unknown[][];
+  returnedRows?: number;
+  truncated?: boolean;
+}
+
+interface ExecuteSqlPayload extends QuerySqlPayload {
+  sql?: string;
+  measurement?: string | null;
+  rowsAffected?: number | null;
+}
+
+interface ToolErrorPayload {
+  error?: string;
+  phase?: string;
+  message?: string;
+  sql?: string;
+}
+
+function parseJsonObject<T>(value: string | undefined): T | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' ? parsed as T : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSqlForDedupe(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function tabTitleForSqlTool(toolName: string, sql: string): string {
+  const oneLine = sql.replace(/\s+/g, ' ').trim();
+  const prefix = toolName === 'draft_sql'
+    ? 'Copilot 起草'
+    : toolName === 'execute_sql'
+      ? 'Copilot 执行'
+      : 'Copilot 查询';
+  if (!oneLine) return prefix;
+  return `${prefix}: ${oneLine.length > 24 ? `${oneLine.slice(0, 21)}...` : oneLine}`;
+}
+
+function toolEventKey(event: CopilotChatEvent, sql: string): string {
+  return `${event.toolName ?? ''}|${event.toolArguments ?? ''}|${normalizeSqlForDedupe(sql)}`;
+}
+
+function extractToolSql(event: CopilotChatEvent): string {
+  const args = parseJsonObject<ToolArgumentsPayload>(event.toolArguments);
+  if (args?.sql) return args.sql;
+
+  const draft = parseJsonObject<DraftSqlPayload>(event.toolResult);
+  if (draft?.sql) return draft.sql;
+
+  const executed = parseJsonObject<ExecuteSqlPayload>(event.toolResult);
+  if (executed?.sql) return executed.sql;
+
+  const err = parseJsonObject<ToolErrorPayload>(event.toolResult);
+  return err?.sql ?? '';
+}
+
+function ensureCopilotSqlTab(event: CopilotChatEvent, sql: string): string {
+  const key = toolEventKey(event, sql);
+  const existing = copilotToolTabs.get(key);
+  if (existing) return existing;
+
+  copilotSqlSeen.add(normalizeSqlForDedupe(sql));
+  const tab = sqlConsole.createTab({
+    title: tabTitleForSqlTool(event.toolName ?? 'query_sql', sql),
+    db: selectedDb.value,
+    sql,
+    source: 'copilot',
+    summary: event.type === 'tool_call'
+      ? `Copilot 正在调用 ${event.toolName}。`
+      : 'Copilot 已同步 SQL。',
+  });
+  copilotToolTabs.set(key, tab.id);
+  return tab.id;
+}
+
+function toolErrorResult(payload: ToolErrorPayload): SqlResultSet {
+  return {
+    columns: [],
+    rows: [],
+    end: null,
+    error: {
+      type: 'error',
+      code: payload.error ?? payload.phase ?? 'copilot_tool_error',
+      message: payload.message ?? 'Copilot SQL 工具返回错误。',
+    },
+    hasColumns: false,
+  };
+}
+
+function draftSqlResult(payload: DraftSqlPayload): SqlResultSet {
+  const rows: unknown[][] = [
+    ['statement_type', payload.statementType ?? 'draft_sql'],
+  ];
+  if (payload.measurement) rows.push(['measurement', payload.measurement]);
+  rows.push(['is_write', payload.isWrite ? 'true' : 'false']);
+  if (typeof payload.measurementExists === 'boolean') {
+    rows.push(['measurement_exists', payload.measurementExists ? 'true' : 'false']);
+  }
+  for (const note of payload.notes ?? []) {
+    rows.push(['note', note]);
+  }
+  return buildClientResultSet(['字段', '值'], rows);
+}
+
+function executedSqlResult(payload: ExecuteSqlPayload | QuerySqlPayload): SqlResultSet {
+  const maybeError = payload as ToolErrorPayload;
+  if (maybeError.error || maybeError.message) {
+    return toolErrorResult(maybeError);
+  }
+
+  const columns = Array.isArray(payload.columns) ? payload.columns : [];
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  const returnedRows = typeof payload.returnedRows === 'number' ? payload.returnedRows : rows.length;
+  const rowsAffected = 'rowsAffected' in payload && typeof payload.rowsAffected === 'number'
+    ? payload.rowsAffected
+    : (columns.length > 0 ? -1 : 0);
+
+  return {
+    columns,
+    rows,
+    end: {
+      type: 'end',
+      rowCount: returnedRows,
+      recordsAffected: rowsAffected,
+      elapsedMs: 0,
+    },
+    error: null,
+    hasColumns: columns.length > 0,
+  };
+}
+
+function syncCopilotSqlEvent(event: CopilotChatEvent): void {
+  const toolName = event.toolName ?? '';
+  if (!SqlToolNames.has(toolName)) return;
+
+  const sql = extractToolSql(event).trim();
+  if (!sql) return;
+
+  if (event.type === 'tool_call') {
+    ensureCopilotSqlTab(event, sql);
+    return;
+  }
+
+  if (event.type !== 'tool_result') return;
+
+  const tabId = ensureCopilotSqlTab(event, sql);
+  let result: SqlResultSet | null = null;
+  let summary = `Copilot 工具 ${toolName} 已返回。`;
+
+  const errorPayload = parseJsonObject<ToolErrorPayload>(event.toolResult);
+  if (errorPayload?.error || errorPayload?.message) {
+    result = toolErrorResult(errorPayload);
+    summary = `Copilot 工具 ${toolName} 返回错误。`;
+  } else if (toolName === 'draft_sql') {
+    const payload = parseJsonObject<DraftSqlPayload>(event.toolResult);
+    if (payload) {
+      result = draftSqlResult(payload);
+      summary = 'Copilot 已起草 SQL，等待你确认后运行。';
+    }
+  } else {
+    const payload = parseJsonObject<ExecuteSqlPayload | QuerySqlPayload>(event.toolResult);
+    if (payload) {
+      result = executedSqlResult(payload);
+      const affected = 'rowsAffected' in payload && typeof payload.rowsAffected === 'number'
+        ? `受影响 ${payload.rowsAffected}`
+        : `返回 ${payload.returnedRows ?? payload.rows?.length ?? 0} 行`;
+      summary = toolName === 'execute_sql'
+        ? `Copilot 已执行 SQL，${affected}。`
+        : `Copilot 已查询 SQL，${affected}。`;
+    }
+  }
+
+  if (!result) return;
+  sqlConsole.setTabResults(
+    tabId,
+    [{
+      id: `stmt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      sql,
+      result,
+      createdAt: Date.now(),
+      source: 'copilot',
+    }],
+    summary,
+    '',
+    true,
+  );
+}
+
+function extractSqlBlocks(answer: string): string[] {
+  const blocks: string[] = [];
+  const re = /```(?:sql)?\s*([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(answer)) !== null) {
+    const sql = match[1]?.trim();
+    if (sql && /^(select|show|describe|create|insert|delete)\b/i.test(sql)) {
+      blocks.push(sql);
+    }
+  }
+  return blocks;
+}
+
+function syncFinalAnswerSql(answer: string): void {
+  for (const sql of extractSqlBlocks(answer)) {
+    const key = normalizeSqlForDedupe(sql);
+    if (copilotSqlSeen.has(key)) continue;
+    copilotSqlSeen.add(key);
+    sqlConsole.createTab({
+      title: tabTitleForSqlTool('draft_sql', sql),
+      db: selectedDb.value,
+      sql,
+      source: 'copilot',
+      summary: 'Copilot 最终回答中的 SQL，等待你确认后运行。',
+    });
+  }
+}
+
 async function send(): Promise<void> {
   if (!prompt.value.trim() || running.value) return;
   if (!selectedDb.value) {
@@ -525,6 +772,8 @@ async function send(): Promise<void> {
 
   const stepLog: string[] = [];
   let finalAnswer = '';
+  copilotToolTabs.clear();
+  copilotSqlSeen.clear();
   try {
     for await (const event of streamCopilotChat(
       auth.state.token,
@@ -537,8 +786,10 @@ async function send(): Promise<void> {
       ac.signal,
     )) {
       if (ac.signal.aborted) break;
+      syncCopilotSqlEvent(event);
       if (event.type === 'final' && event.answer) {
         finalAnswer = event.answer;
+        syncFinalAnswerSql(event.answer);
         streamBuffer.value = event.answer;
       } else if (event.type === 'error') {
         errorMsg.value = event.message ?? 'Copilot 请求失败';

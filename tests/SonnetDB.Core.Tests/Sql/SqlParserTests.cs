@@ -94,6 +94,15 @@ public class SqlParserTests
     }
 
     [Fact]
+    public void Parse_Select_AllowsDoubleSlashCommentInsideStatement()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse("SELECT // note\r\n* FROM cpu");
+        Assert.Equal("cpu", stmt.Measurement);
+        Assert.Single(stmt.Projections);
+        Assert.IsType<StarExpression>(stmt.Projections[0].Expression);
+    }
+
+    [Fact]
     public void Parse_Select_AggregateAndAlias()
     {
         var stmt = (SelectStatement)SqlParser.Parse(
