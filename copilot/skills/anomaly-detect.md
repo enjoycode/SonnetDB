@@ -113,21 +113,25 @@ WHERE host = 'server-01'
 ORDER BY time ASC;
 ```
 
-### 3.4 按时间桶统计异常率
+### 3.4 按时间段统计异常率（建议两步处理）
 
 ```sql
--- 统计每 5 分钟内的异常点数量和异常率
--- 用于趋势分析和告警触发
+-- 第一步：先输出异常明细
+-- 当前版本建议由应用层按 5 分钟、1 小时等窗口二次汇总
 SELECT
-    time_bucket(time, '5m')                   AS bucket,
-    count(*)                                  AS total_samples,
-    sum(CASE WHEN anomaly(cpu_pct, 'mad', 3.0) THEN 1 ELSE 0 END) AS anomaly_count
+    time,
+    anomaly(cpu_pct, 'mad', 3.0) AS is_anomaly
 FROM host_cpu
 WHERE host = 'server-01'
   AND time >= now() - 24h
-GROUP BY bucket
-ORDER BY bucket ASC;
+ORDER BY time ASC;
 ```
+
+应用层可再按固定时间窗口统计：
+
+- `total_samples`：窗口内总采样点数
+- `anomaly_count`：窗口内 `is_anomaly = true` 的行数
+- `anomaly_rate`：`anomaly_count / total_samples`
 
 ### 3.5 与 forecast() 联动（预测带异常检测）
 

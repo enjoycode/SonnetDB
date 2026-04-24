@@ -56,15 +56,15 @@ export const COPILOT_STARTERS: readonly CopilotStarter[] = [
   {
     category: '聚合',
     title: '按 1 分钟聚合',
-    description: 'GROUP BY time_bucket(1m) 求平均值的标准写法。',
-    prompt: '查询过去 24 小时内 sensor_temperature 表按设备每分钟的平均温度，请用 time_bucket(1m) + GROUP BY 写法。',
+    description: 'GROUP BY time(1m) 求平均值的标准写法。',
+    prompt: "查询过去 24 小时内 sensor_temperature 表中 device_id='sensor-01' 的每分钟平均温度，请用 GROUP BY time(1m) 写法。",
     routeKeys: ['sql', 'dashboard'],
   },
   {
     category: '聚合',
     title: 'TopN + 时间窗口',
-    description: '取最近 1 小时温度最高的 10 个设备。',
-    prompt: '查询最近 1 小时内 sensor_temperature 表平均温度最高的 10 个 device_id，按平均温度降序排序。',
+    description: '取最近 1 小时温度最高的 10 条原始采样点。',
+    prompt: '查询最近 1 小时内 sensor_temperature 表温度最高的 10 条原始数据，按 temperature 降序排序。',
   },
 
   // —— 向量 ——
@@ -80,13 +80,13 @@ export const COPILOT_STARTERS: readonly CopilotStarter[] = [
     category: '预测',
     title: '时序预测 forecast',
     description: 'forecast 函数：指定 measurement、值列与预测步长。',
-    prompt: '使用 forecast 对 sensor_temperature.temperature 做未来 30 分钟的预测，按 device_id 分组返回结果。',
+    prompt: "使用 forecast 对 sensor_temperature.temperature 做未来 30 分钟的预测，只看 device_id='sensor-01' 的数据。",
   },
   {
     category: 'PID',
     title: 'PID 自动调参',
-    description: 'pid_tune / pid_compute 用法与典型场景。',
-    prompt: '我有一个温度控制场景，pv 来自 sensor_temperature.temperature，setpoint=25。请说明如何用 pid_tune 自动给出 kp/ki/kd，再用 pid_compute 计算输出。',
+    description: 'pid_estimate / pid_series 用法与典型场景。',
+    prompt: '我有一个温度控制场景，pv 来自 sensor_temperature.temperature，setpoint=25。请说明如何用 pid_estimate 自动给出 kp/ki/kd，再用 pid_series 计算输出。',
   },
 
   // —— 排查 ——
@@ -94,7 +94,7 @@ export const COPILOT_STARTERS: readonly CopilotStarter[] = [
     category: '排查',
     title: '慢查询分析',
     description: '基于当前 SQL 给出索引/聚合/分区建议。',
-    prompt: '我现在编辑器里这条 SQL 跑得很慢，请基于 SonnetDB 的存储模型分析瓶颈，并给出优化建议（索引列、time_bucket、LIMIT 等）。',
+    prompt: '我现在编辑器里这条 SQL 跑得很慢，请基于 SonnetDB 的存储模型分析瓶颈，并给出优化建议（时间裁剪、GROUP BY time(...)、LIMIT 等）。',
     routeKeys: ['sql'],
   },
   {

@@ -119,12 +119,10 @@ foreach (var row in result.Rows)
 
 ```sql
 SELECT
-    time_bucket(time, '<interval>') AS bucket,
     pid(<field>, <setpoint>, <kp>, <ki>, <kd>) AS <alias>
 FROM <measurement>
 WHERE <tag_filter> AND <time_filter>
-GROUP BY bucket
-ORDER BY bucket ASC;
+GROUP BY time(<interval>);
 ```
 
 ### 示例：每分钟控制量监控
@@ -133,18 +131,17 @@ ORDER BY bucket ASC;
 -- 每分钟聚合一次控制量，用于仪表盘展示
 -- 注意：每个桶之间控制器重新初始化
 SELECT
-    time_bucket(time, '1m') AS bucket,   -- 1 分钟时间桶
     avg(temperature)         AS avg_pv,   -- 桶内平均过程变量
     75.0                     AS setpoint, -- 目标值
     pid(temperature, 75.0, 0.6, 0.1, 0.05) AS valve_end  -- 桶末控制量
 FROM reactor
 WHERE device = 'r1'
   AND time >= now() - 1h
-GROUP BY bucket
-ORDER BY bucket ASC;
+GROUP BY time(1m);
 ```
 
 > ⚠️ **重要**：`pid()` 每个桶重新初始化控制器，跨桶持续控制请用 `pid_series()`。
+> 当前版本不会自动返回 bucket 起始时间列，如需显示桶标签，请由应用层结合固定桶宽推导。
 
 ---
 

@@ -139,7 +139,7 @@ curl -X POST "http://127.0.0.1:5080/v1/db/metrics/measurements/cpu/lp" \
 | `SHOW TAG KEYS FROM cpu` | `DESCRIBE MEASUREMENT cpu` | 类似 |
 | `SHOW TAG VALUES FROM cpu WITH KEY = "host"` | `SELECT DISTINCT host FROM cpu LIMIT 100` | 近似 |
 | `SELECT * FROM cpu WHERE time > now() - 1h` | `SELECT * FROM cpu WHERE time >= now() - 1h` | `>` 改 `>=` |
-| `SELECT mean(usage_idle) FROM cpu WHERE time > now() - 1h GROUP BY time(5m)` | `SELECT time_bucket(time,'5m') AS b, avg(usage_idle) FROM cpu WHERE time >= now() - 1h GROUP BY b` | 聚合语法不同 |
+| `SELECT mean(usage_idle) FROM cpu WHERE time > now() - 1h GROUP BY time(5m)` | `SELECT avg(usage_idle) FROM cpu WHERE time >= now() - 1h GROUP BY time(5m)` | `mean` 改 `avg`，时间桶仍用 `GROUP BY time(...)` |
 | `SELECT * FROM cpu WHERE host = 'server-01'` | `SELECT * FROM cpu WHERE host = 'server-01'` | 相同 |
 | `DELETE FROM cpu WHERE time < now() - 30d` | `DELETE FROM cpu WHERE time < now() - 30d` | 相同 |
 | `DROP MEASUREMENT cpu` | `DROP MEASUREMENT cpu` | 相同 |
@@ -151,7 +151,7 @@ curl -X POST "http://127.0.0.1:5080/v1/db/metrics/measurements/cpu/lp" \
 | --- | --- |
 | `from(bucket:"metrics") \|> range(start:-1h) \|> filter(fn:(r)=>r._measurement=="cpu")` | `SELECT * FROM cpu WHERE time >= now() - 1h` |
 | `\|> filter(fn:(r)=>r.host=="server-01")` | `AND host = 'server-01'` |
-| `\|> aggregateWindow(every:5m, fn:mean)` | `GROUP BY time_bucket(time,'5m')` + `avg(...)` |
+| `\|> aggregateWindow(every:5m, fn:mean)` | `SELECT avg(<field>) ... GROUP BY time(5m)` |
 | `\|> mean()` | `avg(<field>)` |
 | `\|> max()` | `max(<field>)` |
 | `\|> min()` | `min(<field>)` |
@@ -228,7 +228,8 @@ curl -X POST "http://127.0.0.1:5080/v1/db/metrics/measurements/cpu/json" \
 1. 将 InfluxQL / Flux 查询翻译为 SonnetDB SQL（参考上方对照表）
 2. 重点检查：
    - 时间过滤：> now() - 1h → >= now() - 1h
-   - 聚合语法：GROUP BY time(5m) → GROUP BY time_bucket(time,'5m')
+   - 聚合函数：mean(...) → avg(...)
+   - 时间桶：仍然使用 GROUP BY time(5m)
    - 时间戳精度：确认应用层使用毫秒而非纳秒
 3. 更新连接字符串：
    InfluxDB: http://localhost:8086

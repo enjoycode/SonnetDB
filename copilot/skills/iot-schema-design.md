@@ -170,14 +170,18 @@ CREATE MEASUREMENT sensor_climate_1m (
 );
 
 -- 应用层定时聚合写入（每分钟执行）
--- SELECT time_bucket(time,'1m') AS bucket,
---        device_id, workshop,
+-- 当前版本不支持在一条聚合 SQL 中同时按时间桶和 tag 维度分组。
+-- 实践上建议应用层按 device_id/workshop 分批执行下面的模板，再写入 rollup 表：
+-- SELECT
 --        avg(temp_celsius), max(temp_celsius), min(temp_celsius),
 --        avg(humidity_pct), count(*),
 --        sum(CASE WHEN quality_code != 192 THEN 1 ELSE 0 END)
 -- FROM sensor_climate
--- WHERE time >= now() - 2m AND time < now() - 1m
--- GROUP BY bucket, device_id, workshop
+-- WHERE device_id = 'PLC-A01'
+--   AND workshop = 'workshop-A'
+--   AND time >= now() - 2m
+--   AND time < now() - 1m
+-- GROUP BY time(1m)
 ```
 
 ---
@@ -227,11 +231,12 @@ ORDER BY time DESC;
 -- 检测超过 5 分钟没有上报数据的设备（视为离线）
 -- 方法：查询每个设备的最后上报时间，与当前时间对比
 
-SELECT device_id, max(time) AS last_seen
+-- 当前版本不支持一条 SQL 直接按 device_id 聚合“每台设备最后心跳”。
+-- 建议按单设备查询，或在写入侧额外维护 latest_status measurement。
+SELECT max(time) AS last_seen
 FROM sensor_climate
-WHERE time >= now() - 1h    -- 只在最近 1 小时内查找
-GROUP BY time(1h)            -- 聚合到小时桶
-ORDER BY last_seen ASC;
+WHERE device_id = 'PLC-A01'
+  AND time >= now() - 1h;
 
 -- 应用层判断：last_seen < now() - 5m → 设备离线
 ```
@@ -264,8 +269,6 @@ OEE = 可用性（A）× 性能（P）× 质量（Q）
 -- 基于 sensor_production measurement
 
 SELECT
-    time_bucket(time, '1h') AS hour,
-
     -- 可用性 = 实际运行时间 / 计划运行时间
     -- 用 is_running=true 的采样点数 / 总采样点数近似
     avg(CASE WHEN is_running THEN 1.0 ELSE 0.0 END) AS availability,
@@ -284,8 +287,7 @@ SELECT
 FROM sensor_production
 WHERE line = 'line-01'
   AND time >= now() - 8h
-GROUP BY hour
-ORDER BY hour ASC;
+GROUP BY time(1h);
 ```
 
 ---

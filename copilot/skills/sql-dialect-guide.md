@@ -145,22 +145,22 @@ WHERE ts > ...                     -- 列名必须是 time
 
 ```sql
 SELECT
-    time_bucket(time, '1m') AS bucket,
     avg(usage)   AS avg_usage,
     max(usage)   AS peak,
     count(*)     AS samples
 FROM cpu
 WHERE host = 'server-01'
   AND time >= now() - 1h
-GROUP BY bucket
-ORDER BY bucket;
+GROUP BY time(1m);
 ```
 
 **支持的聚合函数：** `count` / `sum` / `min` / `max` / `avg` / `first` / `last`
 
+当前版本的 `GROUP BY time(...)` 结果只返回聚合列，不会自动带出 bucket 起始时间列。
+
 **时间桶写法：**
 ```sql
-GROUP BY time(1m)        -- 旧写法，等价
+GROUP BY time(1m)
 GROUP BY time(30s)
 GROUP BY time(1h)
 GROUP BY time(1000ms)
@@ -171,6 +171,7 @@ GROUP BY time(1000ms)
 GROUP BY date_trunc('minute', time)   -- PostgreSQL 方言
 GROUP BY host                          -- 不支持按 tag GROUP BY
 SELECT host, avg(usage) FROM cpu GROUP BY host  -- 错误
+SELECT time_bucket(time, '1m') AS bucket, avg(usage) FROM cpu GROUP BY bucket
 ```
 
 ### 分页

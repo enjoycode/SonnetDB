@@ -1,6 +1,6 @@
 ---
 name: gap-fill
-description: 检测 SonnetDB 时序数据中的时间缺口（Gap Detection），以及用 NULL、前值填充、线性插值等策略补全稀疏数据，保证聚合分析的连续性。
+description: 检测 SonnetDB 时序数据中的时间缺口，以及用 fill / locf / interpolate 处理结果集中的空值。当前不支持 generate_series、LAG/LEAD OVER 这类完整时序骨架生成语法。
 triggers:
   - gap
   - 缺口
@@ -24,228 +24,181 @@ requires_tools:
 
 # 时序缺口检测与填充指南
 
-IoT 传感器断线、网络抖动、设备重启等场景会导致时序数据出现时间缺口。本指南介绍如何检测缺口并用合适的策略填充。
+SonnetDB 当前版本对“缺口处理”要分成两类看：
 
----
+- **时间缺口**：某个预期采样时刻根本没有行。
+- **字段空值**：这一行存在，但某个 field 在该时间点是 `NULL`。
 
-## 1. 缺口检测
+这两类问题的处理方式不同。
 
-### 1.1 检测相邻采样间隔异常
+## 1. 当前能力边界
+
+- 当前**不支持** `generate_series`、`LAG/LEAD OVER (...)` 这类完整时间骨架生成语法。
+- 因此“检测少了哪些时间点”“自动补出不存在的时间行”，通常要在应用层完成。
+- 当前**支持** `fill(field, value)`、`locf(field)`、`interpolate(field)`，但它们只作用于**已有结果行中的空值**，不会凭空生成新的时间点。
+
+## 2. 先判断是哪种缺口
+
+### 2.1 时间缺口：缺少整行数据
+
+例子：
+
+- 设备本该每 30 秒上报一次
+- 12:00:00 有数据，12:00:30 没有，12:01:00 又有数据
+
+这属于“少了一行”。当前建议做法：
+
+1. 先查出原始 `time` 序列。
+2. 在应用层按预期采样周期比较相邻时间戳。
+3. 发现缺口后，再决定是只告警、图表留空，还是补一条估算值。
+
+可直接这样查原始时间轴：
 
 ```sql
--- 找出采样间隔超过预期（正常 30 秒，超过 2 分钟视为缺口）
-SELECT
-    time,
-    device_id,
-    time - LAG(time, 1, time) OVER (ORDER BY time ASC) AS gap_ms,  -- 与上条的时间差（毫秒）
-    temp_celsius
+SELECT time, temp_celsius
 FROM sensor_climate
 WHERE device_id = 'S-A01'
   AND time >= now() - 24h
 ORDER BY time ASC;
--- 应用层过滤：gap_ms > 120000（2 分钟 = 120000 毫秒）即为缺口
 ```
 
-### 1.2 统计缺口数量和总缺失时长
+应用层判断：
+
+- 预期周期 = `30000ms`
+- 若 `current.time - previous.time > 30000ms`，则中间存在缺口
+
+### 2.2 字段空值：这一行存在，但某个字段为 NULL
+
+例子：
+
+- 某个时间点只有 `humidity_pct`
+- 同一时间点缺少 `temp_celsius`
+
+这时就可以用 SonnetDB 内置窗口函数来填充。
+
+## 3. 三种内置填充函数
+
+### 3.1 固定值填充 `fill(field, value)`
 
 ```sql
--- 统计过去 24 小时内，每台设备的缺口次数和总缺失时长
-SELECT
-    device_id,
-    count(*)                                          AS gap_count,   -- 缺口次数
-    sum(gap_ms - 30000)                               AS total_missing_ms  -- 总缺失时长（毫秒）
-FROM (
-    SELECT
-        device_id,
-        time - LAG(time, 1, time) OVER (ORDER BY time ASC) AS gap_ms
-    FROM sensor_climate
-    WHERE time >= now() - 24h
-) AS intervals
-WHERE gap_ms > 120000   -- 超过 2 分钟（正常间隔 30 秒）视为缺口
-GROUP BY time(24h)      -- 按天聚合（占位，实际按 device_id 分组）
-ORDER BY total_missing_ms DESC;
-```
-
-### 1.3 找出最大缺口时段
-
-```sql
--- 找出过去 7 天内最大的数据缺口（开始时间和结束时间）
-SELECT
-    LAG(time, 1) OVER (ORDER BY time ASC) AS gap_start,  -- 缺口开始（上一条时间）
-    time                                  AS gap_end,     -- 缺口结束（当前时间）
-    time - LAG(time, 1) OVER (ORDER BY time ASC) AS gap_duration_ms
-FROM sensor_climate
-WHERE device_id = 'S-A01'
-  AND time >= now() - 7d
-ORDER BY gap_duration_ms DESC
-LIMIT 10;   -- 最大的 10 个缺口
-```
-
----
-
-## 2. 填充策略选择
-
-| 策略 | 适用场景 | 优点 | 缺点 |
-| --- | --- | --- | --- |
-| **NULL 填充** | 不确定缺失原因，保守处理 | 不引入虚假数据 | 聚合时 NULL 被忽略，影响 count |
-| **前值填充（LOCF）** | 传感器断线，值未变化（如状态量） | 符合"最后已知值"语义 | 长时间缺口会引入误差 |
-| **零值填充** | 计数类指标（请求数、错误数） | 语义明确（无请求=0） | 不适合连续量（温度、压力） |
-| **线性插值** | 缓慢变化的物理量（温度、液位） | 平滑，接近真实值 | 剧烈变化时误差大 |
-| **均值填充** | 统计分析，不关心时序连续性 | 不影响整体均值 | 破坏时序特征 |
-
----
-
-## 3. 填充实现
-
-### 3.1 前值填充（LOCF — Last Observation Carried Forward）
-
-```sql
--- 用 LAG 取最近一个非 NULL 值填充
--- 适合：设备状态、开关量、缓慢变化的传感器
 SELECT
     time,
-    device_id,
-    COALESCE(
-        temp_celsius,
-        LAG(temp_celsius IGNORE NULLS, 1) OVER (ORDER BY time ASC)
-    ) AS temp_filled   -- NULL 时用前值填充
+    humidity_pct,
+    fill(temp_celsius, -1) AS temp_filled
 FROM sensor_climate
 WHERE device_id = 'S-A01'
-  AND time >= now() - 1h
 ORDER BY time ASC;
 ```
 
-### 3.2 线性插值
+适用场景：
+
+- 想显式标记“这里原本缺值”
+- 计数类指标用 `0` 补值
+- 下游系统约定了特殊占位值
+
+### 3.2 前值填充 `locf(field)`
 
 ```sql
--- 线性插值：在两个已知值之间按比例估算缺失值
--- 适合：温度、压力、液位等缓慢变化的物理量
--- 实现：应用层计算（SonnetDB 当前不内置 interpolate 函数）
+SELECT
+    time,
+    humidity_pct,
+    locf(temp_celsius) AS temp_filled
+FROM sensor_climate
+WHERE device_id = 'S-A01'
+ORDER BY time ASC;
+```
 
--- 步骤 1：查询原始数据（含 NULL）
+适用场景：
+
+- 设备状态
+- 缓慢变化的温度、液位、压力
+- 短时间掉点，但业务允许“沿用上一值”
+
+注意：
+
+- `locf` 只会沿用**前一个非空值**
+- 序列开头如果就是空值，仍然会得到 `NULL`
+
+### 3.3 线性插值 `interpolate(field)`
+
+```sql
+SELECT
+    time,
+    humidity_pct,
+    interpolate(temp_celsius) AS temp_filled
+FROM sensor_climate
+WHERE device_id = 'S-A01'
+ORDER BY time ASC;
+```
+
+适用场景：
+
+- 温度
+- 压力
+- 液位
+- 其他随时间平滑变化的连续量
+
+注意：
+
+- `interpolate` 需要前后都有有效值
+- 如果缺口在序列开头或结尾，通常无法补全
+- 对突变信号、告警状态、开关量不适合
+
+## 4. 什么时候该用哪种策略
+
+| 场景 | 推荐策略 |
+| --- | --- |
+| 告警状态、开关量 | `locf` |
+| 请求数、错误数等计数型指标 | `fill(field, 0)` |
+| 温度、压力、液位等连续量 | `interpolate` |
+| 不确定缺值原因，想保守处理 | 保留 `NULL`，不填充 |
+
+## 5. 真正的“补时间点”怎么做
+
+如果你要的是“图表上每分钟都必须有一个点”，当前推荐工作流是：
+
+1. 用 SQL 查询已有数据。
+2. 应用层生成完整时间骨架。
+3. 把缺失的时间点补成 `NULL`、0、前值或插值。
+4. 仅在展示层使用这些补点结果，不要轻易回写覆盖原始数据。
+
+推荐的第一步 SQL：
+
+```sql
 SELECT time, temp_celsius
 FROM sensor_climate
 WHERE device_id = 'S-A01'
   AND time >= now() - 1h
 ORDER BY time ASC;
-
--- 步骤 2：应用层线性插值（Python 示例）
--- import pandas as pd
--- df['temp_celsius'] = df['temp_celsius'].interpolate(method='linear')
 ```
 
-### 3.3 零值填充（计数类指标）
+然后在应用层：
+
+- 若做图表：补齐时间轴即可
+- 若做告警：直接对缺口长度做判断即可
+- 若做长期派生数据：单独写入新的 rollup / derived measurement，不要污染原始表
+
+## 6. 数据完整性检查建议
+
+当前版本如果要检查“最近 1 小时采样是否完整”，建议先查点数：
 
 ```sql
--- 对于请求数、错误数等计数指标，缺口期间视为 0
--- 方法：生成时间序列骨架，LEFT JOIN 原始数据
-
--- 步骤 1：聚合到分钟桶（缺口桶自然为 NULL）
-SELECT
-    time_bucket(time, '1m') AS bucket,
-    count(*)                AS request_count
-FROM app_request
-WHERE service = 'api-gateway'
-  AND time >= now() - 1h
-GROUP BY bucket
-ORDER BY bucket ASC;
--- 缺口分钟的 bucket 不会出现在结果中
-
--- 步骤 2：应用层补零（Python 示例）
--- df = df.set_index('bucket').resample('1min').sum().fillna(0).reset_index()
-```
-
----
-
-## 4. 数据完整性验证
-
-### 4.1 验证采样完整率
-
-```sql
--- 计算过去 1 小时内每台设备的采样完整率
--- 期望采样点数 = 3600 秒 / 30 秒间隔 = 120 点
-SELECT
-    device_id,
-    count(*)                                  AS actual_count,
-    120                                       AS expected_count,  -- 期望点数（1小时/30秒）
-    count(*) * 100.0 / 120                    AS completeness_pct -- 完整率（%）
-FROM sensor_climate
-WHERE workshop = 'workshop-A'
-  AND time >= now() - 1h
-GROUP BY time(1h)   -- 占位聚合
-ORDER BY completeness_pct ASC;
--- completeness_pct < 90% 的设备需要关注
-```
-
-### 4.2 按时间桶检查数据密度
-
-```sql
--- 检查每 5 分钟桶内的采样点数，找出稀疏时段
-SELECT
-    time_bucket(time, '5m') AS bucket,
-    count(*)                AS sample_count,
-    -- 期望：5分钟 / 30秒 = 10 个点
-    CASE WHEN count(*) < 8 THEN true ELSE false END AS is_sparse
+SELECT count(*) AS actual_count
 FROM sensor_climate
 WHERE device_id = 'S-A01'
-  AND time >= now() - 24h
-GROUP BY bucket
-ORDER BY bucket ASC;
+  AND time >= now() - 1h;
 ```
 
-### 4.3 检测设备长时间离线
+应用层再用预期点数对比：
 
-```sql
--- 找出超过 10 分钟没有数据的设备（可能离线）
-SELECT
-    device_id,
-    max(time) AS last_seen,
-    now() - max(time) AS offline_duration_ms
-FROM sensor_climate
-WHERE time >= now() - 1h   -- 在最近 1 小时内有过数据的设备
-GROUP BY time(1h)           -- 占位聚合
-ORDER BY last_seen ASC;
--- offline_duration_ms > 600000（10 分钟）的设备视为离线
-```
+- 预期每 30 秒一条，1 小时应有 `120` 条
+- 完整率 = `actual_count / 120`
 
----
+如果你还想知道“缺口集中在哪一段时间”，继续查原始时间轴并在应用层比较相邻时间差。
 
-## 5. 聚合时处理缺口
+## 7. 常见误区
 
-```sql
--- 聚合时，缺口会导致某些时间桶没有数据
--- 这是正常的，不需要强制填充
--- 但需要在应用层处理"空桶"的展示问题
-
--- 查询每分钟平均温度（有缺口的分钟不会出现）
-SELECT
-    time_bucket(time, '1m') AS bucket,
-    avg(temp_celsius)       AS avg_temp,
-    count(*)                AS sample_count   -- 用于判断桶的数据质量
-FROM sensor_climate
-WHERE device_id = 'S-A01'
-  AND time >= now() - 1h
-GROUP BY bucket
-ORDER BY bucket ASC;
-
--- 应用层处理：
--- 1. 检查相邻 bucket 的时间差，超过 2 分钟则为缺口
--- 2. 在图表中用虚线或空白表示缺口段
--- 3. 告警：缺口超过阈值时通知运维
-```
-
----
-
-## 6. 最佳实践
-
-```text
-✅ 写入时记录数据质量码（quality_code），区分"无数据"和"坏数据"
-✅ 在聚合查询中同时输出 count(*)，用于判断桶的数据完整性
-✅ 前值填充（LOCF）只适合短缺口（< 5 × 正常采样间隔）
-✅ 线性插值在应用层实现，SonnetDB 负责提供原始数据
-✅ 计数类指标（请求数、错误数）缺口补零，连续量（温度、压力）缺口保留 NULL
-
-❌ 不要对长时间缺口（> 1 小时）做线性插值（误差太大）
-❌ 不要在 SonnetDB 中存储插值后的数据（会混淆真实数据和估算数据）
-❌ 不要忽略 quality_code 异常的数据点（坏数据比缺口更危险）
-```
+- 不要把 `fill / locf / interpolate` 理解成“自动生成缺失时间点”；它们只处理已有行中的空值。
+- 不要对长时间缺口做线性插值；视觉上好看，但业务含义往往是错的。
+- 不要把插值结果直接覆盖原始 measurement；建议写到单独的派生 measurement，或仅用于展示。
+- 不要让 Copilot 生成 `time_bucket(...)`、`generate_series(...)`、`LAG(...) OVER (...)` 这类当前版本并未公开支持的缺口处理语法。

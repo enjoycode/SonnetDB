@@ -1,6 +1,6 @@
 ---
 name: lag-delta
-description: 在 SonnetDB 中计算时序数据的差分、变化率、环比、同比：使用 LAG/LEAD 窗口函数，适用于传感器数据趋势分析、速率计算、增量统计。
+description: 在 SonnetDB 中计算时序差分、变化率、累计增量与环比：优先使用 difference / delta / increase / derivative / rate / irate 等内置窗口函数。当前不支持标准 SQL 的 LAG/LEAD OVER。
 triggers:
   - lag
   - lead
@@ -25,220 +25,151 @@ requires_tools:
 
 # 差分与变化率计算指南
 
-时序数据分析中，差分（相邻值之差）和变化率（单位时间变化量）是最常用的特征工程操作，适用于传感器趋势分析、累计量转瞬时量、环比对比等场景。
+SonnetDB 当前版本已经内置了一组**时序相邻点分析函数**，可以覆盖大部分 “LAG/LEAD + 算术表达式” 的需求。
 
----
+## 1. 先说结论
 
-## 1. LAG / LEAD 函数
+- 当前**不支持**标准 SQL 的 `LAG(...) OVER (...)` / `LEAD(...) OVER (...)`。
+- 计算“当前值减上一值”，优先用 `difference(field)` 或 `delta(field)`。
+- 计算“计数器本次增加了多少”，优先用 `increase(field)`。
+- 计算“单位时间变化率”，优先用 `derivative(field[, unit])`、`rate(field[, unit])`、`irate(field[, unit])`。
+- 要做“环比 / 同比 / 上一桶对比”，先 `GROUP BY time(...)` 聚合，再在应用层做相邻桶比较。
 
-SonnetDB 支持标准 SQL 的 LAG / LEAD 窗口函数：
+## 2. 函数对照表
 
-```sql
-LAG(<field> [, <offset> [, <default>]])   -- 取前 N 行的值
-LEAD(<field> [, <offset> [, <default>]])  -- 取后 N 行的值
-```
+| 需求 | 推荐函数 | 说明 |
+| --- | --- | --- |
+| 相邻值之差 | `difference(field)` / `delta(field)` | 两者当前语义相同，都是 `current - previous` |
+| 只保留非负增量 | `increase(field)` | 适合累计量、计数器 reset 场景 |
+| 每秒变化率 | `derivative(field)` / `rate(field)` | 默认按 1 秒归一化 |
+| 自定义单位变化率 | `derivative(field, 1m)` | 按指定时间单位归一化 |
+| 计数器速率 | `rate(field)` / `irate(field)` | 当前都按相邻两点计算，负值会被抑制 |
 
-| 参数 | 说明 |
-| --- | --- |
-| `field` | 要取值的列名 |
-| `offset` | 偏移行数，默认 1 |
-| `default` | 无前/后行时的默认值，默认 NULL |
+## 3. 常见写法
 
-> ⚠️ 使用 LAG/LEAD 时，**必须**加 `ORDER BY time ASC` 确保时间顺序正确。
-
----
-
-## 2. 一阶差分（相邻值之差）
-
-### 场景：计算传感器读数的逐步变化量
+### 3.1 一阶差分
 
 ```sql
--- 计算温度传感器每次采样的变化量
 SELECT
     time,
-    temp_celsius,
-    temp_celsius - LAG(temp_celsius, 1, temp_celsius)
-        OVER (ORDER BY time ASC)                      AS delta_temp,  -- 与上一条的差值
-    time - LAG(time, 1, time)
-        OVER (ORDER BY time ASC)                      AS delta_ms     -- 时间间隔（毫秒）
-FROM sensor_climate
-WHERE device_id = 'S-A01'
-  AND time >= now() - 1h
-ORDER BY time ASC;
+    usage,
+    difference(usage) AS diff_usage
+FROM cpu
+WHERE host = 'server-01';
 ```
 
-### 场景：累计量转瞬时量（电表、流量计）
+说明：
+
+- 首行没有上一条数据，结果为 `NULL`。
+- `delta(field)` 当前与 `difference(field)` 等价。
+
+### 3.2 计数器增量
 
 ```sql
--- 电表 energy_kwh 是单调递增的累计量
--- 计算每个采样周期的实际用电量（瞬时功率）
-SELECT
-    time,
-    energy_kwh,
-    energy_kwh - LAG(energy_kwh, 1, energy_kwh)
-        OVER (ORDER BY time ASC)                      AS delta_kwh,   -- 本周期用电量
-    (energy_kwh - LAG(energy_kwh, 1, energy_kwh)
-        OVER (ORDER BY time ASC))
-    / ((time - LAG(time, 1, time) OVER (ORDER BY time ASC)) / 3600000.0)
-                                                      AS power_kw     -- 瞬时功率（kW）
-FROM sensor_power
-WHERE meter_id = 'M-01'
-  AND phase = 'total'
-  AND time >= now() - 1h
-ORDER BY time ASC;
-```
-
----
-
-## 3. 变化率（单位时间变化量）
-
-### 场景：计算每秒变化速率
-
-```sql
--- 计算 CPU 使用率的变化速率（%/秒）
-SELECT
-    time,
-    cpu_pct,
-    -- 变化率 = (当前值 - 上一值) / 时间间隔（秒）
-    (cpu_pct - LAG(cpu_pct, 1, cpu_pct) OVER (ORDER BY time ASC))
-    / NULLIF(
-        (time - LAG(time, 1, time) OVER (ORDER BY time ASC)) / 1000.0,
-        0
-    )                                                  AS rate_per_sec
-FROM host_cpu
-WHERE host = 'server-01'
-  AND time >= now() - 30m
-ORDER BY time ASC;
-```
-
-### 场景：网络流量速率（bytes → bytes/sec）
-
-```sql
--- 将累计字节数转换为瞬时速率（bytes/sec）
 SELECT
     time,
     bytes_total,
-    (bytes_total - LAG(bytes_total, 1, bytes_total) OVER (ORDER BY time ASC))
-    / NULLIF(
-        (time - LAG(time, 1, time) OVER (ORDER BY time ASC)) / 1000.0,
-        0
-    )                                                  AS bytes_per_sec
+    increase(bytes_total) AS bytes_increase
 FROM net_interface
 WHERE host = 'server-01'
-  AND interface = 'eth0'
-  AND time >= now() - 1h
-ORDER BY time ASC;
+  AND interface = 'eth0';
 ```
 
----
+适用场景：
 
-## 4. 环比（与上一个时间桶对比）
+- 电表累计量
+- 网络字节计数器
+- 请求总数 / 错误总数
 
-```sql
--- 计算每小时 CPU 使用率的环比变化
--- 先聚合到小时桶，再用 LAG 计算相邻桶的差值
-SELECT
-    bucket,
-    avg_cpu,
-    LAG(avg_cpu, 1) OVER (ORDER BY bucket ASC)        AS prev_hour_cpu,
-    avg_cpu - LAG(avg_cpu, 1) OVER (ORDER BY bucket ASC) AS delta_cpu,
-    -- 环比变化率（%）
-    (avg_cpu - LAG(avg_cpu, 1) OVER (ORDER BY bucket ASC))
-    / NULLIF(LAG(avg_cpu, 1) OVER (ORDER BY bucket ASC), 0) * 100
-                                                       AS change_pct
-FROM (
-    SELECT
-        time_bucket(time, '1h') AS bucket,
-        avg(cpu_pct)            AS avg_cpu
-    FROM host_cpu
-    WHERE host = 'server-01'
-      AND time >= now() - 24h
-    GROUP BY bucket
-) AS hourly
-ORDER BY bucket ASC;
-```
+如果设备重启导致计数器归零，`increase(...)` 会把负差抑制为 `NULL`，比裸 `difference(...)` 更适合。
 
----
-
-## 5. 前后值对比（LEAD）
-
-### 场景：预判下一步趋势
+### 3.3 单位时间变化率
 
 ```sql
--- 同时显示当前值、上一值、下一值，用于趋势判断
 SELECT
     time,
-    temp_celsius                                       AS current,
-    LAG(temp_celsius, 1)  OVER (ORDER BY time ASC)   AS prev,
-    LEAD(temp_celsius, 1) OVER (ORDER BY time ASC)   AS next,
-    -- 趋势方向：1=上升，-1=下降，0=持平
-    CASE
-        WHEN LEAD(temp_celsius, 1) OVER (ORDER BY time ASC) > temp_celsius THEN 1
-        WHEN LEAD(temp_celsius, 1) OVER (ORDER BY time ASC) < temp_celsius THEN -1
-        ELSE 0
-    END                                                AS trend
-FROM sensor_climate
-WHERE device_id = 'S-A01'
-  AND time >= now() - 30m
-ORDER BY time ASC;
+    cpu_pct,
+    derivative(cpu_pct, 1s) AS rate_per_sec
+FROM host_cpu
+WHERE host = 'server-01';
 ```
 
----
-
-## 6. 多步差分（N 阶差分）
-
 ```sql
--- 二阶差分：检测加速度（变化率的变化率）
--- 适用于振动分析、加速度传感器数据验证
 SELECT
     time,
-    accel_ms2,
-    -- 一阶差分（速度）
-    accel_ms2 - LAG(accel_ms2, 1, accel_ms2) OVER (ORDER BY time ASC) AS d1,
-    -- 二阶差分（加速度的变化率）
-    (accel_ms2 - LAG(accel_ms2, 1, accel_ms2) OVER (ORDER BY time ASC))
-    - LAG(
-        accel_ms2 - LAG(accel_ms2, 1, accel_ms2) OVER (ORDER BY time ASC),
-        1, 0
-    ) OVER (ORDER BY time ASC)                         AS d2
-FROM sensor_vibration
-WHERE device_id = 'VIB-01'
-  AND axis = 'x'
-  AND time >= now() - 10m
-ORDER BY time ASC;
+    bytes_total,
+    rate(bytes_total, 1s) AS bytes_per_sec
+FROM net_interface
+WHERE host = 'server-01'
+  AND interface = 'eth0';
 ```
 
----
+说明：
 
-## 7. 常见陷阱
+- `derivative` 会保留正负变化。
+- `rate` / `irate` 当前更适合计数器语义，负速率会被抑制为 `NULL`。
+- 当相邻两点时间差 `dt <= 0` 时，结果为 `NULL`。
+
+### 3.4 累计值与增量分开看
 
 ```sql
--- ❌ 忘记 ORDER BY time，LAG 结果不可预测
-SELECT time, cpu_pct, LAG(cpu_pct) OVER () AS prev
-FROM host_cpu WHERE host = 'server-01';
-
--- ✅ 必须指定 ORDER BY time ASC
-SELECT time, cpu_pct, LAG(cpu_pct) OVER (ORDER BY time ASC) AS prev
-FROM host_cpu WHERE host = 'server-01' AND time >= now() - 1h;
-
--- ❌ 除以时间差时未处理 0（第一行时间差为 0）
-SELECT (cpu_pct - LAG(cpu_pct) OVER (ORDER BY time ASC))
-       / (time - LAG(time) OVER (ORDER BY time ASC))  -- 第一行除以 0！
-
--- ✅ 用 NULLIF 防止除零
-SELECT (cpu_pct - LAG(cpu_pct) OVER (ORDER BY time ASC))
-       / NULLIF(time - LAG(time) OVER (ORDER BY time ASC), 0)
-FROM host_cpu WHERE host = 'server-01' AND time >= now() - 1h;
-
--- ❌ 累计量差分时未过滤重置（计数器重置会产生负值）
--- 如果 energy_kwh 在设备重启后从 0 开始，差分会出现大负值
-
--- ✅ 过滤负差分值（累计量重置保护）
-SELECT time, delta_kwh
-FROM (
-    SELECT time,
-           energy_kwh - LAG(energy_kwh, 1, energy_kwh) OVER (ORDER BY time ASC) AS delta_kwh
-    FROM sensor_power WHERE meter_id = 'M-01' AND time >= now() - 1h
-) AS t
-WHERE delta_kwh >= 0;   -- 过滤负值（计数器重置）
+SELECT
+    time,
+    bytes_total,
+    increase(bytes_total) AS bytes_increase
+FROM net_interface
+WHERE host = 'server-01'
+  AND interface = 'eth0';
 ```
+
+如果你想看运行累计值，通常直接看原始累计列 `bytes_total` 即可；如果想做“增量累计趋势”，建议在应用层对 `bytes_increase` 再做累加。
+
+## 4. 环比 / 同比怎么做
+
+当前版本不支持 `LAG(...) OVER (...)`，所以“上一小时对比”“上一桶环比”建议分两步：
+
+第一步，先把数据聚合成固定时间桶：
+
+```sql
+SELECT
+    avg(cpu_pct) AS avg_cpu,
+    max(cpu_pct) AS peak_cpu
+FROM host_cpu
+WHERE host = 'server-01'
+  AND time >= now() - 24h
+GROUP BY time(1h);
+```
+
+第二步，在应用层对返回的桶序列做相邻比较：
+
+- `delta_cpu = current.avg_cpu - previous.avg_cpu`
+- `change_pct = delta_cpu / previous.avg_cpu`
+
+这比让 Copilot 编造 `LAG(...) OVER (...)` 更符合当前 SonnetDB 的真实能力。
+
+## 5. 如果用户明确问 LAG / LEAD
+
+推荐回答策略：
+
+1. 明确说明 SonnetDB 当前不支持 `OVER (...)`。
+2. 如果需求只是“与上一点比较”，改写成 `difference` / `delta` / `derivative` / `rate`。
+3. 如果需求是“与上一桶比较”“前后两桶对比”“环比同比”，告诉用户先 `GROUP BY time(...)`，再在应用层比较。
+
+可直接给用户这样的转换示例：
+
+```sql
+-- 不要这样写
+SELECT time, usage, LAG(usage) OVER (ORDER BY time) AS prev_usage
+FROM cpu;
+
+-- 当前 SonnetDB 推荐这样写
+SELECT time, usage, difference(usage) AS diff_usage
+FROM cpu;
+```
+
+## 6. 常见陷阱
+
+- 不要把 `difference` / `rate` 用在 TAG 列上，它们要求数值型 FIELD。
+- 不要假设 `GROUP BY time(...)` 会自动返回 bucket 列；当前只返回聚合列。
+- 不要把 “按 host 分组”“按 device_id 分组” 和 “按时间桶聚合” 混在一条 SQL 里；当前只支持 `GROUP BY time(...)`。
+- 不要让模型生成 `LAG(...) OVER (...)`、`LEAD(...) OVER (...)`、`time_bucket(...)` 这类当前公开语法之外的写法。

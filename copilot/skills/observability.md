@@ -209,20 +209,18 @@ sndb_memtable_points > 100000
 
 ```sql
 -- 查看最近 1 小时的 P99 查询延迟
-SELECT time_bucket(time, '1m') AS bucket, max(value) AS p99_ms
+SELECT max(value) AS p99_ms
 FROM sndb_metrics
 WHERE metric = 'query_latency_p99'
   AND time >= now() - 1h
-GROUP BY bucket
-ORDER BY bucket;
+GROUP BY time(1m);
 
 -- 查看写入吞吐量趋势
-SELECT time_bucket(time, '5m') AS bucket, avg(value) AS pps
+SELECT avg(value) AS pps
 FROM sndb_metrics
 WHERE metric = 'bulk_ingest_throughput_pps'
   AND time >= now() - 24h
-GROUP BY bucket
-ORDER BY bucket;
+GROUP BY time(5m);
 ```
 
 ---

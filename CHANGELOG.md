@@ -5,7 +5,11 @@
 
 ## [Unreleased]
 
+### Docs
+- 新增 `docs/sql-cookbook.md`，把 `demo.sql` 中高频、当前真实支持的 `CREATE MEASUREMENT`、`INSERT`、`SELECT`、`GROUP BY time(...)`、窗口函数、PID、预测、向量检索、元数据与 `DELETE` 场景整理成可直接复制的 cookbook，并在 `docs/index.md` 与 `docs/sql-reference.md` 中加入入口。
+
 ### Fixed
+- 统一 Copilot skills、Web starters 与 SQL 编辑器方言文案中的 SonnetDB SQL 示例口径：聚合示例统一回到当前真实支持的 `GROUP BY time(...)`，修正 `pid_tune` / `pid_compute`、`time_bucket(...)`、`LAG/LEAD OVER (...)` 等会误导当前版本能力边界的过时或未公开支持写法。
 - **Token / API Key 管理现在支持带连字符的用户名**：控制面 SQL parser 为 `SHOW TOKENS FOR`、`ISSUE TOKEN FOR`、`SHOW GRANTS FOR` 等语句补齐 quoted username 语法，`TokensView.vue` 与 `UsersView.vue` 在回填已有用户名时统一走字符串 quoting，修复用户名如 `ops-admin` 时签发 token 报 `期望标识符（位置 16）`，并补 parser 与控制面集成回归测试。
 - **Copilot 现在能直接理解“新建仓库并建表”并在无 db 场景继续工作**：新增 `CopilotProvisioning` 结构化意图抽取，把“建数据库 + 建 measurement + 从描述中抽字段”从 prompt 规则落到后端代码；`draft_sql` / `execute_sql` 现已支持 `CREATE DATABASE`，`/v1/copilot/chat` 对 provisioning 请求放开 `db` 必填限制，普通问题仍保持原有校验；Web 端 `CopilotDock` 同步支持在明显建库请求下绕过“先手工创建数据库”弹窗，并把工具产出的 SQL 自动绑定到目标库。
 - **CopilotDock 在没有任何业务数据库时不再 400 `请求体需包含 db。`**：上一轮把 `__copilot__` / `_internal` 等系统库从 `dbs` 列表里过滤后，新装实例（或仅持有系统库的账号）`selectedDb` 永远为空，发送时直接被服务端 `CopilotChatEndpointHandler` 用 `400 bad_request` 拦下。现在 `CopilotDock.send()` 在 `targetDb` 为空时拦截发送，弹出 NDialog 引导用户输入数据库名（沿用 `isValidIdentifier` 校验、字母开头 + 字母数字下划线），点击「创建并继续」直接走 `execControlPlaneSql('CREATE DATABASE <name>')`，成功后 `reloadDbs()` 并把新库写回 `selectedDb` 再继续 `send` 流程；非超级用户提示「请联系管理员先创建一个」。配合上一轮服务端隐藏 `__copilot__` 的修复，确保新部署 / 空白账号也能从零开始让 Copilot 帮忙建第一个仓库。

@@ -137,8 +137,8 @@ LIMIT 100;                        -- 最多返回 100 条，避免大结果集
 ```sql
 -- 统计 server-01 过去 24 小时的 CPU 使用情况，按 5 分钟聚合
 -- 用于绘制趋势图，桶大小 5m 适合 24h 时间跨度
+-- 当前版本不会自动返回 bucket 列，结果只包含聚合值
 SELECT
-    time_bucket(time, '5m') AS bucket, -- 5 分钟时间桶
     avg(cpu_pct)   AS avg_cpu,         -- 平均 CPU（趋势线）
     max(cpu_pct)   AS peak_cpu,        -- 峰值 CPU（告警参考）
     min(cpu_pct)   AS idle_cpu,        -- 最低 CPU（空闲基线）
@@ -146,8 +146,7 @@ SELECT
 FROM host_resource
 WHERE host = 'server-01'               -- 过滤主机
   AND time >= now() - 24h              -- 最近 24 小时
-GROUP BY bucket
-ORDER BY bucket ASC;                   -- 时间正序，便于图表渲染
+GROUP BY time(5m);                     -- 按 5 分钟时间桶聚合
 ```
 
 ### 3.5 SELECT — 多 tag 对比
