@@ -221,10 +221,24 @@ public sealed class ControlPlaneParserTests
     }
 
     [Fact]
+    public void Parse_ShowTokens_ForQuotedUser()
+    {
+        var stmt = (ShowTokensStatement)SqlParser.Parse("SHOW TOKENS FOR 'ops-admin'");
+        Assert.Equal("ops-admin", stmt.UserName);
+    }
+
+    [Fact]
     public void Parse_IssueToken_ForUser()
     {
         var stmt = (IssueTokenStatement)SqlParser.Parse("ISSUE TOKEN FOR alice");
         Assert.Equal("alice", stmt.UserName);
+    }
+
+    [Fact]
+    public void Parse_IssueToken_ForQuotedUser()
+    {
+        var stmt = (IssueTokenStatement)SqlParser.Parse("ISSUE TOKEN FOR 'ops-admin'");
+        Assert.Equal("ops-admin", stmt.UserName);
     }
 
     [Fact]
@@ -248,6 +262,17 @@ public sealed class ControlPlaneParserTests
         var stmt = (RevokeStatement)SqlParser.Parse("REVOKE ON DATABASE db1 FROM alice");
         Assert.Equal("db1", stmt.Database);
         Assert.Equal("alice", stmt.UserName);
+    }
+
+    [Fact]
+    public void Parse_ShowGrantsAndRevoke_WithQuotedUser()
+    {
+        var show = (ShowGrantsStatement)SqlParser.Parse("SHOW GRANTS FOR 'ops-admin'");
+        Assert.Equal("ops-admin", show.UserName);
+
+        var revoke = (RevokeStatement)SqlParser.Parse("REVOKE ON DATABASE db1 FROM 'ops-admin'");
+        Assert.Equal("db1", revoke.Database);
+        Assert.Equal("ops-admin", revoke.UserName);
     }
 
     [Theory]

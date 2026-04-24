@@ -126,7 +126,7 @@ const cols: DataTableColumns<TokenRow> = [
 async function reload(): Promise<void> {
   errorMsg.value = '';
   const showUsersSql = 'SHOW USERS';
-  const showTokensSql = filterUser.value ? `SHOW TOKENS FOR ${filterUser.value}` : 'SHOW TOKENS';
+  const showTokensSql = filterUser.value ? `SHOW TOKENS FOR ${quote(filterUser.value)}` : 'SHOW TOKENS';
   const [usersResult, tokensResult] = await Promise.all([
     execControlPlaneSql(auth.api, showUsersSql),
     execControlPlaneSql(auth.api, showTokensSql),
@@ -163,7 +163,7 @@ async function onIssue(): Promise<void> {
     return;
   }
 
-  const result = await execControlPlaneSql(auth.api, `ISSUE TOKEN FOR ${issueUser.value}`);
+  const result = await execControlPlaneSql(auth.api, `ISSUE TOKEN FOR ${quote(issueUser.value)}`);
   if (result.error) {
     message.error(result.error.message);
     return;

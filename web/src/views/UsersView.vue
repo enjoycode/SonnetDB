@@ -95,7 +95,7 @@ function openPwd(name: string): void {
 
 async function onAlterPwd(): Promise<void> {
   if (!pwdNew.value) { message.error('请输入新密码。'); return; }
-  const sql = `ALTER USER ${pwdTarget.value} WITH PASSWORD ${quote(pwdNew.value)}`;
+  const sql = `ALTER USER ${quote(pwdTarget.value)} WITH PASSWORD ${quote(pwdNew.value)}`;
   const rs = await execControlPlaneSql(auth.api, sql);
   if (rs.error) { message.error(rs.error.message); return; }
   message.success(`已更新 ${pwdTarget.value} 的密码`);
@@ -103,7 +103,7 @@ async function onAlterPwd(): Promise<void> {
 }
 
 async function onDrop(name: string): Promise<void> {
-  const rs = await execControlPlaneSql(auth.api, `DROP USER ${name}`);
+  const rs = await execControlPlaneSql(auth.api, `DROP USER ${quote(name)}`);
   if (rs.error) { message.error(rs.error.message); return; }
   message.success(`已删除 ${name}`);
   await reload();

@@ -788,6 +788,24 @@ public sealed class SqlParser
         return name;
     }
 
+    /// <summary>
+    /// 解析用户名：接受标识符、任意关键字，或单引号字符串字面量。
+    /// 这样既兼容 <c>alice</c>，也兼容 <c>ops-admin</c> 这类包含非标识符字符的用户名。
+    /// </summary>
+    private string ExpectUserName()
+    {
+        if (Current.Kind == TokenKind.StringLiteral)
+            return ExpectStringLiteral();
+        if (Current.Kind != TokenKind.IdentifierLiteral && !IsKeyword(Current.Kind))
+            throw Error("期望用户名");
+        var name = Current.Text;
+        Advance();
+        return name;
+    }
+
+    private static bool IsKeyword(TokenKind kind) =>
+        kind >= TokenKind.KeywordCreate;
+
     private int ExpectNonNegativeInt(string errorMessage)
     {
         if (Current.Kind != TokenKind.IntegerLiteral)
@@ -861,7 +879,7 @@ public sealed class SqlParser
     private CreateUserStatement ParseCreateUserBody()
     {
         Expect(TokenKind.KeywordUser);
-        var name = ExpectIdentifierName();
+        var name = ExpectUserName();
         Expect(TokenKind.KeywordWith);
         Expect(TokenKind.KeywordPassword);
         var password = ExpectStringLiteral();
@@ -890,7 +908,7 @@ public sealed class SqlParser
         {
             case TokenKind.KeywordUser:
                 Advance();
-                return new DropUserStatement(ExpectIdentifierName());
+                return new DropUserStatement(ExpectUserName());
             case TokenKind.KeywordDatabase:
                 Advance();
                 return new DropDatabaseStatement(ExpectIdentifierName());
@@ -904,7 +922,7 @@ public sealed class SqlParser
     {
         Expect(TokenKind.KeywordAlter);
         Expect(TokenKind.KeywordUser);
-        var name = ExpectIdentifierName();
+        var name = ExpectUserName();
         Expect(TokenKind.KeywordWith);
         Expect(TokenKind.KeywordPassword);
         var password = ExpectStringLiteral();
@@ -927,7 +945,7 @@ public sealed class SqlParser
         Expect(TokenKind.KeywordDatabase);
         var db = ExpectDatabaseNameOrStar();
         Expect(TokenKind.KeywordTo);
-        var user = ExpectIdentifierName();
+        var user = ExpectUserName();
         return new GrantStatement(perm, db, user);
     }
 
@@ -945,7 +963,7 @@ public sealed class SqlParser
         Expect(TokenKind.KeywordDatabase);
         var db = ExpectDatabaseNameOrStar();
         Expect(TokenKind.KeywordFrom);
-        var user = ExpectIdentifierName();
+        var user = ExpectUserName();
         return new RevokeStatement(db, user);
     }
 
@@ -955,7 +973,7 @@ public sealed class SqlParser
         Expect(TokenKind.KeywordIssue);
         Expect(TokenKind.KeywordToken);
         Expect(TokenKind.KeywordFor);
-        var user = ExpectIdentifierName();
+        var user = ExpectUserName();
         return new IssueTokenStatement(user);
     }
 
@@ -978,7 +996,7 @@ public sealed class SqlParser
                 if (Current.Kind == TokenKind.KeywordFor)
                 {
                     Advance();
-                    var user = ExpectIdentifierName();
+                    var user = ExpectUserName();
                     return new ShowGrantsStatement(user);
                 }
                 return new ShowGrantsStatement(null);
@@ -987,7 +1005,7 @@ public sealed class SqlParser
                 if (Current.Kind == TokenKind.KeywordFor)
                 {
                     Advance();
-                    var tu = ExpectIdentifierName();
+                    var tu = ExpectUserName();
                     return new ShowTokensStatement(tu);
                 }
                 return new ShowTokensStatement(null);
