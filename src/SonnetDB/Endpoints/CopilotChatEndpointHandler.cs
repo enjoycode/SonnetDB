@@ -62,7 +62,9 @@ internal static class CopilotChatEndpointHandler
             return;
         }
 
-        var messages = NormalizeMessages(req);
+        var request = req;
+
+        var messages = NormalizeMessages(request);
         if (messages.Count == 0)
         {
             await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体需包含 message 或 messages。").ConfigureAwait(false);
@@ -70,7 +72,7 @@ internal static class CopilotChatEndpointHandler
         }
 
         var provisioningIntent = CopilotProvisioning.TryExtractIntent(messages[^1].Content);
-        var selectedDb = string.IsNullOrWhiteSpace(req?.Db) ? null : req.Db.Trim();
+        var selectedDb = string.IsNullOrWhiteSpace(request.Db) ? null : request.Db.Trim();
         var visibleDatabases = DatabaseAccessEvaluator.GetVisibleDatabases(ctx, grantsStore, registry.ListDatabases());
         var isServerAdmin = DatabaseAccessEvaluator.IsServerAdmin(ctx);
 
@@ -131,12 +133,12 @@ internal static class CopilotChatEndpointHandler
         }
         // M7：客户端可显式声明 read-only 模式，强制收紧 execute_sql 写权限。
         // 仅 read-write 走凭据自身的权限上限；其它取值（含未提供 / read-only / 任意拼写）一律按只读处理。
-        var requestedMode = req.Mode?.Trim();
+        var requestedMode = request.Mode?.Trim();
         var clientAllowsWrite = string.Equals(requestedMode, "read-write", StringComparison.OrdinalIgnoreCase);
         var canWrite = DatabaseAccessEvaluator.HasPermission(targetPermission, DatabasePermission.Write);
         var effectiveCanWrite = (canWrite || isServerAdmin) && clientAllowsWrite;
         // M8\uff1a\u5141\u8bb8\u5ba2\u6237\u7aef\u4e3a\u672c\u6b21\u8bf7\u6c42\u4e34\u65f6\u9009\u62e9 chat \u6a21\u578b\uff1b\u4e3a\u7a7a\u65f6\u8d70\u670d\u52a1\u7aef CopilotChatOptions.Model \u9ed8\u8ba4\u503c\u3002
-        var modelOverride = string.IsNullOrWhiteSpace(req.Model) ? null : req.Model.Trim();
+        var modelOverride = string.IsNullOrWhiteSpace(request.Model) ? null : request.Model.Trim();
         var context = new CopilotAgentContext(contextDatabaseName, tsdb, visibleDatabases, effectiveCanWrite, modelOverride, isServerAdmin);
 
         ctx.Response.StatusCode = StatusCodes.Status200OK;
@@ -148,7 +150,7 @@ internal static class CopilotChatEndpointHandler
 
         try
         {
-            await foreach (var evt in copilotAgent.RunAsync(context, messages, req.DocsK, req.SkillsK, ctx.RequestAborted).ConfigureAwait(false))
+            await foreach (var evt in copilotAgent.RunAsync(context, messages, request.DocsK, request.SkillsK, ctx.RequestAborted).ConfigureAwait(false))
             {
                 if (sse)
                 {

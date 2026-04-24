@@ -84,7 +84,7 @@ export interface CopilotChatEvent {
 }
 
 export interface CopilotChatRequest {
-  db: string;
+  db?: string;
   messages: CopilotMessage[];
   docsK?: number;
   skillsK?: number;

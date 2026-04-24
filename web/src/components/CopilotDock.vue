@@ -582,6 +582,7 @@ async function promptCreateDatabase(): Promise<string> {
 }
 
 interface ToolArgumentsPayload {
+  database?: string;
   sql?: string;
   maxRows?: number;
 }
@@ -661,15 +662,29 @@ function extractToolSql(event: CopilotChatEvent): string {
   return err?.sql ?? '';
 }
 
+function extractToolDatabase(event: CopilotChatEvent): string {
+  const args = parseJsonObject<ToolArgumentsPayload>(event.toolArguments);
+  if (args?.database) return args.database;
+
+  const draft = parseJsonObject<DraftSqlPayload>(event.toolResult);
+  if (draft?.database) return draft.database;
+
+  const executed = parseJsonObject<ExecuteSqlPayload>(event.toolResult);
+  if (executed?.database) return executed.database;
+
+  return '';
+}
+
 function ensureCopilotSqlTab(event: CopilotChatEvent, sql: string): string {
   const key = toolEventKey(event, sql);
   const existing = copilotToolTabs.get(key);
   if (existing) return existing;
 
   copilotSqlSeen.add(normalizeSqlForDedupe(sql));
+  const database = extractToolDatabase(event) || toolTabDb.value;
   const tab = sqlConsole.createTab({
     title: tabTitleForSqlTool(event.toolName ?? 'query_sql', sql),
-    db: toolTabDb.value,
+    db: database,
     sql,
     source: 'copilot',
     summary: event.type === 'tool_call'
@@ -821,29 +836,77 @@ function syncFinalAnswerSql(answer: string): void {
   }
 }
 
+const ProvisioningDatabaseNameRegex = /(?:数据库|仓库|库)\s*(?:叫|名为|叫做|叫作)?\s*([A-Za-z][A-Za-z0-9_]*)/i;
+
+function looksLikeProvisioningRequest(message: string): boolean {
+  const lowered = message.trim().toLowerCase();
+  const asksToCreate = lowered.includes('新建')
+    || lowered.includes('创建')
+    || lowered.includes('建一个')
+    || lowered.includes('建一套')
+    || lowered.includes('create database');
+  const mentionsDatabase = lowered.includes('数据库')
+    || lowered.includes('仓库')
+    || lowered.includes('库')
+    || lowered.includes('database');
+
+  return asksToCreate && mentionsDatabase;
+}
+
+function inferProvisioningDatabaseName(message: string): string {
+  const explicit = ProvisioningDatabaseNameRegex.exec(message)?.[1];
+  if (explicit) return explicit;
+
+  const lowered = message.trim().toLowerCase();
+  const looksLikeComputerPerformance = (lowered.includes('电脑')
+      || lowered.includes('计算机')
+      || lowered.includes('主机')
+      || lowered.includes('系统')
+      || lowered.includes('host'))
+    && (lowered.includes('性能')
+      || lowered.includes('perf')
+      || lowered.includes('监控')
+      || lowered.includes('指标')
+      || lowered.includes('usage'));
+  if (looksLikeComputerPerformance) return 'computer_perf';
+
+  const looksLikeEnvironmentTelemetry = lowered.includes('温度')
+    || lowered.includes('湿度')
+    || lowered.includes('humidity')
+    || lowered.includes('temperature');
+  if (looksLikeEnvironmentTelemetry) return 'sensor_metrics';
+
+  return 'metrics';
+}
+
 async function send(): Promise<void> {
   if (!prompt.value.trim() || running.value) return;
   if (!auth.state?.token) return;
 
+  const userText = prompt.value.trim();
+  const isProvisioningRequest = looksLikeProvisioningRequest(userText);
+  const provisioningDb = isProvisioningRequest ? inferProvisioningDatabaseName(userText) : '';
+
   // 数据库自动推断：优先 SQL Console 当前库，其次已知库列表第一个，最后留空让后端处理
   let targetDb = effectiveDb.value || (dbs.value.length > 0 ? dbs.value[0] : '');
 
-  // 如果当前账号没有任何业务数据库，引导用户先创建一个（Copilot 必须挂在某个 DB 上）。
-  if (!targetDb) {
+  // 无库场景下，建库意图允许直接走后端 provisioning；其它请求仍先引导建库。
+  if (!targetDb && !isProvisioningRequest) {
     const created = await promptCreateDatabase();
     if (!created) return;  // 用户取消或无权创建
     targetDb = created;
   }
 
+  const requestDb = provisioningDb || targetDb;
+
   // 没有当前会话则先建一个；切换数据库时同步到当前会话。
   if (!sessions.current) {
-    sessions.create(targetDb);
-  } else if (targetDb && sessions.current.db !== targetDb) {
-    sessions.current.db = targetDb;
+    sessions.create(requestDb);
+  } else if (requestDb && sessions.current.db !== requestDb) {
+    sessions.current.db = requestDb;
   }
   const sessionId = sessions.currentId;
 
-  const userText = prompt.value.trim();
   const userMsg: CopilotMessage = { role: 'user', content: userText };
   prompt.value = '';
   errorMsg.value = '';
@@ -866,12 +929,12 @@ async function send(): Promise<void> {
   let finalAnswer = '';
   copilotToolTabs.clear();
   copilotSqlSeen.clear();
-  activeRequestDb.value = targetDb;
+  activeRequestDb.value = requestDb;
   try {
     for await (const event of streamCopilotChat(
       auth.state.token,
       {
-        db: targetDb,
+        ...(requestDb ? { db: requestDb } : {}),
         messages: requestMessages,
         mode: permissionMode.value,
         ...(selectedModel.value ? { model: selectedModel.value } : {}),
@@ -902,6 +965,9 @@ async function send(): Promise<void> {
         sessions.setMessages(sessionId!, sessions.current!.messages);
       }
       streamBuffer.value = '';
+      if (isProvisioningRequest) {
+        void reloadDbs();
+      }
     }
   } catch (e: unknown) {
     if (!ac.signal.aborted) {
