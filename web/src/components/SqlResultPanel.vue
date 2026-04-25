@@ -24,6 +24,7 @@
           <n-tab name="markdown" tab="文本" />
           <n-tab name="table" tab="表格" />
           <n-tab name="chart" tab="图表" />
+          <n-tab v-if="hasGeoPoints" name="map" tab="地图" />
         </n-tabs>
       </n-space>
     </template>
@@ -52,6 +53,12 @@
 
         <!-- 图表（SVG 折线） -->
         <SqlResultChart
+          v-else-if="view === 'chart'"
+          :columns="result.columns"
+          :rows="rows"
+        />
+
+        <ResultMapPreview
           v-else
           :columns="result.columns"
           :rows="rows"
@@ -70,6 +77,7 @@ import {
 } from 'naive-ui';
 import { marked } from 'marked';
 import SqlResultChart from './SqlResultChart.vue';
+import ResultMapPreview from './ResultMapPreview.vue';
 import { rowsToObjects, type SqlResultSet } from '@/api/sql';
 
 interface Props {
@@ -79,13 +87,14 @@ interface Props {
 }
 const props = defineProps<Props>();
 
-type View = 'markdown' | 'table' | 'chart';
+type View = 'markdown' | 'table' | 'chart' | 'map';
 const view = ref<View>('markdown');
 
 const hasRows = computed(() => props.result.hasColumns && props.result.rows.length > 0);
 
-watch(hasRows, (v) => {
-  if (!v) view.value = 'markdown';
+watch([hasRows, () => props.result.columns, () => props.result.rows], () => {
+  if (!hasRows.value) view.value = 'markdown';
+  else if (hasGeoPoints.value) view.value = 'map';
 }, { immediate: true });
 
 const trimmedSql = computed(() => {
@@ -109,6 +118,17 @@ const statusType = computed<'success' | 'error' | 'info'>(() => {
 });
 
 const rows = computed(() => rowsToObjects(props.result));
+
+const hasGeoPoints = computed(() => rows.value.some((row) =>
+  props.result.columns.some((column) => isGeoPointValue(row[column]))));
+
+function isGeoPointValue(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const object = value as Record<string, unknown>;
+  if (object.type === 'Point' && Array.isArray(object.coordinates) && object.coordinates.length >= 2) return true;
+  return (object.lat !== undefined || object.Lat !== undefined || object.latitude !== undefined || object.Latitude !== undefined)
+    && (object.lon !== undefined || object.Lon !== undefined || object.lng !== undefined || object.Lng !== undefined || object.longitude !== undefined || object.Longitude !== undefined);
+}
 
 const dataColumns = computed<DataTableColumns<Record<string, unknown>>>(() =>
   props.result.columns.map((c) => ({

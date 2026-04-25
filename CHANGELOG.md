@@ -11,6 +11,7 @@
 - **PR #72 — 轨迹聚合函数（Tier 2）**：新增 `trajectory_length` / `trajectory_centroid` / `trajectory_bbox` 与 `trajectory_speed_max` / `trajectory_speed_avg` / `trajectory_speed_p95`，支持 `GEOPOINT` 轨迹总路程、重心、外包矩形与基于相邻点时间差的速度统计，并接入 `GROUP BY time(...)`。
 - **PR #73 — GeoJSON 序列化 + REST 端点扩展**：`GEOPOINT` 查询结果 ndjson 自动输出 GeoJSON Point（`[lon,lat]`），新增轨迹 REST 端点 `GET /v1/db/{db}/geo/{measurement}/trajectory`，支持 Point FeatureCollection 与 `format=linestring`；远程 ADO.NET `DbDataReader` 现在会把 GeoJSON Point 反序列化回 `GeoPoint` struct。
 - **PR #74 — Web Admin 轨迹地图标签页**：新增 Vue3 TrajectoryMap.vue，引入 maplibre-gl 与 echarts，支持按数据库 / Measurement / GEOPOINT 字段 / TAG / 时间范围加载轨迹端点，展示 OSM 底图、LineString 轨迹、起终点标记、时间轴回放与速度折线图。
+- **PR #75 — SQL 控制台地图渲染集成**：查询结果自动检测 GeoJSON Point / GeoPoint 列并显示地图视图，SqlResultPanel 支持文本 / 表格 / 图表 / 地图切换；ResultMapPreview.vue 支持散点、按时间排序轨迹连线与低基数列分组，多点结果可直接在 SQL Console 预览。
 - **PR #76 — 地理空间索引（Geohash 段内过滤）**：Segment 格式升级到 v5，`BlockHeader` 新增 `GeoHashMin` / `GeoHashMax` 32-bit geohash 前缀；`SegmentWriter` 为 GEOPOINT Block 写入空间范围，`QueryEngine` 在 `geo_within` / `geo_bbox` WHERE 谓词下对落盘 block 做 geohash 剪枝，同时保留 v4 段文件只读兼容。
 
 ### Docs
@@ -935,4 +936,5 @@
 [0.1.0]: https://github.com/maikebing/SonnetDB/releases/tag/v0.1.0
 [0.2.0]: https://github.com/maikebing/SonnetDB/releases/tag/v0.2.0
 [0.3.0]: https://github.com/maikebing/SonnetDB/releases/tag/v0.3.0
+
 
