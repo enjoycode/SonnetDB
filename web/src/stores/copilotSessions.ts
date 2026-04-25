@@ -133,6 +133,20 @@ export const useCopilotSessionsStore = defineStore('copilotSessions', () => {
     return session;
   }
 
+  function appendMessage(id: string | null, db: string, message: CopilotMessage): CopilotSession {
+    let session = id ? sessions.value.find((s) => s.id === id) ?? null : null;
+    if (!session) {
+      session = create(db);
+    }
+    session.messages.push(message);
+    session.updatedAt = Date.now();
+    if (session.title === '新会话') {
+      session.title = deriveTitle(session.messages, '新会话');
+    }
+    if (db && !session.db) session.db = db;
+    return session;
+  }
+
   function setMessages(id: string, messages: CopilotMessage[]): void {
     const s = sessions.value.find((x) => x.id === id);
     if (!s) return;
@@ -169,6 +183,7 @@ export const useCopilotSessionsStore = defineStore('copilotSessions', () => {
     remove,
     clearAll,
     appendTurn,
+    appendMessage,
     setMessages,
   };
 });

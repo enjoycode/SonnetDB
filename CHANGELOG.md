@@ -20,6 +20,7 @@
 - 新增 `docs/sql-cookbook.md`，把 `demo.sql` 中高频、当前真实支持的 `CREATE MEASUREMENT`、`INSERT`、`SELECT`、`GROUP BY time(...)`、窗口函数、PID、预测、向量检索、元数据与 `DELETE` 场景整理成可直接复制的 cookbook，并在 `docs/index.md` 与 `docs/sql-reference.md` 中加入入口。
 
 ### Fixed
+- **Copilot 会话历史补齐 assistant 回复与引用保存**：CopilotDock 现在按发起请求时的会话 ID 追加 user / assistant 消息，避免请求完成前切换或新建会话导致最终回复没有落盘；assistant 消息会连同 citations 一起写入本地历史，并在历史会话中渲染引用标题、来源与摘要。标题栏新增「+ 新会话」入口，历史弹层保留切换、重命名、删除与清空能力。
 - **CopilotDock 回答改为 Markdown 渲染并隐藏裸 citation 标记**：聊天浮窗现在会把 Copilot 回复按 Markdown 渲染，代码块、列表、表格与行内代码可正常排版；渲染时转义模型返回的原生 HTML，并隐藏回答末尾类似 `[C11][C12]` 的内部引用编号，避免用户误以为是 SQL 或异常内容。
 - **Copilot 错误提示不再暴露原始 JSON**：Web Admin 的 Copilot API 客户端现在会解析服务端 `{ error, message }` 与流式 provider 错误，把 `copilot_not_ready / chat.endpoint_invalid` 等内部代码映射成可操作的中文提示，引导用户检查「Copilot 设置」中的服务地址、API Key、模型或 embedding 配置，避免直接显示 `Copilot 请求失败 503: {"error":...}`。
 - 统一 Copilot skills、Web starters 与 SQL 编辑器方言文案中的 SonnetDB SQL 示例口径：聚合示例统一回到当前真实支持的 `GROUP BY time(...)`，修正 `pid_tune` / `pid_compute`、`time_bucket(...)`、`LAG/LEAD OVER (...)` 等会误导当前版本能力边界的过时或未公开支持写法。

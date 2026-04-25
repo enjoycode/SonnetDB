@@ -19,9 +19,10 @@
         <n-tag v-if="pageContext" size="tiny" type="info">{{ pageContext.routeLabel }}</n-tag>
       </div>
       <n-space size="small" :wrap="false">
+        <n-button text size="tiny" title="新建会话" @click="onNewSession">+ 新会话</n-button>
         <n-popover trigger="click" placement="bottom-end" :width="300" :show-arrow="false" :to="dockEl ?? 'body'">
           <template #trigger>
-            <n-button text size="tiny" title="会话历史">≡</n-button>
+            <n-button text size="tiny" title="会话历史">历史</n-button>
           </template>
           <div class="copilot-dock__sessions" @mousedown.stop>
             <div class="copilot-dock__sessions-head">
@@ -224,13 +225,48 @@
       </div>
       <div v-for="(msg, idx) in messages" :key="idx" class="copilot-dock__msg" :class="`copilot-dock__msg--${msg.role}`">
         <div class="copilot-dock__msg-role">{{ msg.role === 'user' ? '我' : 'Copilot' }}</div>
-        <div class="copilot-dock__msg-body copilot-dock__markdown" v-html="renderMessageMarkdown(msg.content)" />
+        <div class="copilot-dock__msg-body">
+          <div class="copilot-dock__markdown" v-html="renderMessageMarkdown(msg.content)" />
+          <div
+            v-if="msg.role === 'assistant' && hasVisibleCitationsForContent(msg.content, msg.citations)"
+            class="copilot-dock__citations"
+          >
+            <div class="copilot-dock__citations-title">引用</div>
+            <div
+              v-for="citation in visibleCitationsForContent(msg.content, msg.citations)"
+              :key="citation.id"
+              class="copilot-dock__citation"
+            >
+              <div class="copilot-dock__citation-head">
+                <span class="copilot-dock__citation-id">{{ citation.id }}</span>
+                <span>{{ citation.title || citation.source || citation.kind }}</span>
+              </div>
+              <div v-if="citation.source" class="copilot-dock__citation-source">{{ citation.source }}</div>
+              <div v-if="citation.snippet" class="copilot-dock__citation-snippet">{{ citation.snippet }}</div>
+            </div>
+          </div>
+        </div>
       </div>
       <div v-if="streamBuffer" class="copilot-dock__msg copilot-dock__msg--assistant">
         <div class="copilot-dock__msg-role">Copilot</div>
         <div class="copilot-dock__msg-body">
           <div class="copilot-dock__markdown" v-html="renderMessageMarkdown(streamBuffer)" />
           <span class="copilot-dock__caret" />
+          <div v-if="hasVisibleCitations(streamCitations)" class="copilot-dock__citations">
+            <div class="copilot-dock__citations-title">引用</div>
+            <div
+              v-for="citation in visibleCitations(streamCitations)"
+              :key="citation.id"
+              class="copilot-dock__citation"
+            >
+              <div class="copilot-dock__citation-head">
+                <span class="copilot-dock__citation-id">{{ citation.id }}</span>
+                <span>{{ citation.title || citation.source || citation.kind }}</span>
+              </div>
+              <div v-if="citation.source" class="copilot-dock__citation-source">{{ citation.source }}</div>
+              <div v-if="citation.snippet" class="copilot-dock__citation-snippet">{{ citation.snippet }}</div>
+            </div>
+          </div>
         </div>
       </div>
       <div v-if="errorMsg" class="copilot-dock__error">{{ errorMsg }}</div>
@@ -281,6 +317,7 @@ import {
   fetchCopilotModels,
   type CopilotKnowledgeStatus,
   type CopilotChatEvent,
+  type CopilotCitation,
   type CopilotMessage,
 } from '@/api/copilot';
 import { pickStarters, type CopilotStarter } from '@/copilot/starters';
@@ -305,6 +342,7 @@ const prompt = ref('');
 /** 来自当前会话的历史消息（只读引用，写入通过 sessions store）。 */
 const messages = computed<CopilotMessage[]>(() => sessions.current?.messages ?? []);
 const streamBuffer = ref('');
+const streamCitations = ref<CopilotCitation[]>([]);
 const running = ref(false);
 const errorMsg = ref('');
 const abort = ref<AbortController | null>(null);
@@ -425,6 +463,37 @@ function renderMessageMarkdown(content: string): string {
     renderer: markdownRenderer,
   }) as string;
 }
+
+function visibleCitations(citations: CopilotCitation[] | undefined): CopilotCitation[] {
+  return (citations ?? []).filter((citation) =>
+    Boolean(citation.title?.trim() || citation.source?.trim() || citation.snippet?.trim()));
+}
+
+function extractCitationIds(content: string): Set<string> {
+  const ids = new Set<string>();
+  const re = /\[(C\d+)\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(content)) !== null) {
+    ids.add(match[1]);
+  }
+  return ids;
+}
+
+function visibleCitationsForContent(content: string, citations: CopilotCitation[] | undefined): CopilotCitation[] {
+  const visible = visibleCitations(citations);
+  const usedIds = extractCitationIds(content);
+  if (usedIds.size === 0) return visible;
+  return visible.filter((citation) => usedIds.has(citation.id));
+}
+
+function hasVisibleCitations(citations: CopilotCitation[] | undefined): boolean {
+  return visibleCitations(citations).length > 0;
+}
+
+function hasVisibleCitationsForContent(content: string, citations: CopilotCitation[] | undefined): boolean {
+  return visibleCitationsForContent(content, citations).length > 0;
+}
+
 async function loadModels() {
   if (!auth.state?.token) return;
   try {
@@ -1181,19 +1250,19 @@ async function send(): Promise<void> {
   const requestDb = provisioningDb || targetDb;
 
   // 没有当前会话则先建一个；切换数据库时同步到当前会话。
-  if (!sessions.current) {
-    sessions.create(requestDb);
-  } else if (requestDb && sessions.current.db !== requestDb) {
-    sessions.current.db = requestDb;
+  const activeSession = sessions.current ?? sessions.create(requestDb);
+  if (requestDb && activeSession.db !== requestDb) {
+    activeSession.db = requestDb;
   }
-  const sessionId = sessions.currentId;
+  const sessionId = activeSession.id;
 
   const userMsg: CopilotMessage = { role: 'user', content: userText };
   prompt.value = '';
   errorMsg.value = '';
-  // 把 user 消息立即加到当前会话（先用临时 assistant 占位，最后替换）。
-  sessions.current!.messages.push(userMsg);
+  // 把 user 消息立即加到发起请求的会话；assistant 最终回复也会按同一个 sessionId 追加。
+  const requestSession = sessions.appendMessage(sessionId, requestDb, userMsg);
   streamBuffer.value = '';
+  streamCitations.value = [];
   running.value = true;
   await scrollToBottom();
 
@@ -1203,11 +1272,12 @@ async function send(): Promise<void> {
   // M6: 构造请求载荷 = [可选 system 上下文] + 会话历史
   const ctxMsg = buildContextMessage();
   const requestMessages: CopilotMessage[] = ctxMsg
-    ? [ctxMsg, ...sessions.current!.messages]
-    : sessions.current!.messages;
+    ? [ctxMsg, ...requestSession.messages]
+    : [...requestSession.messages];
 
   const stepLog: string[] = [];
   let finalAnswer = '';
+  let finalCitations: CopilotCitation[] = [];
   copilotToolTabs.clear();
   copilotSqlSeen.clear();
   activeRequestDb.value = requestDb;
@@ -1226,6 +1296,8 @@ async function send(): Promise<void> {
       syncCopilotSqlEvent(event);
       if (event.type === 'final' && event.answer) {
         finalAnswer = event.answer;
+        finalCitations = visibleCitationsForContent(event.answer, event.citations);
+        streamCitations.value = finalCitations;
         syncFinalAnswerSql(event.answer);
         streamBuffer.value = event.answer;
       } else if (event.type === 'error') {
@@ -1238,14 +1310,13 @@ async function send(): Promise<void> {
       await scrollToBottom();
     }
     if (finalAnswer) {
-      // 把 assistant 最终回答写回会话；store 的 watch 会持久化。
-      sessions.current!.messages.push({ role: 'assistant', content: finalAnswer });
-      sessions.current!.updatedAt = Date.now();
-      if (sessions.current!.title === '新会话') {
-        // 用 setMessages 触发标题派生
-        sessions.setMessages(sessionId!, sessions.current!.messages);
-      }
+      sessions.appendMessage(sessionId, requestDb, {
+        role: 'assistant',
+        content: finalAnswer,
+        ...(finalCitations.length > 0 ? { citations: finalCitations } : {}),
+      });
       streamBuffer.value = '';
+      streamCitations.value = [];
       if (isProvisioningRequest) {
         void reloadDbs();
       }
@@ -1270,12 +1341,14 @@ function stop(): void {
 function onNewSession(): void {
   sessions.create(effectiveDb.value);
   streamBuffer.value = '';
+  streamCitations.value = [];
   errorMsg.value = '';
 }
 
 function onSwitchSession(id: string): void {
   sessions.switchTo(id);
   streamBuffer.value = '';
+  streamCitations.value = [];
   errorMsg.value = '';
   if (sessions.current?.db) {
     selectedDb.value = sessions.current.db;
@@ -1284,10 +1357,16 @@ function onSwitchSession(id: string): void {
 
 function onRemoveSession(id: string): void {
   sessions.remove(id);
+  streamBuffer.value = '';
+  streamCitations.value = [];
+  errorMsg.value = '';
 }
 
 function onClearAll(): void {
   sessions.clearAll();
+  streamBuffer.value = '';
+  streamCitations.value = [];
+  errorMsg.value = '';
 }
 
 function onRenameSession(s: CopilotSession): void {
@@ -1636,6 +1715,57 @@ onMounted(() => {
 }
 .copilot-dock__markdown :deep(a:hover) {
   text-decoration: underline;
+}
+.copilot-dock__citations {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(13, 59, 102, 0.08);
+}
+.copilot-dock__citations-title {
+  margin-bottom: 4px;
+  color: var(--sndb-ink-soft, #678);
+  font-size: 11px;
+  font-weight: 600;
+}
+.copilot-dock__citation {
+  padding: 6px 8px;
+  border: 1px solid rgba(13, 59, 102, 0.08);
+  border-radius: 6px;
+  background: rgba(13, 59, 102, 0.035);
+}
+.copilot-dock__citation + .copilot-dock__citation {
+  margin-top: 6px;
+}
+.copilot-dock__citation-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--sndb-ink, #1f2937);
+  font-size: 12px;
+  font-weight: 600;
+}
+.copilot-dock__citation-id {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(44, 123, 229, 0.12);
+  color: #2c7be5;
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+  font-size: 11px;
+}
+.copilot-dock__citation-source {
+  margin-top: 2px;
+  color: var(--sndb-ink-soft, #678);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.copilot-dock__citation-snippet {
+  margin-top: 4px;
+  color: var(--sndb-ink, #1f2937);
+  font-size: 12px;
+  line-height: 1.45;
 }
 .copilot-dock__error {
   color: #d03050;

@@ -1,8 +1,8 @@
 -- ============================================================
 --  SonnetDB 功能演示脚本
---  涵盖：建库、用户、权限、建表、写入、查询、聚合、
---        GROUP BY 时间桶、窗口函数、PID 控制、
---        预测/异常/变点检测、向量检索、地理空间查询、元数据查询
+--  涵盖：建库、用户、权限、建表、写入、查询、聚合、GROUP BY 时间桶、
+--        HNSW 向量索引、窗口函数（含空值处理）、PID 控制、
+--        预测/异常/变点检测、向量检索（函数+运算符）、地理空间查询、元数据查询
 --
 --  执行方式（控制面语句需 superuser，数据面语句需对应数据库权限）：
 --    sndb remote --url http://127.0.0.1:5080 --token <admin-token> \
@@ -102,6 +102,15 @@ SHOW TABLES;
 DESCRIBE MEASUREMENT cpu;
 DESCRIBE mem;
 DESC reactor;
+
+-- 2-8  创建带 HNSW 向量索引的表（m=16 邻居数，ef=200 搜索广度）
+CREATE MEASUREMENT doc_indexed (
+    source    TAG,
+    title     FIELD STRING,
+    embedding FIELD VECTOR(4) WITH INDEX hnsw(m=16, ef=200)
+);
+
+DESCRIBE MEASUREMENT doc_indexed;
 
 
 -- ============================================================
@@ -244,6 +253,18 @@ OFFSET 5 ROWS FETCH NEXT 5 ROWS ONLY;
 -- 4-6  多 tag 过滤（server-02）
 SELECT * FROM cpu WHERE host = 'server-02' AND region = 'cn-sh';
 
+-- 4-7  投影中直接算术表达式
+SELECT time, usage, usage * 100 AS usage_pct, cores + 2 AS adjusted_cores
+FROM cpu WHERE host = 'server-01';
+
+-- 4-8  一元负号表达式
+SELECT time, -usage AS neg_usage
+FROM cpu WHERE host = 'server-01';
+
+-- 4-9  标量函数嵌套调用
+SELECT time, round(abs(usage - 0.5), 2) AS rounded_deviation
+FROM cpu WHERE host = 'server-01';
+
 
 -- ============================================================
 -- 第五部分：聚合查询
@@ -311,6 +332,12 @@ FROM mem
 WHERE host = 'server-01'
 GROUP BY time(1m);
 
+-- 5-8  向量质心聚合（centroid，各维度算术平均）
+SELECT centroid(embedding) AS dim_avg FROM documents;
+
+-- 5-9  T-Digest 内部状态（返回 JSON：压缩参数、质心列表、计数）
+SELECT tdigest_agg(usage) AS tdigest_state FROM cpu WHERE host = 'server-01';
+
 
 -- ============================================================
 -- 第六部分：窗口函数（行级，不改变行数）
@@ -358,6 +385,34 @@ WHERE host = 'server-01';
 SELECT time, state_duration(throttled) AS duration_ms
 FROM cpu
 WHERE host = 'server-01';
+
+-- 6-8  计时器型变化率（rate 与 irate，同 non_negative_derivative 和 derivative）
+SELECT time, rate(usage) AS rate_sec, irate(usage) AS irate_sec
+FROM cpu WHERE host = 'server-01';
+
+-- 6-9  计数器增量（increase = max(0, diff)，抑制计数器回零毛刺）
+SELECT time, increase(usage) AS incr
+FROM cpu WHERE host = 'server-01';
+
+-- 6-10 梯形累积积分（integral，默认时间单位 1 秒）
+SELECT time, integral(usage) AS integral_area
+FROM cpu WHERE host = 'server-01';
+
+-- 6-11 双指数平滑（Holt 加法，alpha=0.5 水平平滑，beta=0.1 趋势平滑）
+SELECT time, holt_winters(temperature, 0.5, 0.1) AS smoothed
+FROM reactor WHERE device = 'r1';
+
+-- 6-12 空值线性插值（interpolate，相邻非空值间线性填充）
+SELECT time, interpolate(usage) AS interpolated
+FROM cpu WHERE host = 'server-01';
+
+-- 6-13 空值常量填充（fill，将 NULL 替换为指定常量值）
+SELECT time, fill(usage, -1) AS filled
+FROM cpu WHERE host = 'server-01';
+
+-- 6-14 最后观测值前向填充（locf，NULL 处复用上一个非空值）
+SELECT time, locf(usage) AS locf_filled
+FROM cpu WHERE host = 'server-01';
 
 
 -- ============================================================
@@ -497,6 +552,16 @@ SELECT
     vector_norm(embedding)                                AS norm
 FROM documents
 WHERE source = 'wiki';
+
+-- 9-7  pgvector 兼容运算符语法（<=> 余弦距离, <-> L2 距离, <#> 负内积）
+SELECT embedding <=> [0.10, 0.20, 0.30, 0.40] AS cos_dist
+FROM documents WHERE source = 'wiki';
+
+SELECT embedding <-> [0.10, 0.20, 0.30, 0.40] AS l2_dist
+FROM documents WHERE source = 'wiki';
+
+SELECT embedding <#> [0.10, 0.20, 0.30, 0.40] AS neg_inner_product
+FROM documents WHERE source = 'wiki';
 
 
 -- ============================================================

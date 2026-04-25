@@ -1,6 +1,7 @@
 export interface CopilotMessage {
   role: string;
   content: string;
+  citations?: CopilotCitation[];
 }
 
 export interface CopilotKnowledgeStatus {
