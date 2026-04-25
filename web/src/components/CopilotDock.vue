@@ -16,9 +16,7 @@
       <div class="copilot-dock__title">
         <span class="copilot-dock__avatar">AI</span>
         <strong>Copilot</strong>
-        <n-tag size="tiny" :type="status?.embeddingFallback ? 'warning' : 'success'">
-          {{ status ? `${status.indexedFiles} 文档 · ${status.indexedChunks} 块` : '加载中…' }}
-        </n-tag>
+        <n-tag v-if="pageContext" size="tiny" type="info">{{ pageContext.routeLabel }}</n-tag>
       </div>
       <n-space size="small" :wrap="false">
         <n-popover trigger="click" placement="bottom-end" :width="300" :show-arrow="false" :to="dockEl ?? 'body'">
@@ -62,59 +60,68 @@
             </ul>
           </div>
         </n-popover>
-        <n-button text size="tiny" @click="reloadStatus" title="刷新知识库状态">↻</n-button>
+        <n-popover trigger="click" placement="bottom-end" :width="320" :show-arrow="false" :to="dockEl ?? 'body'">
+          <template #trigger>
+            <n-button text size="tiny" title="Copilot 选项">选项</n-button>
+          </template>
+          <div class="copilot-dock__options" @mousedown.stop>
+            <div class="copilot-dock__options-block">
+              <n-text strong style="font-size: 12px">模型</n-text>
+              <n-select
+                size="small"
+                v-model:value="selectedModel"
+                :options="modelOptions"
+                placeholder="使用服务端默认模型"
+                clearable
+                filterable
+                tag
+                :show="modelOptions.length > 0 || undefined"
+                :title="modelDefault ? `服务端默认：${modelDefault}` : '未配置默认模型'"
+                :to="dockEl ?? 'body'"
+              >
+                <template #empty>
+                  {{ modelDefault ? `默认：${modelDefault}` : '可输入模型名' }}
+                </template>
+              </n-select>
+            </div>
+            <div class="copilot-dock__options-block">
+              <div class="copilot-dock__options-head">
+                <n-text strong style="font-size: 12px">知识库</n-text>
+                <n-space size="small">
+                  <n-button size="tiny" quaternary @click="reloadStatus">刷新</n-button>
+                  <n-button
+                    v-if="auth.isSuperuser"
+                    size="tiny"
+                    quaternary
+                    :loading="reindexing"
+                    @click="onReindex"
+                  >重建</n-button>
+                </n-space>
+              </div>
+              <template v-if="status">
+                <div class="copilot-dock__options-row">
+                  <span>{{ status.embeddingProvider }}{{ status.embeddingFallback ? ' (降级)' : '' }}</span>
+                  <span>{{ status.vectorDimension }}D</span>
+                </div>
+                <div class="copilot-dock__options-row">
+                  <span>{{ status.indexedFiles }} 文档</span>
+                  <span>{{ status.indexedChunks }} 块</span>
+                  <span>{{ status.skillCount }} 技能</span>
+                </div>
+                <div class="copilot-dock__options-muted">
+                  最近摄入：{{ status.lastIngestedUtc ? formatTime(status.lastIngestedUtc) : '从未' }}
+                </div>
+              </template>
+              <n-text v-else depth="3" style="font-size: 12px">打开后可刷新查看知识库状态。</n-text>
+            </div>
+          </div>
+        </n-popover>
         <n-button text size="tiny" @click="fullscreen = !fullscreen" :title="fullscreen ? '还原' : '全屏'">{{ fullscreen ? '⊟' : '⊕' }}</n-button>
         <n-button text size="tiny" @click="close" title="收起到角标">×</n-button>
       </n-space>
     </header>
 
-    <!-- 知识库状态卡片 -->
-    <section v-if="status" class="copilot-dock__kb">
-      <div class="copilot-dock__kb-row">
-        <span class="copilot-dock__kb-label">Embedding</span>
-        <n-tag size="tiny" :type="status.embeddingFallback ? 'warning' : 'info'">
-          {{ status.embeddingProvider }}{{ status.embeddingFallback ? ' (降级)' : '' }} · {{ status.vectorDimension }}D
-        </n-tag>
-      </div>
-      <div class="copilot-dock__kb-row">
-        <span class="copilot-dock__kb-label">最近摄入</span>
-        <span class="copilot-dock__kb-value">{{ status.lastIngestedUtc ? formatTime(status.lastIngestedUtc) : '从未' }}</span>
-      </div>
-      <div class="copilot-dock__kb-row">
-        <span class="copilot-dock__kb-label">技能</span>
-        <span class="copilot-dock__kb-value">{{ status.skillCount }} 条</span>
-        <n-button
-          v-if="auth.isSuperuser"
-          size="tiny"
-          quaternary
-          :loading="reindexing"
-          style="margin-left: auto"
-          @click="onReindex"
-        >立即重建</n-button>
-      </div>
-    </section>
-
     <!-- 数据库选择 已移除：数据库由 AI 根据上下文自动推断，无需手动选择 -->
-
-    <!-- M8: 模型选择器 -->
-    <section class="copilot-dock__model">
-      <n-select
-        size="small"
-        v-model:value="selectedModel"
-        :options="modelOptions"
-        placeholder="使用服务端默认模型"
-        clearable
-        filterable
-        tag
-        :show="modelOptions.length > 0 || undefined"
-        :title="modelDefault ? `服务端默认：${modelDefault}` : '未配置默认模型'"
-        :to="dockEl ?? 'body'"
-      >
-        <template #empty>
-          {{ modelDefault ? `默认：${modelDefault}` : '可输入模型名（如 gpt-4o-mini、qwen2.5-coder-32b）' }}
-        </template>
-      </n-select>
-    </section>
 
     <!-- M7: 权限模式选择 -->
     <section class="copilot-dock__perm">
@@ -127,7 +134,7 @@
           style="cursor: pointer"
           title="点击切换为读写模式"
           @click="permConfirmVisible = !permConfirmVisible"
-        >🔒 只读模式</n-tag>
+        >只读模式</n-tag>
         <!-- 内联确认条：直接渲染在 dock 内，不 teleport，不会被遮挡 -->
         <transition name="perm-confirm">
           <div v-if="permConfirmVisible" class="copilot-dock__perm-confirm">
@@ -155,7 +162,7 @@
         style="cursor: pointer"
         title="点击 × 切换回只读"
         @close="permissionMode = 'read-only'"
-      >⚠️ 读写模式</n-tag>
+      >读写模式</n-tag>
       <n-text depth="3" style="font-size: 11px; margin-left: 6px">
         {{ permissionMode === 'read-only' ? 'Copilot 只能查询' : '可执行写入（仍受凭据权限约束）' }}
       </n-text>
@@ -170,7 +177,7 @@
         closable
         @close="contextEnabled = false"
       >
-        📍 {{ pageContextSummary }}
+        {{ pageContextSummary }}
       </n-tag>
       <n-button
         v-if="!contextEnabled"
@@ -180,6 +187,22 @@
         style="margin-left: 6px"
         @click="contextEnabled = true"
       >启用</n-button>
+    </section>
+
+    <!-- 页面感知快捷能力 -->
+    <section v-if="assistantActions.length > 0" class="copilot-dock__actions">
+      <n-button
+        v-for="action in assistantActions"
+        :key="action.key"
+        size="tiny"
+        secondary
+        :type="action.type"
+        :disabled="running || action.disabled"
+        :title="action.disabledReason || action.title"
+        @click="onAssistantAction(action)"
+      >
+        {{ action.title }}
+      </n-button>
     </section>
 
     <!-- 消息流 -->
@@ -413,6 +436,205 @@ const pageContextSummary = computed<string>(() => {
   }
   return parts.join(' · ');
 });
+
+type AssistantActionType = 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error';
+
+interface AssistantAction {
+  key: string;
+  title: string;
+  prompt: () => string;
+  autoSend?: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
+  type?: AssistantActionType;
+}
+
+function sqlBlockForPrompt(sqlText: string): string {
+  return [
+    '```sql',
+    sqlText,
+    '```',
+  ].join('\n');
+}
+
+function currentDbLine(): string {
+  const db = effectiveDb.value || pageContext.value?.sqlDb || '';
+  return db ? `当前数据库：${db}\n` : '';
+}
+
+function sqlActionPrompt(kind: 'fix' | 'explain' | 'optimize', sqlText: string): string {
+  const prefix = currentDbLine();
+  const task = kind === 'fix'
+    ? '请修复下面这条 SonnetDB SQL。保留原意，指出问题，并给出一条可直接执行的修正版。'
+    : kind === 'explain'
+      ? '请解释下面这条 SonnetDB SQL 的含义、会访问哪些 measurement/字段，以及结果大概是什么形态。'
+      : '请优化下面这条 SonnetDB SQL。优先考虑 SonnetDB 方言、time 范围过滤、measurement/schema 约束和可读性。';
+  return `${prefix}${task}\n\n${sqlBlockForPrompt(sqlText)}`;
+}
+
+const assistantActions = computed<AssistantAction[]>(() => {
+  const ctx = pageContext.value;
+  if (!ctx) return [];
+
+  const sqlText = ctx.sql.trim();
+  const needsSql = !sqlText;
+  const noSqlReason = '请先在 SQL Console 中输入一条 SQL。';
+
+  if (ctx.routeKey === 'sql') {
+    return [
+      {
+        key: 'sql-generate',
+        title: '生成 SQL',
+        type: 'primary',
+        prompt: () => `${currentDbLine()}请根据当前数据库 schema，帮我生成一条 SonnetDB SQL。\n需求：`,
+      },
+      {
+        key: 'sql-fix',
+        title: '修复 SQL',
+        type: 'warning',
+        disabled: needsSql,
+        disabledReason: noSqlReason,
+        autoSend: true,
+        prompt: () => sqlActionPrompt('fix', sqlText),
+      },
+      {
+        key: 'sql-explain',
+        title: '解释 SQL',
+        type: 'info',
+        disabled: needsSql,
+        disabledReason: noSqlReason,
+        autoSend: true,
+        prompt: () => sqlActionPrompt('explain', sqlText),
+      },
+      {
+        key: 'sql-optimize',
+        title: '优化 SQL',
+        type: 'success',
+        disabled: needsSql,
+        disabledReason: noSqlReason,
+        autoSend: true,
+        prompt: () => sqlActionPrompt('optimize', sqlText),
+      },
+    ];
+  }
+
+  if (ctx.routeKey === 'databases') {
+    return [
+      {
+        key: 'db-overview',
+        title: '梳理结构',
+        type: 'info',
+        autoSend: true,
+        prompt: () => `${currentDbLine()}请帮我梳理当前可见数据库和 measurement 的结构，并指出适合从哪里开始查询。`,
+      },
+      {
+        key: 'db-design',
+        title: '设计建表',
+        type: 'primary',
+        prompt: () => '请帮我设计一个 SonnetDB measurement。\n业务场景：',
+      },
+    ];
+  }
+
+  if (ctx.routeKey === 'events') {
+    return [
+      {
+        key: 'events-explain',
+        title: '解释事件',
+        type: 'info',
+        autoSend: true,
+        prompt: () => '请根据我当前在事件流页面的上下文，解释最近事件可能代表什么。若信息不足，请告诉我该看哪些字段。',
+      },
+      {
+        key: 'events-troubleshoot',
+        title: '排查异常',
+        type: 'warning',
+        autoSend: true,
+        prompt: () => '请帮我按 SonnetDB 的写入、查询、权限、Copilot 四类方向排查事件流里的异常线索。',
+      },
+    ];
+  }
+
+  if (ctx.routeKey === 'users' || ctx.routeKey === 'grants' || ctx.routeKey === 'tokens') {
+    return [
+      {
+        key: 'auth-check',
+        title: '权限检查',
+        type: 'info',
+        autoSend: true,
+        prompt: () => '请帮我检查当前权限配置思路，说明用户、Token、GRANT 之间该如何配合。',
+      },
+      {
+        key: 'auth-sql',
+        title: '授权 SQL',
+        type: 'primary',
+        prompt: () => '请帮我生成 SonnetDB 控制面授权 SQL。\n目标用户/Token：\n目标数据库：\n权限：',
+      },
+    ];
+  }
+
+  if (ctx.routeKey === 'ai-settings') {
+    return [
+      {
+        key: 'ai-config',
+        title: '检查配置',
+        type: 'info',
+        autoSend: true,
+        prompt: () => '请帮我检查 Copilot 配置是否完整，并说明 API Key、模型、知识库索引分别影响什么。',
+      },
+      {
+        key: 'kb-explain',
+        title: '知识库说明',
+        type: 'primary',
+        autoSend: true,
+        prompt: () => '请解释 SonnetDB Copilot 本地知识库的作用，以及什么时候需要重建索引。',
+      },
+    ];
+  }
+
+  if (ctx.routeKey === 'dashboard') {
+    return [
+      {
+        key: 'dashboard-summary',
+        title: '总结状态',
+        type: 'info',
+        autoSend: true,
+        prompt: () => '请帮我从当前概览页面出发，总结 SonnetDB 实例应重点关注的健康状态指标。',
+      },
+      {
+        key: 'dashboard-perf',
+        title: '性能排查',
+        type: 'warning',
+        autoSend: true,
+        prompt: () => '请给我一份 SonnetDB 性能排查清单，优先覆盖写入吞吐、查询延迟、WAL、Segment 和 Compaction。',
+      },
+    ];
+  }
+
+  return [
+    {
+      key: 'general-help',
+      title: '使用建议',
+      type: 'info',
+      autoSend: true,
+      prompt: () => `我当前在「${ctx.routeLabel}」页面。请告诉我这个页面最常用的操作和下一步建议。`,
+    },
+    {
+      key: 'general-sql',
+      title: '写查询',
+      type: 'primary',
+      prompt: () => `${currentDbLine()}请帮我写一条 SonnetDB 查询。\n需求：`,
+    },
+  ];
+});
+
+function onAssistantAction(action: AssistantAction): void {
+  if (action.disabled || running.value) return;
+  prompt.value = action.prompt();
+  if (action.autoSend) {
+    void nextTick(() => send());
+  }
+}
 
 watch(
   () => [pageContext.value?.routeKey ?? '', pageContext.value?.sqlDb ?? ''] as const,
@@ -1073,6 +1295,7 @@ watch(() => auth.isAuthenticated, (val) => {
   if (val && visible.value) {
     void reloadStatus();
     void reloadDbs();
+    void loadModels();
   }
 });
 
@@ -1153,26 +1376,32 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
 }
-.copilot-dock__kb {
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+.copilot-dock__options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   font-size: 12px;
-  background: rgba(13, 59, 102, 0.025);
 }
-.copilot-dock__kb-row {
+.copilot-dock__options-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.copilot-dock__options-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  margin: 2px 0;
 }
-.copilot-dock__kb-label { color: var(--sndb-ink-soft, #678); min-width: 56px; }
-.copilot-dock__kb-value { color: var(--sndb-ink-strong, #111); }
-
-.copilot-dock__db {
-  padding: 8px 12px 0;
+.copilot-dock__options-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--sndb-ink, #1f2937);
 }
-.copilot-dock__model {
-  padding: 6px 12px 0;
+.copilot-dock__options-muted {
+  color: var(--sndb-ink-soft, #678);
+  font-size: 11px;
 }
 .copilot-dock__perm {
   padding: 6px 12px 0;
@@ -1209,6 +1438,13 @@ onMounted(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
+}
+.copilot-dock__actions {
+  padding: 6px 12px 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .copilot-dock__messages {
   flex: 1;
