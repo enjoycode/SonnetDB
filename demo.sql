@@ -2,7 +2,7 @@
 --  SonnetDB 功能演示脚本
 --  涵盖：建库、用户、权限、建表、写入、查询、聚合、
 --        GROUP BY 时间桶、窗口函数、PID 控制、
---        预测/异常/变点检测、向量检索、元数据查询
+--        预测/异常/变点检测、向量检索、地理空间查询、元数据查询
 --
 --  执行方式（控制面语句需 superuser，数据面语句需对应数据库权限）：
 --    sndb remote --url http://127.0.0.1:5080 --token <admin-token> \
@@ -500,21 +500,125 @@ WHERE source = 'wiki';
 
 
 -- ============================================================
--- 第十部分：元数据查询
+-- 第十部分：地理空间查询（GEOPOINT）
+-- 支持 GEOPOINT 数据类型、POINT(lat, lon) 字面量、
+-- 球面距离/方位/范围判断、空间索引（GeoHash32）过滤、
+-- 轨迹聚合（长度、质心、包络矩形、速度分位数）
 -- ============================================================
 
--- 10-1  列出所有 measurement
+-- 10-1  创建含 GEOPOINT 字段的车辆轨迹表
+CREATE MEASUREMENT vehicle (
+    device   TAG,
+    position FIELD GEOPOINT,
+    speed    FIELD FLOAT
+);
+
+-- 10-2  写入车辆位置轨迹数据（使用 POINT(lat, lon) 构造地理坐标点）
+--       car-1 途经：北京(39.9°N, 116.4°E) → 郑州(34.75°N, 113.65°E) →
+--       上海(31.23°N, 121.47°E) → 广州(23.13°N, 113.26°E) → 深圳(22.54°N, 114.06°E)
+INSERT INTO vehicle (time, device, position, speed) VALUES
+    (1713657600000, 'car-1', POINT(39.9042, 116.4074), 0),
+    (1713657660000, 'car-1', POINT(34.7500, 113.6500), 60),
+    (1713657720000, 'car-1', POINT(31.2304, 121.4737), 80),
+    (1713657780000, 'car-1', POINT(23.1291, 113.2644), 90),
+    (1713657840000, 'car-1', POINT(22.5431, 114.0579), 0);
+
+-- 10-3  提取经纬度标量（lat / lon 函数将 GEOPOINT 拆为两个 FLOAT）
+SELECT time, device,
+       lat(position) AS latitude,
+       lon(position) AS longitude
+FROM vehicle WHERE device = 'car-1';
+
+-- 10-4  球面距离与方位角（geo_distance 返回米，geo_bearing 返回度）
+SELECT
+    geo_distance(
+        POINT(39.9042, 116.4074),
+        POINT(31.2304, 121.4737)
+    ) AS beijing_to_shanghai_m,
+    geo_bearing(
+        POINT(39.9042, 116.4074),
+        POINT(31.2304, 121.4737)
+    ) AS bearing_deg;
+
+-- 10-5  ST_ 兼容别名（ST_Distance / ST_Within / ST_DWithin，方便从 PostGIS 迁移）
+SELECT
+    ST_Distance(position, POINT(39.9042, 116.4074)) AS dist_from_beijing_m,
+    ST_Within(position, 31.2304, 121.4737, 50000)   AS near_shanghai_50km,
+    ST_DWithin(position, 31.2304, 121.4737, 50000)  AS dwithin_shanghai_50km
+FROM vehicle WHERE device = 'car-1';
+
+-- 10-6  瞬时速度估算（geo_speed 根据前后两点经纬度差 ÷ 时间差算出 m/s）
+SELECT time, device,
+       geo_speed(position, time) AS speed_ms
+FROM vehicle WHERE device = 'car-1';
+
+-- 10-7  geo_within 空间范围过滤 —— 查找上海中心 50 km 半径内的轨迹点
+SELECT time, device,
+       lat(position) AS lat,
+       lon(position) AS lon
+FROM vehicle
+WHERE geo_within(position, 31.2304, 121.4737, 50000);
+
+-- 10-8  geo_bbox 矩形范围过滤 —— 查找华东区域（lat∈[30,35], lon∈[113,122]）内的轨迹点
+SELECT time, device,
+       lat(position) AS lat,
+       lon(position) AS lon
+FROM vehicle
+WHERE geo_bbox(position, 30.0, 113.0, 35.0, 122.0);
+
+-- 10-9  轨迹聚合 —— 整条轨迹累积球面距离（米）
+SELECT device,
+       trajectory_length(position) AS total_length_m
+FROM vehicle WHERE device = 'car-1';
+
+-- 10-10 轨迹聚合 —— 轨迹质心（返回 GEOPOINT，各点经纬度算术平均）
+SELECT device,
+       trajectory_centroid(position) AS centroid
+FROM vehicle WHERE device = 'car-1';
+
+-- 10-11 轨迹聚合 —— 轨迹包络矩形（返回 JSON：min_lat/min_lon/max_lat/max_lon）
+SELECT device,
+       trajectory_bbox(position) AS bbox_json
+FROM vehicle WHERE device = 'car-1';
+
+-- 10-12 轨迹速度统计 —— 最大 / 平均 / P95 速度（m/s）
+SELECT
+    trajectory_speed_max(position, time) AS speed_max_ms,
+    trajectory_speed_avg(position, time) AS speed_avg_ms,
+    trajectory_speed_p95(position, time) AS speed_p95_ms
+FROM vehicle WHERE device = 'car-1';
+
+-- 10-13 按时间桶分组轨迹聚合（每 2 分钟一段子轨迹）
+SELECT
+    trajectory_length(position)      AS seg_length_m,
+    trajectory_speed_avg(position, time) AS seg_avg_speed_ms
+FROM vehicle
+WHERE device = 'car-1'
+GROUP BY time(2m);
+
+-- 10-14 空间过滤 + 轨迹聚合联用：只统计华东区域内的轨迹长度
+SELECT trajectory_length(position) AS length_in_east_china_m
+FROM vehicle
+WHERE geo_bbox(position, 30.0, 113.0, 35.0, 122.0);
+
+
+-- ============================================================
+-- 第十一部分：元数据查询
+-- ============================================================
+
+-- 11-1  列出所有 measurement
 SHOW MEASUREMENTS;
 SHOW TABLES;
 
--- 10-2  描述表结构
+-- 11-2  描述表结构
 DESCRIBE MEASUREMENT cpu;
 DESCRIBE MEASUREMENT mem;
 DESCRIBE MEASUREMENT reactor;
 DESCRIBE MEASUREMENT signal;
 DESCRIBE MEASUREMENT documents;
+DESCRIBE MEASUREMENT vehicle;
 
--- 10-3  查看用户与授权（控制面）
+-- 11-3  查看用户与授权（控制面）
 SHOW USERS;
 SHOW GRANTS;
 SHOW GRANTS FOR writer;
@@ -522,43 +626,43 @@ SHOW TOKENS FOR writer;
 
 
 -- ============================================================
--- 第十一部分：删除演示（DELETE）
+-- 第十二部分：删除演示（DELETE）
 -- ============================================================
 
--- 11-1  按时间范围删除（tombstone 机制，不原地改写）
+-- 12-1  按时间范围删除（tombstone 机制，不原地改写）
 DELETE FROM cpu
 WHERE host = 'server-01'
   AND time >= 1713658080000
   AND time <= 1713658140000;
 
--- 11-2  验证删除效果
+-- 12-2  验证删除效果
 SELECT * FROM cpu WHERE host = 'server-01';
 
--- 11-3  按 tag 删除整个序列
+-- 12-3  按 tag 删除整个序列
 DELETE FROM signal WHERE source = 's-1';
 
--- 11-4  验证删除效果
+-- 12-4  验证删除效果
 SELECT * FROM signal WHERE source = 's-1';
 
 
 -- ============================================================
--- 第十二部分：清理（可选，演示结束后执行）
+-- 第十三部分：清理（可选，演示结束后执行）
 -- ============================================================
 
--- 12-1  吊销 writer 的 Token（需先从 SHOW TOKENS FOR writer 获取 token_id）
+-- 13-1  吊销 writer 的 Token（需先从 SHOW TOKENS FOR writer 获取 token_id）
 -- REVOKE TOKEN 'tok_xxxxxx';
 
--- 12-2  修改用户密码
+-- 13-2  修改用户密码
 ALTER USER viewer WITH PASSWORD 'newviewer999';
 
--- 12-3  撤销授权
+-- 13-3  撤销授权
 REVOKE ON DATABASE demo FROM viewer;
 
--- 12-4  删除用户
+-- 13-4  删除用户
 DROP USER viewer;
 DROP USER writer;
 
--- 12-5  删除数据库（不可逆，谨慎执行）
+-- 13-5  删除数据库（不可逆，谨慎执行）
 -- DROP DATABASE demo;
 
 

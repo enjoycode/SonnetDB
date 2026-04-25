@@ -224,11 +224,14 @@
       </div>
       <div v-for="(msg, idx) in messages" :key="idx" class="copilot-dock__msg" :class="`copilot-dock__msg--${msg.role}`">
         <div class="copilot-dock__msg-role">{{ msg.role === 'user' ? '我' : 'Copilot' }}</div>
-        <div class="copilot-dock__msg-body">{{ msg.content }}</div>
+        <div class="copilot-dock__msg-body copilot-dock__markdown" v-html="renderMessageMarkdown(msg.content)" />
       </div>
       <div v-if="streamBuffer" class="copilot-dock__msg copilot-dock__msg--assistant">
         <div class="copilot-dock__msg-role">Copilot</div>
-        <div class="copilot-dock__msg-body">{{ streamBuffer }}<span class="copilot-dock__caret" /></div>
+        <div class="copilot-dock__msg-body">
+          <div class="copilot-dock__markdown" v-html="renderMessageMarkdown(streamBuffer)" />
+          <span class="copilot-dock__caret" />
+        </div>
       </div>
       <div v-if="errorMsg" class="copilot-dock__error">{{ errorMsg }}</div>
     </section>
@@ -259,6 +262,7 @@
 <script setup lang="ts">
 import { computed, h, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import { marked, Renderer, type Tokens } from 'marked';
 import {
   NButton, NInput, NPopconfirm, NPopover, NSelect, NSpace, NTag, NText,
   type SelectOption, useDialog, useMessage,
@@ -366,6 +370,61 @@ const modelOptions = computed<SelectOption[]>(() => {
   if (selectedModel.value) push(selectedModel.value, selectedModel.value);
   return out;
 });
+
+const markdownRenderer = new Renderer();
+markdownRenderer.html = ({ text }: Tokens.HTML | Tokens.Tag) => escapeHtml(text);
+markdownRenderer.link = function ({ href, title, tokens }: Tokens.Link): string {
+  const safeHref = sanitizeMarkdownHref(href);
+  const label = this.parser.parseInline(tokens);
+  if (!safeHref) return label;
+
+  const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+  return `<a href="${escapeHtml(safeHref)}"${titleAttr} target="_blank" rel="noopener noreferrer">${label}</a>`;
+};
+markdownRenderer.image = ({ text }: Tokens.Image): string => escapeHtml(text);
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[ch] ?? ch));
+}
+
+function sanitizeMarkdownHref(href: string): string {
+  const trimmed = href.trim();
+  if (/^(https?:|mailto:)/i.test(trimmed) || trimmed.startsWith('/') || trimmed.startsWith('#')) {
+    return trimmed;
+  }
+  return '';
+}
+
+function stripCitationMarkers(markdown: string): string {
+  const fence = /```[\s\S]*?```/g;
+  let lastIndex = 0;
+  let output = '';
+  let match: RegExpExecArray | null;
+
+  while ((match = fence.exec(markdown)) !== null) {
+    output += markdown.slice(lastIndex, match.index).replace(/\s*\[C\d+\]/g, '');
+    output += match[0];
+    lastIndex = match.index + match[0].length;
+  }
+
+  output += markdown.slice(lastIndex).replace(/\s*\[C\d+\]/g, '');
+  return output.trim();
+}
+
+function renderMessageMarkdown(content: string): string {
+  const normalized = stripCitationMarkers(content);
+  return marked.parse(normalized, {
+    async: false,
+    breaks: true,
+    renderer: markdownRenderer,
+  }) as string;
+}
 async function loadModels() {
   if (!auth.state?.token) return;
   try {
@@ -1504,11 +1563,79 @@ onMounted(() => {
 }
 .copilot-dock__msg { margin: 8px 0; }
 .copilot-dock__msg-role { font-size: 11px; color: var(--sndb-ink-soft, #678); margin-bottom: 2px; }
-.copilot-dock__msg-body { white-space: pre-wrap; word-break: break-word; }
+.copilot-dock__msg-body { word-break: break-word; }
 .copilot-dock__msg--user .copilot-dock__msg-body {
   background: rgba(44, 123, 229, 0.08);
   padding: 6px 8px;
   border-radius: 6px;
+}
+.copilot-dock__markdown {
+  line-height: 1.55;
+}
+.copilot-dock__markdown :deep(p) {
+  margin: 0 0 6px;
+}
+.copilot-dock__markdown :deep(p:last-child),
+.copilot-dock__markdown :deep(pre:last-child),
+.copilot-dock__markdown :deep(ul:last-child),
+.copilot-dock__markdown :deep(ol:last-child) {
+  margin-bottom: 0;
+}
+.copilot-dock__markdown :deep(pre) {
+  margin: 6px 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  background: rgba(13, 59, 102, 0.08);
+  border: 1px solid rgba(13, 59, 102, 0.08);
+  border-radius: 6px;
+  white-space: pre;
+}
+.copilot-dock__markdown :deep(code) {
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+  font-size: 12px;
+  background: rgba(13, 59, 102, 0.08);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+.copilot-dock__markdown :deep(pre code) {
+  display: block;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+}
+.copilot-dock__markdown :deep(ul),
+.copilot-dock__markdown :deep(ol) {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+.copilot-dock__markdown :deep(blockquote) {
+  margin: 6px 0;
+  padding-left: 10px;
+  color: var(--sndb-ink-soft, #678);
+  border-left: 3px solid rgba(13, 59, 102, 0.16);
+}
+.copilot-dock__markdown :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.copilot-dock__markdown :deep(th),
+.copilot-dock__markdown :deep(td) {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 4px 6px;
+  text-align: left;
+}
+.copilot-dock__markdown :deep(th) {
+  background: rgba(13, 59, 102, 0.06);
+  font-weight: 600;
+}
+.copilot-dock__markdown :deep(a) {
+  color: #2c7be5;
+  text-decoration: none;
+}
+.copilot-dock__markdown :deep(a:hover) {
+  text-decoration: underline;
 }
 .copilot-dock__error {
   color: #d03050;

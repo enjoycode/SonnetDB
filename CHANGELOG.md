@@ -20,6 +20,8 @@
 - 新增 `docs/sql-cookbook.md`，把 `demo.sql` 中高频、当前真实支持的 `CREATE MEASUREMENT`、`INSERT`、`SELECT`、`GROUP BY time(...)`、窗口函数、PID、预测、向量检索、元数据与 `DELETE` 场景整理成可直接复制的 cookbook，并在 `docs/index.md` 与 `docs/sql-reference.md` 中加入入口。
 
 ### Fixed
+- **CopilotDock 回答改为 Markdown 渲染并隐藏裸 citation 标记**：聊天浮窗现在会把 Copilot 回复按 Markdown 渲染，代码块、列表、表格与行内代码可正常排版；渲染时转义模型返回的原生 HTML，并隐藏回答末尾类似 `[C11][C12]` 的内部引用编号，避免用户误以为是 SQL 或异常内容。
+- **Copilot 错误提示不再暴露原始 JSON**：Web Admin 的 Copilot API 客户端现在会解析服务端 `{ error, message }` 与流式 provider 错误，把 `copilot_not_ready / chat.endpoint_invalid` 等内部代码映射成可操作的中文提示，引导用户检查「Copilot 设置」中的服务地址、API Key、模型或 embedding 配置，避免直接显示 `Copilot 请求失败 503: {"error":...}`。
 - 统一 Copilot skills、Web starters 与 SQL 编辑器方言文案中的 SonnetDB SQL 示例口径：聚合示例统一回到当前真实支持的 `GROUP BY time(...)`，修正 `pid_tune` / `pid_compute`、`time_bucket(...)`、`LAG/LEAD OVER (...)` 等会误导当前版本能力边界的过时或未公开支持写法。
 - **Token / API Key 管理现在支持带连字符的用户名**：控制面 SQL parser 为 `SHOW TOKENS FOR`、`ISSUE TOKEN FOR`、`SHOW GRANTS FOR` 等语句补齐 quoted username 语法，`TokensView.vue` 与 `UsersView.vue` 在回填已有用户名时统一走字符串 quoting，修复用户名如 `ops-admin` 时签发 token 报 `期望标识符（位置 16）`，并补 parser 与控制面集成回归测试。
 - **Copilot 现在能直接理解“新建仓库并建表”并在无 db 场景继续工作**：新增 `CopilotProvisioning` 结构化意图抽取，把“建数据库 + 建 measurement + 从描述中抽字段”从 prompt 规则落到后端代码；`draft_sql` / `execute_sql` 现已支持 `CREATE DATABASE`，`/v1/copilot/chat` 对 provisioning 请求放开 `db` 必填限制，普通问题仍保持原有校验；Web 端 `CopilotDock` 同步支持在明显建库请求下绕过“先手工创建数据库”弹窗，并把工具产出的 SQL 自动绑定到目标库。
