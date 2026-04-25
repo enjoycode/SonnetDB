@@ -4,7 +4,7 @@ using SonnetDB.Buffers;
 namespace SonnetDB.Storage.Format;
 
 /// <summary>
-/// SonnetDB 段文件中每个 Block 的头部（固定 72 字节，<see cref="TsdbMagic.SegmentFormatVersion"/> = 2）。
+/// SonnetDB 段文件中每个 Block 的头部（固定 80 字节，<see cref="TsdbMagic.SegmentFormatVersion"/> = 5）。
 /// <para>
 /// 一个 Block 由 BlockHeader + FieldNameUtf8 + TimestampPayload + ValuePayload 组成。
 /// </para>
@@ -25,9 +25,11 @@ namespace SonnetDB.Storage.Format;
 /// 44      8     AggregateSum            (double, little-endian)
 /// 52      8     AggregateMin            (double, little-endian, 仅 HasMinMax 为真时有效)
 /// 60      8     AggregateMax            (double, little-endian, 仅 HasMinMax 为真时有效)
-/// 68      4     Crc32
+/// 68      4     GeoHashMin             (GEOPOINT Block 的最小 32-bit geohash 前缀，0 表示未写入)
+/// 72      4     GeoHashMax             (GEOPOINT Block 的最大 32-bit geohash 前缀，0 表示未写入)
+/// 76      4     Crc32
 /// ─────────────────────────────────
-/// Total  72
+/// Total  80
 /// </code>
 /// </para>
 /// </summary>
@@ -84,6 +86,12 @@ public struct BlockHeader
 
     /// <summary>数值聚合的 Max（编码方式同 <see cref="AggregateMin"/>）。</summary>
     public double AggregateMax;
+
+    /// <summary>GEOPOINT 块的最小 32-bit geohash 前缀；0 表示未写入。</summary>
+    public uint GeoHashMin;
+
+    /// <summary>GEOPOINT 块的最大 32-bit geohash 前缀；0 表示未写入。</summary>
+    public uint GeoHashMax;
 
     /// <summary><see cref="AggregateFlags"/> 的标记位：sum/count 已写入。</summary>
     public const short HasSumCount = 0x01;

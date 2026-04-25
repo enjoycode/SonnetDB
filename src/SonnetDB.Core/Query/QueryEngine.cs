@@ -77,6 +77,17 @@ public sealed class QueryEngine
         var segmentSlices = new List<DataPoint[]>(candidates.Count);
         foreach (var blockRef in candidates)
         {
+            if (query.GeoFilter is not null
+                && blockRef.Descriptor.HasGeoHashRange
+                && !GeoHash32.Overlaps(
+                    blockRef.Descriptor.GeoHashMin,
+                    blockRef.Descriptor.GeoHashMax,
+                    query.GeoFilter.HashMin,
+                    query.GeoFilter.HashMax))
+            {
+                continue;
+            }
+
             // FieldType 校验
             if (memFieldType.HasValue && memFieldType.Value != blockRef.FieldType)
                 throw new InvalidOperationException(

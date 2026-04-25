@@ -200,10 +200,14 @@ internal static class SelectExecutor
             .Select(p => p.Column!.Name)
             .Concat(GetScalarFieldDependencies(projections))
             .Concat(windowEvaluators.OfType<IWindowEvaluator>().Select(e => e.FieldName))
+            .Concat(where.GeoFilters.Select(f => f.FieldName))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
         var rows = new List<IReadOnlyList<object?>>();
+        var geoFiltersByField = where.GeoFilters
+            .GroupBy(f => f.FieldName, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.Ordinal);
 
         foreach (var series in matchedSeries)
         {
@@ -218,7 +222,10 @@ internal static class SelectExecutor
             else
             {
                 foreach (var fname in fieldCols)
-                    fieldData[fname] = QueryPoints(tsdb, series.Id, fname, where.TimeRange);
+                {
+                    geoFiltersByField.TryGetValue(fname, out var geoFilters);
+                    fieldData[fname] = QueryPoints(tsdb, series.Id, fname, where.TimeRange, geoFilters);
+                }
             }
 
             // 时间戳并集
@@ -494,6 +501,42 @@ internal static class SelectExecutor
         return tsdb.Query.Execute(query).ToList();
     }
 
+    private static IReadOnlyList<DataPoint> QueryPoints(
+        Tsdb tsdb,
+        ulong seriesId,
+        string fieldName,
+        TimeRange range,
+        IReadOnlyList<GeoPointWhereFilter>? geoFilters)
+    {
+        if (geoFilters is null || geoFilters.Count == 0)
+            return QueryPoints(tsdb, seriesId, fieldName, range);
+
+        var query = new PointQuery(seriesId, fieldName, range, GeoFilter: geoFilters[0].QueryFilter);
+        return tsdb.Query.Execute(query)
+            .Where(dp => MatchesGeoFilters(dp, geoFilters))
+            .ToList();
+    }
+
+    private static bool MatchesGeoFilters(DataPoint point, IReadOnlyList<GeoPointWhereFilter> geoFilters)
+    {
+        var value = point.Value.AsGeoPoint();
+        for (int i = 0; i < geoFilters.Count; i++)
+        {
+            var filter = geoFilters[i];
+            if (!FunctionRegistry.TryGetScalar(filter.Predicate.Name, out var scalar))
+                return false;
+
+            var args = new object?[filter.Predicate.Arguments.Count];
+            args[0] = value;
+            for (int a = 1; a < args.Length; a++)
+                args[a] = EvaluateLiteral((LiteralExpression)filter.Predicate.Arguments[a]);
+
+            if (scalar.Evaluate(args) is not true)
+                return false;
+        }
+        return true;
+    }
+
     private static object UnboxFieldValue(FieldValue v) => v.Type switch
     {
         FieldType.Float64 => v.AsDouble(),
@@ -552,7 +595,11 @@ internal static class SelectExecutor
                     if (spec.IsCountStar && col is not null && col.DataType is FieldType.String or FieldType.Vector or FieldType.GeoPoint)
                         continue;
 
-                    foreach (var dp in tsdb.Query.Execute(new PointQuery(series.Id, fname, where.TimeRange)))
+                    var geoFilters = where.GeoFilters
+                        .Where(f => string.Equals(f.FieldName, fname, StringComparison.Ordinal))
+                        .ToArray();
+                    var points = QueryPoints(tsdb, series.Id, fname, where.TimeRange, geoFilters);
+                    foreach (var dp in points)
                     {
                         long bucketStart = bucketSizeMs > 0
                             ? TimeBucket.Floor(dp.Timestamp, bucketSizeMs)

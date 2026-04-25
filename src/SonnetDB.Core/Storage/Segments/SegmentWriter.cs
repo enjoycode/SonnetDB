@@ -380,6 +380,12 @@ public sealed class SegmentWriter
                 bh.AggregateMax = aggregateMax;
             }
 
+            if (isGeoPoint && TryBuildGeoHashRange(points.Span, out var geoHashMin, out var geoHashMax))
+            {
+                bh.GeoHashMin = geoHashMin;
+                bh.GeoHashMax = geoHashMax;
+            }
+
             WriteStructToStream(bs, in bh);
             bs.Write(fieldNameSpan);
             bs.Write(tsSpan);
@@ -493,6 +499,27 @@ public sealed class SegmentWriter
             default:
                 return 0;
         }
+    }
+
+    private static bool TryBuildGeoHashRange(
+        ReadOnlySpan<DataPoint> points,
+        out uint min,
+        out uint max)
+    {
+        min = uint.MaxValue;
+        max = uint.MinValue;
+
+        if (points.IsEmpty)
+            return false;
+
+        for (int i = 0; i < points.Length; i++)
+        {
+            uint hash = GeoHash32.Encode(points[i].Value.AsGeoPoint());
+            if (hash < min) min = hash;
+            if (hash > max) max = hash;
+        }
+
+        return true;
     }
 
     /// <summary>将 unmanaged 结构体序列化写入流。</summary>

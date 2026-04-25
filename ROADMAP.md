@@ -391,7 +391,7 @@ PR #63（骨架 + Provider 抽象）→ #64（文档摄入）→ #65（技能库
 | #73 | **GeoJSON 序列化 + REST 端点扩展**：`GeoJsonConverter` 将 GEOPOINT 字段序列化为 `{"type":"Point","coordinates":[lon,lat]}`（GeoJSON 标准经纬顺序）；查询结果 ndjson 流自动输出 GeoJSON；新增 `GET /v1/db/{db}/geo/{measurement}/trajectory?device=...&from=...&to=...`，返回 GeoJSON `FeatureCollection`（每行为 `Feature/Point`）或 `?format=linestring`（单个 `LineString Feature`）；ADO.NET `DbDataReader` 对 GEOPOINT 列返回 `GeoPoint` struct | ✅ |
 | #74 | **Web Admin 轨迹地图标签页（Vue3 + MapLibre GL）**：引入前端依赖 `maplibre-gl`（Apache-2.0）；新增 `TrajectoryMap.vue`：左侧筛选面板（数据库 / Measurement / 时间范围 / TAG）→ 调用轨迹端点；右侧 MapLibre GL 底图（OSM 瓦片）+ 轨迹 LineString 叠加层 + 起终点标记；底部时间轴播放器（逐帧动画回放）；ECharts 折线图联动展示速度 / 海拔等数值字段；多设备轨迹对比（不同颜色） | 📋 |
 | #75 | **SQL 控制台地图渲染集成**：查询结果检测到 GEOPOINT 字段时自动在结果表下方展示 `ResultMapPreview.vue`；支持"表格 / 图表 / 地图"三视图切换；地图视图：散点图（多点）或带时间排序的轨迹连线；曲线视图增强：x 轴支持 `time`，y 轴自动识别数值字段，可叠加多 series | 📋 |
-| #76 | **地理空间索引（Geohash 段内过滤）**：`BlockHeader` 新增 `GeoHashMin` / `GeoHashMax`（32-bit Geohash 前缀），`SegmentWriter` flush 时写入每 block 的 GEOPOINT 范围；`SegmentReader` 执行 `geo_within` / `geo_bbox` 时做 block 级 Geohash 剪枝（稀疏轨迹典型加速 10–20×）；`SegmentFormatVersion` v5，保留 v4 只读回退；`docs/geo-spatial.md` | 📋 |
+| #76 | **地理空间索引（Geohash 段内过滤）**：`BlockHeader` 新增 `GeoHashMin` / `GeoHashMax`（32-bit Geohash 前缀），`SegmentWriter` flush 时写入每 block 的 GEOPOINT 范围；`SegmentReader` 执行 `geo_within` / `geo_bbox` 时做 block 级 Geohash 剪枝（稀疏轨迹典型加速 10–20×）；`SegmentFormatVersion` v5，保留 v4 只读回退；`docs/geo-spatial.md` | ✅ |
 | #77 | **地理空间基准 + 文档完善**：`GeoQueryBenchmark`（100k / 1M 轨迹点 `geo_within` 过滤 + `trajectory_length` 聚合，与 PostGIS 粗略对比）；README 新增"地理空间 & 轨迹"功能矩阵；`docs/geo-spatial.md` 补齐端到端示例（车辆追踪 / 户外运动 / IoT 地理围栏告警） | 📋 |
 
 ### SQL 用法预览

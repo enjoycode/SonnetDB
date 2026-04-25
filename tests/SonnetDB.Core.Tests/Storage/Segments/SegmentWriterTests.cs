@@ -420,6 +420,30 @@ public sealed class SegmentWriterTests : IDisposable
         }
     }
 
+    [Fact]
+    public void GeoPointBucket_WritesGeoHashRangeInBlockHeader()
+    {
+        string path = TempPath();
+        var memTable = new MemTable();
+        memTable.Append(1UL, 1000, "position", FieldValue.FromGeoPoint(39.9042, 116.4074), 1);
+        memTable.Append(1UL, 2000, "position", FieldValue.FromGeoPoint(31.2304, 121.4737), 2);
+
+        _writer.WriteFrom(memTable, 99L, path);
+
+        byte[] bytes = File.ReadAllBytes(path);
+        var blockHeader = MemoryMarshal.Read<BlockHeader>(bytes.AsSpan(FormatSizes.SegmentHeaderSize, FormatSizes.BlockHeaderSize));
+        uint h1 = GeoHash32.Encode(39.9042, 116.4074);
+        uint h2 = GeoHash32.Encode(31.2304, 121.4737);
+        Assert.Equal(Math.Min(h1, h2), blockHeader.GeoHashMin);
+        Assert.Equal(Math.Max(h1, h2), blockHeader.GeoHashMax);
+
+        using var reader = SegmentReader.Open(path);
+        var descriptor = Assert.Single(reader.Blocks);
+        Assert.True(descriptor.HasGeoHashRange);
+        Assert.Equal(blockHeader.GeoHashMin, descriptor.GeoHashMin);
+        Assert.Equal(blockHeader.GeoHashMax, descriptor.GeoHashMax);
+    }
+
     // ── 辅助方法 ──────────────────────────────────────────────────────────────
 
     private static MemTable BuildMemTableWithDoubleBucket(int count)

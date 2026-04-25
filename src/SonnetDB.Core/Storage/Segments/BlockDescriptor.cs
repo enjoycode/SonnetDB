@@ -62,8 +62,20 @@ public readonly struct BlockDescriptor
     /// <summary>数值聚合的 Max（仅当 <see cref="HasAggregateMinMax"/> 为真时有效）。</summary>
     public double AggregateMax { get; init; }
 
+    /// <summary>是否持久化了 GEOPOINT geohash 范围元数据。</summary>
+    public bool HasGeoHashRange => GeoHashMin != 0 || GeoHashMax != 0;
+
+    /// <summary>GEOPOINT 块内最小 32-bit geohash 前缀。</summary>
+    public uint GeoHashMin { get; init; }
+
+    /// <summary>GEOPOINT 块内最大 32-bit geohash 前缀。</summary>
+    public uint GeoHashMax { get; init; }
+
     /// <summary>字段名 UTF-8 编码的字节数（跟在 BlockHeader 之后）。</summary>
     internal int FieldNameUtf8Length { get; init; }
+
+    /// <summary>BlockHeader 实际字节数；v2-v4 为 72，v5 起为 80。</summary>
+    internal int HeaderSize { get; init; }
 
     /// <summary>时间戳载荷字节数（跟在 FieldNameUtf8 之后）。</summary>
     internal int TimestampPayloadLength { get; init; }

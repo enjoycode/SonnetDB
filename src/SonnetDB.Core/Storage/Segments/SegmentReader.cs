@@ -1,4 +1,5 @@
-﻿using System.IO.Hashing;
+using System.Buffers.Binary;
+using System.IO.Hashing;
 using System.Runtime.InteropServices;
 using System.Text;
 using SonnetDB.Buffers;
@@ -170,6 +171,7 @@ public sealed class SegmentReader : IDisposable
                 "SonnetDB v2（PR #50）将 BlockHeader.AggregateMin/Max 升级为 8 字节 double，BlockHeader 大小由 64B 增至 72B；" +
                 "v3（PR #58 c）新增 BlockEncoding.VectorRaw 与 FieldType.Vector，仅在使用 VECTOR 列时落盘；" +
                 "v4（PR #70）新增 BlockEncoding.GeoPointRaw 与 FieldType.GeoPoint，仅在使用 GEOPOINT 列时落盘；" +
+                "v5（PR #76）将 BlockHeader 扩展为 80B 并新增 GeoHashMin/GeoHashMax；" +
                 "旧 v1 段文件需通过重放 WAL（删除 .SDBSEG 后启动）重新生成。");
 
         if (header.HeaderSize != FormatSizes.SegmentHeaderSize)
@@ -222,12 +224,15 @@ public sealed class SegmentReader : IDisposable
             BlockIndexEntry entry = indexEntries[i];
             long headerStart = entry.FileOffset;
 
-            if (headerStart + FormatSizes.BlockHeaderSize > bytes.Length)
+            int blockHeaderSize = header.FormatVersion >= 5
+                ? FormatSizes.BlockHeaderSize
+                : FormatSizes.LegacyBlockHeaderSizeV4;
+
+            if (headerStart + blockHeaderSize > bytes.Length)
                 throw new SegmentCorruptedException(path, headerStart,
                     $"BlockIndexEntry[{i}].FileOffset={headerStart} 指向越界区域。");
 
-            var bh = MemoryMarshal.Read<BlockHeader>(
-                bytes.AsSpan((int)headerStart, FormatSizes.BlockHeaderSize));
+            var bh = ReadBlockHeader(bytes.AsSpan((int)headerStart, blockHeaderSize), blockHeaderSize);
 
             // 校验 BlockHeader 与 IndexEntry 一致性
             if (bh.SeriesId != entry.SeriesId)
@@ -243,7 +248,7 @@ public sealed class SegmentReader : IDisposable
                     $"Block[{i}] MaxTimestamp 不一致：BlockHeader={bh.MaxTimestamp}, IndexEntry={entry.MaxTimestamp}。");
 
             // 校验 BlockLength 一致性
-            int expectedBlockLen = FormatSizes.BlockHeaderSize
+            int expectedBlockLen = blockHeaderSize
                 + bh.FieldNameUtf8Length
                 + bh.TimestampPayloadLength
                 + bh.ValuePayloadLength;
@@ -253,7 +258,7 @@ public sealed class SegmentReader : IDisposable
                     $"Block[{i}] BlockLength 不一致：根据 BlockHeader 计算 {expectedBlockLen}，IndexEntry={entry.BlockLength}。");
 
             // 读字段名
-            int fieldNameStart = (int)headerStart + FormatSizes.BlockHeaderSize;
+            int fieldNameStart = (int)headerStart + blockHeaderSize;
             if (fieldNameStart + bh.FieldNameUtf8Length > bytes.Length)
                 throw new SegmentCorruptedException(path, fieldNameStart,
                     $"Block[{i}] FieldName 区域越界。");
@@ -288,9 +293,12 @@ public sealed class SegmentReader : IDisposable
                 AggregateSum = bh.AggregateSum,
                 AggregateMin = bh.AggregateMin,
                 AggregateMax = bh.AggregateMax,
+                GeoHashMin = bh.GeoHashMin,
+                GeoHashMax = bh.GeoHashMax,
                 FieldNameUtf8Length = bh.FieldNameUtf8Length,
                 TimestampPayloadLength = bh.TimestampPayloadLength,
                 ValuePayloadLength = bh.ValuePayloadLength,
+                HeaderSize = blockHeaderSize,
             };
         }
 
@@ -365,7 +373,8 @@ public sealed class SegmentReader : IDisposable
 
         var bytes = _bytes!.AsSpan();
 
-        int nameOff = (int)descriptor.FileOffset + FormatSizes.BlockHeaderSize;
+        int headerSize = descriptor.HeaderSize == 0 ? FormatSizes.BlockHeaderSize : descriptor.HeaderSize;
+        int nameOff = (int)descriptor.FileOffset + headerSize;
         int tsOff = nameOff + descriptor.FieldNameUtf8Length;
         int valOff = tsOff + descriptor.TimestampPayloadLength;
 
@@ -455,5 +464,16 @@ public sealed class SegmentReader : IDisposable
     {
         if (_bytes is null)
             throw new ObjectDisposedException(nameof(SegmentReader));
+    }
+
+    private static BlockHeader ReadBlockHeader(ReadOnlySpan<byte> bytes, int blockHeaderSize)
+    {
+        if (blockHeaderSize == FormatSizes.BlockHeaderSize)
+            return MemoryMarshal.Read<BlockHeader>(bytes);
+
+        var header = default(BlockHeader);
+        var destination = MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref header, 1));
+        bytes.CopyTo(destination[..blockHeaderSize]);
+        return header;
     }
 }

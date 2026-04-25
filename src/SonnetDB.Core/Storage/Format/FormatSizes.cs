@@ -20,9 +20,14 @@ public static class FormatSizes
     public const int SegmentHeaderSize = 64;
 
     /// <summary>
-    /// <see cref="BlockHeader"/> 的固定大小（字节，<see cref="TsdbMagic.SegmentFormatVersion"/> = 2）。
+    /// <see cref="BlockHeader"/> 的固定大小（字节，<see cref="TsdbMagic.SegmentFormatVersion"/> = 5）。
     /// </summary>
-    public const int BlockHeaderSize = 72;
+    public const int BlockHeaderSize = 80;
+
+    /// <summary>
+    /// v2-v4 <see cref="BlockHeader"/> 的固定大小（字节）。
+    /// </summary>
+    public const int LegacyBlockHeaderSizeV4 = 72;
 
     /// <summary>
     /// <see cref="BlockIndexEntry"/> 的固定大小（字节）。

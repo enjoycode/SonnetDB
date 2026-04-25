@@ -40,13 +40,18 @@ public static class TsdbMagic
     /// <c>lat(8) + lon(8)</c> 小端 float64 固定 16 字节编码。BlockHeader 布局不变；
     /// 读取层兼容 v3（v3 段文件不会包含 GeoPoint Block）。
     /// </para>
+    /// <para>
+    /// v5（PR #76）：<see cref="SonnetDB.Storage.Format.BlockHeader"/> 新增
+    /// <c>GeoHashMin</c> / <c>GeoHashMax</c> 两个 32-bit geohash 前缀字段，BlockHeader
+    /// 大小由 72B 增至 80B，用于 GEOPOINT Block 级空间剪枝；读取层兼容 v4。
+    /// </para>
     /// </summary>
-    public const int SegmentFormatVersion = 4;
+    public const int SegmentFormatVersion = 5;
 
     /// <summary>
     /// SegmentReader 允许读取的段格式版本集合（含历史只读兼容版本）。
     /// </summary>
-    public static ReadOnlySpan<int> SupportedSegmentFormatVersions => [2, 3, 4];
+    public static ReadOnlySpan<int> SupportedSegmentFormatVersions => [2, 3, 4, 5];
 
     /// <summary>构造文件 magic <see cref="InlineBytes8"/>。</summary>
     /// <returns>内容为 <c>"SONNETDB"</c>（8 字节 ASCII）的 <see cref="InlineBytes8"/> 实例。</returns>

@@ -1,4 +1,4 @@
-Ôªøusing SonnetDB.Catalog;
+using SonnetDB.Catalog;
 using SonnetDB.Engine;
 using SonnetDB.Model;
 using SonnetDB.Query;
@@ -9,7 +9,7 @@ using Xunit;
 namespace SonnetDB.Core.Tests.Sql;
 
 /// <summary>
-/// Milestone 15 PR #70ÔºöGEOPOINT Á±ªÂûã„ÄÅPOINT Â≠óÈù¢Èáè‰∏é lat/lon Ê†áÈáèÂáΩÊï∞ÊµãËØï„ÄÇ
+/// Milestone 15 PR #70£∫GEOPOINT ¿‡–Õ°¢POINT ◊÷√Ê¡ø”Î lat/lon ±Í¡ø∫Ø ˝≤‚ ‘°£
 /// </summary>
 public sealed class SqlExecutorGeoPointTests : IDisposable
 {
@@ -126,6 +126,48 @@ public sealed class SqlExecutorGeoPointTests : IDisposable
     }
 
     [Fact]
+    public void Select_WhereGeoWithin_FiltersRowsAfterFlush()
+    {
+        using var db = Tsdb.Open(Options());
+        SqlExecutor.Execute(db,
+            "CREATE MEASUREMENT vehicle (device TAG, position FIELD GEOPOINT)");
+        SqlExecutor.Execute(db,
+            "INSERT INTO vehicle (time, device, position) VALUES " +
+            "(1000, 'car-1', POINT(39.9042, 116.4074)), " +
+            "(2000, 'car-1', POINT(31.2304, 121.4737)), " +
+            "(3000, 'car-1', POINT(22.5431, 114.0579))");
+        db.FlushNow();
+
+        var result = Assert.IsType<SelectExecutionResult>(SqlExecutor.Execute(db,
+            "SELECT time, position FROM vehicle WHERE geo_within(position, 39.9042, 116.4074, 1000)"));
+
+        var row = Assert.Single(result.Rows);
+        Assert.Equal(1000L, row[0]);
+        Assert.Equal(new GeoPoint(39.9042, 116.4074), Assert.IsType<GeoPoint>(row[1]));
+    }
+
+    [Fact]
+    public void Select_WhereGeoBbox_FiltersAggregateAfterFlush()
+    {
+        using var db = Tsdb.Open(Options());
+        SqlExecutor.Execute(db,
+            "CREATE MEASUREMENT vehicle (device TAG, position FIELD GEOPOINT, speed FIELD FLOAT)");
+        SqlExecutor.Execute(db,
+            "INSERT INTO vehicle (time, device, position, speed) VALUES " +
+            "(1000, 'car-1', POINT(39.9042, 116.4074), 10), " +
+            "(2000, 'car-1', POINT(31.2304, 121.4737), 20), " +
+            "(3000, 'car-1', POINT(22.5431, 114.0579), 30)");
+        db.FlushNow();
+
+        var result = Assert.IsType<SelectExecutionResult>(SqlExecutor.Execute(db,
+            "SELECT count(position), trajectory_length(position) FROM vehicle WHERE geo_bbox(position, 30, 120, 32, 122)"));
+
+        var row = Assert.Single(result.Rows);
+        Assert.Equal(1d, Convert.ToDouble(row[0]));
+        Assert.Equal(0d, Convert.ToDouble(row[1]));
+    }
+
+    [Fact]
     public void FlushAndReopen_GeoPointSegment_RoundTrips()
     {
         using (var db = Tsdb.Open(Options()))
@@ -208,3 +250,4 @@ public sealed class SqlExecutorGeoPointTests : IDisposable
     }
 
 }
+

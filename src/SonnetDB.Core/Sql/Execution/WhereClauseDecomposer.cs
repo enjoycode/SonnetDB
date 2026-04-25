@@ -1,4 +1,5 @@
-﻿using SonnetDB.Catalog;
+using SonnetDB.Catalog;
+using SonnetDB.Model;
 using SonnetDB.Query;
 using SonnetDB.Sql.Ast;
 
@@ -17,7 +18,13 @@ namespace SonnetDB.Sql.Execution;
 /// <param name="TimeRange">从 <c>time</c> 比较推导出的闭区间时间窗。</param>
 internal readonly record struct WhereClause(
     IReadOnlyDictionary<string, string> TagFilter,
-    TimeRange TimeRange);
+    TimeRange TimeRange,
+    IReadOnlyList<GeoPointWhereFilter> GeoFilters);
+
+internal readonly record struct GeoPointWhereFilter(
+    string FieldName,
+    GeoPointFilter QueryFilter,
+    FunctionCallExpression Predicate);
 
 internal static class WhereClauseDecomposer
 {
@@ -46,7 +53,14 @@ internal static class WhereClauseDecomposer
             throw new InvalidOperationException(
                 $"WHERE 子句的时间窗为空：[from={fromInclusive}, to={toInclusive}]。");
 
-        return new WhereClause(tagFilter, new TimeRange(fromInclusive, toInclusive));
+        var geoFilters = new List<GeoPointWhereFilter>();
+        if (where is not null)
+        {
+            foreach (var leaf in FlattenAnd(where))
+                TryAddGeoFilter(leaf, schema, geoFilters);
+        }
+
+        return new WhereClause(tagFilter, new TimeRange(fromInclusive, toInclusive), geoFilters);
     }
 
     private static IEnumerable<SqlExpression> FlattenAnd(SqlExpression expr)
@@ -70,7 +84,12 @@ internal static class WhereClauseDecomposer
         ref long toInclusive)
     {
         if (leaf is not BinaryExpression bin || !IsComparisonOperator(bin.Operator))
-            throw NotSupported(leaf, "WHERE 仅支持 tag = 'literal' 与 time 比较，且通过 AND 连接。");
+        {
+            if (TryIsSupportedGeoPredicate(leaf, schema))
+                return;
+
+            throw NotSupported(leaf, "WHERE 仅支持 tag = 'literal'、time 比较与 geo_within/geo_bbox 谓词，且通过 AND 连接。");
+        }
 
         // 规范化：把字面量放到右侧。
         var (left, right, op) = NormalizeComparison(bin);
@@ -109,6 +128,96 @@ internal static class WhereClauseDecomposer
         }
 
         throw NotSupported(leaf, "WHERE 谓词不在 v1 支持范围内。");
+    }
+
+    private static bool TryAddGeoFilter(
+        SqlExpression leaf,
+        MeasurementSchema schema,
+        List<GeoPointWhereFilter> geoFilters)
+    {
+        if (!TryParseGeoPredicate(leaf, schema, out var fieldName, out var box, out var predicate))
+            return false;
+
+        var (hashMin, hashMax) = GeoHash32.RangeForBox(box);
+        geoFilters.Add(new GeoPointWhereFilter(fieldName, new GeoPointFilter(hashMin, hashMax), predicate));
+        return true;
+    }
+
+    private static bool TryIsSupportedGeoPredicate(SqlExpression leaf, MeasurementSchema schema)
+        => TryParseGeoPredicate(leaf, schema, out _, out _, out _);
+
+    private static bool TryParseGeoPredicate(
+        SqlExpression leaf,
+        MeasurementSchema schema,
+        out string fieldName,
+        out GeoBoundingBox box,
+        out FunctionCallExpression predicate)
+    {
+        fieldName = string.Empty;
+        box = default;
+        predicate = null!;
+
+        if (leaf is not FunctionCallExpression fn)
+            return false;
+
+        if (string.Equals(fn.Name, "geo_within", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fn.Name, "ST_DWithin", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fn.Name, "ST_Within", StringComparison.OrdinalIgnoreCase))
+        {
+            if (fn.Arguments.Count != 4 || fn.Arguments[0] is not IdentifierExpression id)
+                return false;
+
+            var column = schema.TryGetColumn(id.Name)
+                ?? throw new InvalidOperationException($"WHERE 中引用了未知列 '{id.Name}'。");
+            if (column.Role != MeasurementColumnRole.Field || column.DataType != Storage.Format.FieldType.GeoPoint)
+                throw new InvalidOperationException($"WHERE 中地理空间谓词要求 '{id.Name}' 是 GEOPOINT FIELD 列。");
+
+            double lat = RequireNumericLiteral(fn.Arguments[1], fn.Name);
+            double lon = RequireNumericLiteral(fn.Arguments[2], fn.Name);
+            double radius = RequireNumericLiteral(fn.Arguments[3], fn.Name);
+            if (radius < 0)
+                throw new InvalidOperationException($"函数 {fn.Name} 的 radius_m 必须 >= 0。");
+
+            fieldName = id.Name;
+            box = GeoHash32.BoundingBoxForCircle(lat, lon, radius);
+            predicate = fn;
+            return true;
+        }
+
+        if (string.Equals(fn.Name, "geo_bbox", StringComparison.OrdinalIgnoreCase))
+        {
+            if (fn.Arguments.Count != 5 || fn.Arguments[0] is not IdentifierExpression id)
+                return false;
+
+            var column = schema.TryGetColumn(id.Name)
+                ?? throw new InvalidOperationException($"WHERE 中引用了未知列 '{id.Name}'。");
+            if (column.Role != MeasurementColumnRole.Field || column.DataType != Storage.Format.FieldType.GeoPoint)
+                throw new InvalidOperationException($"WHERE 中地理空间谓词要求 '{id.Name}' 是 GEOPOINT FIELD 列。");
+
+            double latMin = RequireNumericLiteral(fn.Arguments[1], fn.Name);
+            double lonMin = RequireNumericLiteral(fn.Arguments[2], fn.Name);
+            double latMax = RequireNumericLiteral(fn.Arguments[3], fn.Name);
+            double lonMax = RequireNumericLiteral(fn.Arguments[4], fn.Name);
+            if (latMin > latMax || lonMin > lonMax)
+                throw new InvalidOperationException("函数 geo_bbox 要求 lat_min <= lat_max 且 lon_min <= lon_max。");
+
+            fieldName = id.Name;
+            box = new GeoBoundingBox(latMin, lonMin, latMax, lonMax);
+            predicate = fn;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static double RequireNumericLiteral(SqlExpression expression, string functionName)
+    {
+        return expression switch
+        {
+            LiteralExpression { Kind: SqlLiteralKind.Integer, IntegerValue: var value } => value,
+            LiteralExpression { Kind: SqlLiteralKind.Float, FloatValue: var value } => value,
+            _ => throw new InvalidOperationException($"函数 {functionName} 的空间剪枝参数必须是数值字面量。"),
+        };
     }
 
     private static void ApplyTimeComparison(
