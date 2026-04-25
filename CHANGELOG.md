@@ -13,6 +13,7 @@
 - **PR #74 — Web Admin 轨迹地图标签页**：新增 Vue3 TrajectoryMap.vue，引入 maplibre-gl 与 echarts，支持按数据库 / Measurement / GEOPOINT 字段 / TAG / 时间范围加载轨迹端点，展示 OSM 底图、LineString 轨迹、起终点标记、时间轴回放与速度折线图。
 - **PR #75 — SQL 控制台地图渲染集成**：查询结果自动检测 GeoJSON Point / GeoPoint 列并显示地图视图，SqlResultPanel 支持文本 / 表格 / 图表 / 地图切换；ResultMapPreview.vue 支持散点、按时间排序轨迹连线与低基数列分组，多点结果可直接在 SQL Console 预览。
 - **PR #76 — 地理空间索引（Geohash 段内过滤）**：Segment 格式升级到 v5，`BlockHeader` 新增 `GeoHashMin` / `GeoHashMax` 32-bit geohash 前缀；`SegmentWriter` 为 GEOPOINT Block 写入空间范围，`QueryEngine` 在 `geo_within` / `geo_bbox` WHERE 谓词下对落盘 block 做 geohash 剪枝，同时保留 v4 段文件只读兼容。
+- **PR #77 — 地理空间基准 + 文档完善**：新增 `GeoQueryBenchmark`，覆盖 `100k` 默认轨迹点和可选 `1M` 档位下的 `geo_within`、`geo_bbox`、`trajectory_length` 与 `GEOPOINT` range scan；README 与 `docs/geo-spatial.md` 补齐地理空间功能矩阵、Web Admin / SQL Console 地图用法、基准运行方式和车辆追踪 / 户外运动 / IoT 地理围栏端到端示例。
 
 ### Docs
 - 新增 `docs/sql-cookbook.md`，把 `demo.sql` 中高频、当前真实支持的 `CREATE MEASUREMENT`、`INSERT`、`SELECT`、`GROUP BY time(...)`、窗口函数、PID、预测、向量检索、元数据与 `DELETE` 场景整理成可直接复制的 cookbook，并在 `docs/index.md` 与 `docs/sql-reference.md` 中加入入口。

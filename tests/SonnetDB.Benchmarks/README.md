@@ -128,6 +128,21 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 预先写入多个 `.SDBSEG` 段，然后执行一次 `4 -> 1` 的段合并，
 用于度量 SonnetDB 引擎在真实段文件上的 Compaction 耗时与内存分配。
 
+### GeoQueryBenchmark（地理空间 / 轨迹）
+
+- 默认规模：**100k** 轨迹点。
+- 可选规模：设置 `SONNETDB_GEO_BENCH_INCLUDE_1M=1` 后追加 **1M** 轨迹点档位。
+- 数据模型：`vehicle(device TAG, region TAG, position FIELD GEOPOINT, speed FIELD FLOAT)`。
+- 数据分布：16 个设备在上海附近生成连续轨迹，写入后 `FlushNow()`，使 segment / geohash block 剪枝路径参与查询。
+
+| 方法 | 说明 |
+|------|------|
+| `GeoWithinFilter` | `geo_within(position, lat, lon, radius_m)` 圆形围栏过滤 |
+| `GeoBboxCount` | `geo_bbox(position, lat_min, lon_min, lat_max, lon_max)` + `count(position)` |
+| `TrajectoryLengthSql` | 单设备 `trajectory_length(position)` 总路程聚合 |
+| `GeoPointRangeScan` | 直接通过 `QueryEngine` 扫描单设备 `GEOPOINT` 范围，作为基础路径参考 |
+
+> 当前 Geo benchmark 以 SonnetDB 嵌入式真实引擎路径为主。PostGIS / 其他空间数据库同机对比需要额外服务编排，后续可在独立 PR 中补充。
 ### VectorRecallBenchmark（向量召回）
 
 - 向量维度：**384**
@@ -249,3 +264,4 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 - **TDengine schemaless LP** （1.00 s / 61 MB）比同库 REST INSERT 子表路径（44 s / 156 MB）快约 **44×**、分配缩到 **39%**，体现 schemaless 快路径与走 SQL parser 路径的差异。
 - **SonnetDB LP / JSON / Bulk 三端点** （1.12–1.35 s / 34–71 MB）已进入「秒级 1M 点 + ≤ 80 MB 分配」区间，比 SQL Batch (/sql/batch) 路径快约 **15–7×**、分配缩到 **5–11%**；比嵌入式仅多 **~2.0–2.5×**额外开销（HTTP + Kestrel + Auth + JSON/LP 解析）。
 ```
+

@@ -28,6 +28,7 @@ SonnetDB 是一个使用 C# / .NET 10 构建的时序数据库项目，既可以
 - Schema 管理：支持 `CREATE MEASUREMENT`，measurement 具有显式 tag/field schema。
 - 数据写入：支持 SQL `INSERT`、直接 `Point`/`WriteMany`、ADO.NET `CommandType.TableDirect` 批量快路径。
 - 数据查询：支持原始点查询、范围过滤、聚合函数、`GROUP BY time(...)` 时间桶聚合。
+- 地理空间：支持 `GEOPOINT`、`geo_within` / `geo_bbox` 空间过滤、轨迹聚合、GeoJSON 输出和 Web Admin 地图视图。
 - 数据删除：支持 `DELETE FROM ... WHERE ...`，底层通过 tombstone 与 compaction 生效。
 - 远程访问：`SonnetDB.Data` 可通过 `sonnetdb+http://...` 连接 `SonnetDB`。
 - 管理控制面：支持用户、数据库、授权、Token 的 SQL 管理语句。
@@ -195,6 +196,8 @@ SonnetDB 采用典型的时序数据建模方式：
 | `pid_series` | 窗口 (Control) | PR #54 | — | 流式 PID 时序 |
 | `anomaly(x, 'zscore'\|'iqr', k)`, `changepoint(x, 'cusum', k, drift)` | 窗口 (异常 / 变点) | PR #55 | TDengine `STATEDURATION` 配套 | 标记型 0/1 / 累积变点统计 |
 | `forecast(measurement, field, n, 'linear'\|'holt_winters', [season])` | TVF | PR #55 | TDengine `FORECAST`(3.3.6+), Influx `holtWinters` | 表值函数：未来 N 步外推 |
+| `lat`, `lon`, `geo_distance`, `geo_bearing`, `geo_within`, `geo_bbox`, `geo_speed` | 地理空间标量 | PR #70/#71 | PostGIS 部分语义 | `GEOPOINT` 经纬度提取、距离、方位、圆形 / 矩形围栏与速度 |
+| `trajectory_length`, `trajectory_centroid`, `trajectory_bbox`, `trajectory_speed_max/avg/p95` | 轨迹聚合 | PR #72 | PostGIS / Timescale 轨迹分析场景 | 轨迹总路程、重心、外包框与速度统计，支持 `GROUP BY time(...)` |
 | 用户自定义 | UDF | PR #56 | — | 嵌入式模式可注册聚合 / 标量 / TVF；详见 `docs/extending-functions.md` |
 
 > 函数族基准：见 `tests/SonnetDB.Benchmarks/Benchmarks/FunctionBenchmark.cs`，对比 InfluxDB Flux 与 TDengine REST 的等价语义。
@@ -281,6 +284,8 @@ dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --fi
 基准入口由两个跨平台 C# 小工具组成：`start-benchmark-env.csproj` 负责构建并启动 [docker-compose.yml](tests/SonnetDB.Benchmarks/docker/docker-compose.yml) 中的 `sonnetdb`、InfluxDB、TDengine，并等待健康检查通过；`run-benchmarks.csproj` 负责调用环境入口并以 Release 模式运行 BenchmarkDotNet。README 只引用 [benchmark-summary.svg](docs/assets/benchmark-summary.svg)，后续刷新数字时优先更新 SVG 与 [基准 README](tests/SonnetDB.Benchmarks/README.md)，不需要反复改根 README 的表格。
 
 向量召回基准见 [tests/SonnetDB.Benchmarks/Benchmarks/VectorRecallBenchmark.cs](tests/SonnetDB.Benchmarks/Benchmarks/VectorRecallBenchmark.cs) 与 [tests/SonnetDB.Benchmarks/README.md](tests/SonnetDB.Benchmarks/README.md)：当前已回填 SonnetDB 自身 `10k / 100k` 两档的 brute-force vs HNSW 实测耗时；`1M` 通过环境变量显式开启，`sqlite-vec` / `pgvector` 同机粗略对比结果区也已在基准 README 预留，后续如具备环境可单独补数。
+
+地理空间与轨迹基准见 [tests/SonnetDB.Benchmarks/Benchmarks/GeoQueryBenchmark.cs](tests/SonnetDB.Benchmarks/Benchmarks/GeoQueryBenchmark.cs) 与 [docs/geo-spatial.md](docs/geo-spatial.md)：默认覆盖 `100k` 轨迹点的 `geo_within`、`geo_bbox`、`trajectory_length` 与 `GEOPOINT` range scan；`1M` 通过 `SONNETDB_GEO_BENCH_INCLUDE_1M=1` 显式开启。
 
 ## 设计原则
 
