@@ -135,6 +135,14 @@ public static class FunctionRegistry
         new BuiltInScalarFunction("vector_norm", 1, 1, EvaluateVectorNorm),
         new BuiltInScalarFunction("lat", 1, 1, static args => RequireGeoPoint(args[0], "lat").Lat),
         new BuiltInScalarFunction("lon", 1, 1, static args => RequireGeoPoint(args[0], "lon").Lon),
+        new BuiltInScalarFunction("geo_distance", 2, 2, EvaluateGeoDistance),
+        new BuiltInScalarFunction("geo_bearing", 2, 2, EvaluateGeoBearing),
+        new BuiltInScalarFunction("geo_within", 4, 4, EvaluateGeoWithin),
+        new BuiltInScalarFunction("geo_bbox", 5, 5, EvaluateGeoBbox),
+        new BuiltInScalarFunction("geo_speed", 3, 3, EvaluateGeoSpeed),
+        new BuiltInScalarFunction("st_distance", 2, 2, EvaluateGeoDistance),
+        new BuiltInScalarFunction("st_within", 4, 4, EvaluateGeoWithin),
+        new BuiltInScalarFunction("st_dwithin", 4, 4, EvaluateGeoWithin),
     ];
 
     private static IWindowFunction[] CreateWindowFunctionList() =>
@@ -277,6 +285,81 @@ public static class FunctionRegistry
             sumSquared += vector[i] * vector[i];
         return Math.Sqrt(sumSquared);
     }
+
+    private static object? EvaluateGeoDistance(IReadOnlyList<object?> args)
+    {
+        var left = RequireGeoPoint(args[0], "geo_distance");
+        var right = RequireGeoPoint(args[1], "geo_distance");
+        return HaversineMeters(left, right);
+    }
+
+    private static object? EvaluateGeoBearing(IReadOnlyList<object?> args)
+    {
+        var left = RequireGeoPoint(args[0], "geo_bearing");
+        var right = RequireGeoPoint(args[1], "geo_bearing");
+        double lat1 = DegreesToRadians(left.Lat);
+        double lat2 = DegreesToRadians(right.Lat);
+        double deltaLon = DegreesToRadians(right.Lon - left.Lon);
+        double y = Math.Sin(deltaLon) * Math.Cos(lat2);
+        double x = Math.Cos(lat1) * Math.Sin(lat2)
+            - Math.Sin(lat1) * Math.Cos(lat2) * Math.Cos(deltaLon);
+        double degrees = RadiansToDegrees(Math.Atan2(y, x));
+        return (degrees + 360d) % 360d;
+    }
+
+    private static object? EvaluateGeoWithin(IReadOnlyList<object?> args)
+    {
+        var point = RequireGeoPoint(args[0], "geo_within");
+        var center = GeoPoint.Create(
+            RequireDouble(args[1], "geo_within"),
+            RequireDouble(args[2], "geo_within"));
+        double radiusMeters = RequireDouble(args[3], "geo_within");
+        if (radiusMeters < 0 || double.IsNaN(radiusMeters))
+            throw new InvalidOperationException("函数 geo_within 的 radius_m 必须 >= 0。");
+        return HaversineMeters(point, center) <= radiusMeters;
+    }
+
+    private static object? EvaluateGeoBbox(IReadOnlyList<object?> args)
+    {
+        var point = RequireGeoPoint(args[0], "geo_bbox");
+        double latMin = RequireDouble(args[1], "geo_bbox");
+        double lonMin = RequireDouble(args[2], "geo_bbox");
+        double latMax = RequireDouble(args[3], "geo_bbox");
+        double lonMax = RequireDouble(args[4], "geo_bbox");
+        if (latMin > latMax || lonMin > lonMax)
+            throw new InvalidOperationException("函数 geo_bbox 要求 lat_min <= lat_max 且 lon_min <= lon_max。");
+        _ = GeoPoint.Create(latMin, lonMin);
+        _ = GeoPoint.Create(latMax, lonMax);
+        return point.Lat >= latMin && point.Lat <= latMax && point.Lon >= lonMin && point.Lon <= lonMax;
+    }
+
+    private static object? EvaluateGeoSpeed(IReadOnlyList<object?> args)
+    {
+        var left = RequireGeoPoint(args[0], "geo_speed");
+        var right = RequireGeoPoint(args[1], "geo_speed");
+        double elapsedMs = RequireDouble(args[2], "geo_speed");
+        if (elapsedMs <= 0 || double.IsNaN(elapsedMs))
+            throw new InvalidOperationException("函数 geo_speed 的 elapsed_ms 必须 > 0。");
+        return HaversineMeters(left, right) / (elapsedMs / 1000d);
+    }
+
+    private static double HaversineMeters(GeoPoint left, GeoPoint right)
+    {
+        const double EarthRadiusMeters = 6_371_008.8d;
+        double lat1 = DegreesToRadians(left.Lat);
+        double lat2 = DegreesToRadians(right.Lat);
+        double deltaLat = DegreesToRadians(right.Lat - left.Lat);
+        double deltaLon = DegreesToRadians(right.Lon - left.Lon);
+        double sinLat = Math.Sin(deltaLat / 2d);
+        double sinLon = Math.Sin(deltaLon / 2d);
+        double a = sinLat * sinLat + Math.Cos(lat1) * Math.Cos(lat2) * sinLon * sinLon;
+        double c = 2d * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1d - a));
+        return EarthRadiusMeters * c;
+    }
+
+    private static double DegreesToRadians(double degrees) => degrees * (Math.PI / 180d);
+
+    private static double RadiansToDegrees(double radians) => radians * (180d / Math.PI);
 
     private static double RequireDouble(object? value, string functionName)
     {

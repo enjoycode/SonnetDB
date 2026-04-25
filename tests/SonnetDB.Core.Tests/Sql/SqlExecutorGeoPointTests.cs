@@ -82,6 +82,50 @@ public sealed class SqlExecutorGeoPointTests : IDisposable
     }
 
     [Fact]
+    public void Select_GeoScalarFunctions_ReturnExpectedValues()
+    {
+        using var db = Tsdb.Open(Options());
+        SqlExecutor.Execute(db,
+            "CREATE MEASUREMENT route (device TAG, p1 FIELD GEOPOINT, p2 FIELD GEOPOINT)");
+        SqlExecutor.Execute(db,
+            "INSERT INTO route (time, device, p1, p2) VALUES " +
+            "(1000, 'car-1', POINT(39.9042, 116.4074), POINT(31.2304, 121.4737))");
+
+        var result = Assert.IsType<SelectExecutionResult>(SqlExecutor.Execute(db,
+            "SELECT geo_distance(p1, p2), geo_bearing(p1, p2), " +
+            "geo_within(p1, 39.9042, 116.4074, 1), " +
+            "geo_bbox(p2, 31.0, 121.0, 32.0, 122.0), " +
+            "geo_speed(p1, p2, 1000), ST_Distance(p1, p2), ST_DWithin(p1, 39.9042, 116.4074, 1) FROM route"));
+
+        var row = Assert.Single(result.Rows);
+        double distance = Convert.ToDouble(row[0]);
+        Assert.InRange(distance, 1_060_000d, 1_080_000d);
+        Assert.InRange(Convert.ToDouble(row[1]), 145d, 155d);
+        Assert.True((bool)row[2]!);
+        Assert.True((bool)row[3]!);
+        Assert.InRange(Convert.ToDouble(row[4]), 1_060_000d, 1_080_000d);
+        Assert.Equal(distance, Convert.ToDouble(row[5]), 6);
+        Assert.True((bool)row[6]!);
+    }
+
+    [Fact]
+    public void Select_GeoWithinOutsideRadius_ReturnsFalse()
+    {
+        using var db = Tsdb.Open(Options());
+        SqlExecutor.Execute(db,
+            "CREATE MEASUREMENT vehicle (device TAG, position FIELD GEOPOINT)");
+        SqlExecutor.Execute(db,
+            "INSERT INTO vehicle (time, device, position) VALUES (1000, 'car-1', POINT(31.2304, 121.4737))");
+
+        var result = Assert.IsType<SelectExecutionResult>(SqlExecutor.Execute(db,
+            "SELECT geo_within(position, 39.9042, 116.4074, 1000), ST_Within(position, 39.9042, 116.4074, 1000) FROM vehicle"));
+
+        var row = Assert.Single(result.Rows);
+        Assert.False((bool)row[0]!);
+        Assert.False((bool)row[1]!);
+    }
+
+    [Fact]
     public void FlushAndReopen_GeoPointSegment_RoundTrips()
     {
         using (var db = Tsdb.Open(Options()))
