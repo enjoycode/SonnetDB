@@ -169,6 +169,7 @@ public static class Program
     {
         builder.Services.Configure<JsonOptions>(o =>
         {
+            o.SerializerOptions.Converters.Add(new GeoJsonConverter());
             o.SerializerOptions.TypeInfoResolverChain.Insert(0, ServerJsonContext.Default);
         });
 
@@ -485,6 +486,16 @@ public static class Program
                 DatabaseAccessEvaluator.HasPermission(databasePermission, DatabasePermission.Write),
                 DatabaseAccessEvaluator.IsServerAdmin(ctx),
                 scopedControlPlane).ConfigureAwait(false);
+        });
+
+        app.MapGet("/v1/db/{db}/geo/{measurement}/trajectory", async (HttpContext ctx, string db, string measurement) =>
+        {
+            if (!TryResolveDatabase(ctx, registry, db, out var tsdb))
+                return;
+            var databasePermission = DatabaseAccessEvaluator.GetEffectivePermission(ctx, grants, db);
+            if (!await TryRequireDatabasePermissionAsync(ctx, db, databasePermission, DatabasePermission.Read).ConfigureAwait(false))
+                return;
+            await GeoEndpointHandler.HandleTrajectoryAsync(ctx, tsdb, measurement).ConfigureAwait(false);
         });
 
         // ---- PR #44：批量入库快路径三端点（绕开 SQL parser）----

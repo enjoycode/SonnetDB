@@ -7,6 +7,7 @@
 
 ### Added
 - **PR #70 — GEOPOINT 数据类型 + 编解码**：新增 `FieldType.GeoPoint = 6`、`GeoPoint` / `FieldValue.FromGeoPoint`，Segment 格式升级到 v4 并支持 `BlockEncoding.GeoPointRaw`（lat/lon 各 8 字节 little-endian），保留 v3 只读兼容；WAL、Segment、SQL `GEOPOINT` 列声明、`POINT(lat, lon)` 字面量、ADO.NET `GeoPoint` 参数化与 `lat(field)` / `lon(field)` 标量提取函数已接通。
+- **PR #73 — GeoJSON 序列化 + REST 端点扩展**：新增 `GeoJsonConverter` / `GeoJsonWriter`，SQL ndjson 中的 `GeoPoint` 自动输出 GeoJSON Point（`[lon, lat]`），新增 `GET /v1/db/{db}/geo/{measurement}/trajectory` 支持 FeatureCollection 点序列与 `?format=linestring` 轨迹线，并补充 ADO.NET `DbDataReader` 返回 `GeoPoint` 的回归测试。
 
 ### Docs
 - 新增 `docs/sql-cookbook.md`，把 `demo.sql` 中高频、当前真实支持的 `CREATE MEASUREMENT`、`INSERT`、`SELECT`、`GROUP BY time(...)`、窗口函数、PID、预测、向量检索、元数据与 `DELETE` 场景整理成可直接复制的 cookbook，并在 `docs/index.md` 与 `docs/sql-reference.md` 中加入入口。

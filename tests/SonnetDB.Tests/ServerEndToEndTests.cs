@@ -147,6 +147,66 @@ public sealed class ServerEndToEndTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Sql_GeoPointColumn_RendersGeoJsonPointInNdjson()
+    {
+        using var admin = CreateClient(_adminToken);
+        var dbName = "geosql";
+        var create = await admin.PostAsync("/v1/db",
+            JsonContent.Create(new CreateDatabaseRequest(dbName), ServerJsonContext.Default.CreateDatabaseRequest));
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+
+        await ExecuteSqlAsync(admin, dbName, "CREATE MEASUREMENT vehicle (device TAG, position FIELD GEOPOINT)");
+        await ExecuteSqlAsync(admin, dbName,
+            "INSERT INTO vehicle (time, device, position) VALUES (1000, 'car-1', POINT(39.9042, 116.4074))");
+
+        var (_, rows, _) = await ExecuteSelectAsync(admin, dbName, "SELECT position FROM vehicle");
+        var point = Assert.Single(rows)[0];
+        Assert.Equal("Point", point.GetProperty("type").GetString());
+        var coordinates = point.GetProperty("coordinates");
+        Assert.Equal(116.4074, coordinates[0].GetDouble(), 6);
+        Assert.Equal(39.9042, coordinates[1].GetDouble(), 6);
+    }
+
+    [Fact]
+    public async Task GeoTrajectory_ReturnsFeatureCollectionAndLineString()
+    {
+        using var admin = CreateClient(_adminToken);
+        var dbName = "geotest";
+        var create = await admin.PostAsync("/v1/db",
+            JsonContent.Create(new CreateDatabaseRequest(dbName), ServerJsonContext.Default.CreateDatabaseRequest));
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+
+        await ExecuteSqlAsync(admin, dbName, "CREATE MEASUREMENT vehicle (device TAG, position FIELD GEOPOINT)");
+        await ExecuteSqlAsync(admin, dbName,
+            "INSERT INTO vehicle (time, device, position) VALUES " +
+            "(1000, 'car-1', POINT(39.9042, 116.4074)), " +
+            "(2000, 'car-1', POINT(31.2304, 121.4737)), " +
+            "(3000, 'car-2', POINT(22.5431, 114.0579))");
+
+        var points = await admin.GetAsync($"/v1/db/{dbName}/geo/vehicle/trajectory?device=car-1&from=1000&to=2000");
+        Assert.Equal(HttpStatusCode.OK, points.StatusCode);
+        using (var doc = JsonDocument.Parse(await points.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal("FeatureCollection", doc.RootElement.GetProperty("type").GetString());
+            var features = doc.RootElement.GetProperty("features");
+            Assert.Equal(2, features.GetArrayLength());
+            var coordinates = features[0].GetProperty("geometry").GetProperty("coordinates");
+            Assert.Equal(116.4074, coordinates[0].GetDouble(), 6);
+            Assert.Equal(39.9042, coordinates[1].GetDouble(), 6);
+            Assert.Equal("car-1", features[0].GetProperty("properties").GetProperty("device").GetString());
+        }
+
+        var line = await admin.GetAsync($"/v1/db/{dbName}/geo/vehicle/trajectory?device=car-1&format=linestring");
+        Assert.Equal(HttpStatusCode.OK, line.StatusCode);
+        using (var doc = JsonDocument.Parse(await line.Content.ReadAsStringAsync()))
+        {
+            var feature = doc.RootElement.GetProperty("features")[0];
+            Assert.Equal("LineString", feature.GetProperty("geometry").GetProperty("type").GetString());
+            Assert.Equal(2, feature.GetProperty("geometry").GetProperty("coordinates").GetArrayLength());
+        }
+    }
+
+    [Fact]
     public async Task UnknownDatabase_Returns404()
     {
         using var client = CreateClient(_adminToken);

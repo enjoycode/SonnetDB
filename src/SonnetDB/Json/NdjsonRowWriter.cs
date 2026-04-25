@@ -1,6 +1,7 @@
 ﻿using System.Buffers;
 using System.Text;
 using System.Text.Json;
+using SonnetDB.Model;
 
 namespace SonnetDB.Json;
 
@@ -87,6 +88,9 @@ public static class NdjsonRowWriter
                 break;
             case Guid g:
                 writer.WriteStringValue(g);
+                break;
+            case GeoPoint point:
+                GeoJsonWriter.WritePointGeometry(writer, point);
                 break;
             case byte[] bytes:
                 writer.WriteBase64StringValue(bytes);

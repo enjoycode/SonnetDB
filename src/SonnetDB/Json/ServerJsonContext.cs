@@ -2,6 +2,7 @@
 using SonnetDB.Contracts;
 using SonnetDB.Copilot;
 using SonnetDB.Mcp;
+using SonnetDB.Model;
 
 namespace SonnetDB.Json;
 
@@ -21,6 +22,7 @@ namespace SonnetDB.Json;
 [JsonSerializable(typeof(ErrorResponse))]
 [JsonSerializable(typeof(ResultMeta))]
 [JsonSerializable(typeof(ResultEnd))]
+[JsonSerializable(typeof(GeoPoint))]
 [JsonSerializable(typeof(CreateDatabaseRequest))]
 [JsonSerializable(typeof(DatabaseOperationResponse))]
 [JsonSerializable(typeof(DatabaseListResponse))]

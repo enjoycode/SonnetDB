@@ -1,5 +1,6 @@
 ﻿using System.Data;
 using SonnetDB.Data;
+using SonnetDB.Model;
 using Xunit;
 
 namespace SonnetDB.Core.Tests.Ado;
@@ -263,6 +264,30 @@ public sealed class TsdbAdoApiTests : IDisposable
         Assert.Equal(typeof(long), r.GetFieldType(0));
         Assert.Equal(typeof(string), r.GetFieldType(1));
         Assert.Equal(typeof(double), r.GetFieldType(2));
+    }
+
+    [Fact]
+    public void ExecuteReader_GeoPointColumn_ReturnsGeoPointStruct()
+    {
+        using var c = OpenConn();
+        ExecNonQuery(c, "CREATE MEASUREMENT vehicle (device TAG, position FIELD GEOPOINT)");
+
+        using (var ins = c.CreateCommand())
+        {
+            ins.CommandText = "INSERT INTO vehicle (time, device, position) VALUES (@t, @d, @p)";
+            ins.Parameters.AddWithValue("@t", 1000L);
+            ins.Parameters.AddWithValue("@d", "car-1");
+            ins.Parameters.AddWithValue("@p", new GeoPoint(39.9042, 116.4074));
+            Assert.Equal(1, ins.ExecuteNonQuery());
+        }
+
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT position FROM vehicle";
+        using var r = cmd.ExecuteReader();
+
+        Assert.Equal(typeof(GeoPoint), r.GetFieldType(0));
+        Assert.True(r.Read());
+        Assert.Equal(new GeoPoint(39.9042, 116.4074), Assert.IsType<GeoPoint>(r.GetValue(0)));
     }
 
     // ── Parameters ────────────────────────────────────────────────────────────
