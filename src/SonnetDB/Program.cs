@@ -342,7 +342,9 @@ public static class Program
         app.MapGet("/v1/setup/status", () =>
         {
             var users = app.Services.GetRequiredService<UserStore>();
-            var status = installation.GetStatus(users.Count, registry.Count);
+            var visibleDatabaseCount = registry.ListDatabases()
+                .Count(static database => !DatabaseAccessEvaluator.IsSystemDatabase(database));
+            var status = installation.GetStatus(users.Count, visibleDatabaseCount);
             var resp = new SetupStatusResponse(
                 status.NeedsSetup,
                 status.SuggestedServerId,
@@ -356,7 +358,9 @@ public static class Program
         app.MapMethods("/v1/setup/initialize", new[] { "POST" }, (RequestDelegate)(async ctx =>
         {
             var users = app.Services.GetRequiredService<UserStore>();
-            var status = installation.GetStatus(users.Count, registry.Count);
+            var visibleDatabaseCount = registry.ListDatabases()
+                .Count(static database => !DatabaseAccessEvaluator.IsSystemDatabase(database));
+            var status = installation.GetStatus(users.Count, visibleDatabaseCount);
             if (!status.NeedsSetup)
             {
                 await WriteSimpleErrorAsync(ctx, StatusCodes.Status409Conflict, "already_initialized", "SonnetDB Server 已完成首次安装。").ConfigureAwait(false);

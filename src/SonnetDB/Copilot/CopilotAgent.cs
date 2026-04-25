@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -7,6 +8,7 @@ using SonnetDB.Catalog;
 using SonnetDB.Contracts;
 using SonnetDB.Engine;
 using SonnetDB.Exceptions;
+using SonnetDB.Hosting;
 using SonnetDB.Json;
 using SonnetDB.Mcp;
 using SonnetDB.Sql;
@@ -25,7 +27,7 @@ internal sealed class CopilotAgent
     private const int DefaultSkillsK = 3;
     private const int MaxSkillsK = 8;
     private const int MaxLoadedSkills = 3;
-    private const int MaxPlannedTools = 3;
+    private const int MaxReActRounds = 6;      // ReAct 最多循环轮次（每轮执行 1 个工具）
     private const int HistoryTokenBudget = 1200;
     private const int MaxSqlRepairAttempts = 3;
 
@@ -35,6 +37,8 @@ internal sealed class CopilotAgent
     private readonly IChatProvider _chatProvider;
     private readonly SonnetDbMcpSchemaCache _schemaCache;
     private readonly SonnetDbMcpExplainSqlService _explainSqlService;
+    private readonly IControlPlane _controlPlane;
+    private readonly TsdbRegistry _registry;
     private readonly ILogger<CopilotAgent> _logger;
 
     public CopilotAgent(
@@ -44,6 +48,8 @@ internal sealed class CopilotAgent
         IChatProvider chatProvider,
         SonnetDbMcpSchemaCache schemaCache,
         SonnetDbMcpExplainSqlService explainSqlService,
+        IControlPlane controlPlane,
+        TsdbRegistry registry,
         ILogger<CopilotAgent> logger)
     {
         _docsSearchService = docsSearchService;
@@ -52,6 +58,8 @@ internal sealed class CopilotAgent
         _chatProvider = chatProvider;
         _schemaCache = schemaCache;
         _explainSqlService = explainSqlService;
+        _controlPlane = controlPlane;
+        _registry = registry;
         _logger = logger;
     }
 
@@ -99,15 +107,24 @@ internal sealed class CopilotAgent
             ToolNames: suggestedToolNames.Length > 0 ? suggestedToolNames : null,
             Citations: retrievalCitations.Count > 0 ? retrievalCitations : null);
 
-        var plan = await PlanToolsAsync(context, conversation, docs, loadedSkills, cancellationToken).ConfigureAwait(false);
-        var observations = new List<CopilotToolObservation>(plan.Count);
+        // ReAct 多轮循环：每轮 Planner 看到前面所有工具结果后再决定下一步
+        var observations = new List<CopilotToolObservation>(MaxReActRounds);
+        var executedToolKeys = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var tool in plan)
+        for (var round = 0; round < MaxReActRounds; round++)
         {
+            var plan = await PlanToolsAsync(
+                context, conversation, docs, loadedSkills, observations, executedToolKeys, cancellationToken).ConfigureAwait(false);
+
+            if (plan.Count == 0)
+                break;  // Planner 说已有足够信息，结束工具循环
+
+            var tool = plan[0];  // 每轮只取第一个（Planner 已改为单步模式）
+            var plannedToolKey = GetToolKey(tool);
             var toolArguments = FormatToolArguments(tool);
             yield return new CopilotChatEvent(
                 Type: "tool_call",
-                Message: $"执行工具 {tool.Name}。",
+                Message: $"[第 {round + 1} 轮] 执行工具 {tool.Name}。",
                 ToolName: tool.Name,
                 ToolArguments: toolArguments);
 
@@ -126,6 +143,8 @@ internal sealed class CopilotAgent
             var citation = BuildToolCitation(execution.Tool, execution.ResultJson, ref nextCitationNumber);
             var captured = new CopilotToolObservation(execution.Tool.Name, finalToolArguments, execution.ResultJson, citation);
             observations.Add(captured);
+            executedToolKeys.Add(plannedToolKey);
+            executedToolKeys.Add(GetToolKey(execution.Tool));
 
             yield return new CopilotChatEvent(
                 Type: "tool_result",
@@ -206,10 +225,15 @@ internal sealed class CopilotAgent
         CopilotConversation conversation,
         IReadOnlyList<DocsSearchResult> docs,
         IReadOnlyList<SkillLoadResult> loadedSkills,
+        IReadOnlyList<CopilotToolObservation> observations,
+        HashSet<string> executedToolKeys,
         CancellationToken cancellationToken)
     {
-        var measurements = _schemaCache.GetMeasurements(context.DatabaseName, context.Database);
-        var plannerPrompt = BuildPlannerPrompt(context, conversation, docs, loadedSkills);
+        if (TryBuildProvisioningPlan(context, conversation, observations, out var provisioningPlan))
+            return FilterExecutedTools(provisioningPlan, executedToolKeys);
+
+        var measurements = GetMeasurements(context.DatabaseName, context.Database);
+        var plannerPrompt = BuildPlannerPrompt(context, conversation, docs, loadedSkills, observations);
 
         try
         {
@@ -224,7 +248,8 @@ internal sealed class CopilotAgent
             if (TryParsePlan(response, out var plan) && plan is not null)
             {
                 var sanitized = SanitizePlan(plan.Tools, measurements, conversation.LatestUserMessage);
-                return EnsureWriteDraftPlan(sanitized, conversation.LatestUserMessage);
+                var augmented = EnsureWriteDraftPlan(sanitized, conversation.LatestUserMessage);
+                return FilterExecutedTools(augmented, executedToolKeys);
             }
 
             _logger.LogWarning("Copilot planner returned non-JSON content: {Response}", response);
@@ -234,7 +259,8 @@ internal sealed class CopilotAgent
             _logger.LogWarning(ex, "Copilot planner failed, falling back to heuristics.");
         }
 
-        return EnsureWriteDraftPlan(BuildHeuristicPlan(conversation.LatestUserMessage, measurements), conversation.LatestUserMessage);
+        var fallback = EnsureWriteDraftPlan(BuildHeuristicPlan(conversation.LatestUserMessage, measurements), conversation.LatestUserMessage);
+        return FilterExecutedTools(fallback, executedToolKeys);
     }
 
     private async Task<string> GenerateAnswerAsync(
@@ -314,12 +340,10 @@ internal sealed class CopilotAgent
         if (plannedTools is null || plannedTools.Count == 0)
             return [];
 
-        var tools = new List<CopilotToolInvocation>(Math.Min(plannedTools.Count, MaxPlannedTools));
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var tools = new List<CopilotToolInvocation>(plannedTools.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var planned in plannedTools)
         {
-            if (tools.Count >= MaxPlannedTools)
-                break;
             if (string.IsNullOrWhiteSpace(planned.Name))
                 continue;
 
@@ -345,35 +369,54 @@ internal sealed class CopilotAgent
                         Sql: null)
                     : null,
                 "explain_sql" when !string.IsNullOrWhiteSpace(planned.Sql)
-                    => new CopilotToolInvocation(normalizedName, null, null, null, planned.Sql.Trim()),
+                    => new CopilotToolInvocation(normalizedName, null, null, null, planned.Sql.Trim(), planned.Database),
                 "query_sql" when !string.IsNullOrWhiteSpace(planned.Sql)
                     => new CopilotToolInvocation(
                         normalizedName,
                         NormalizeLimit(planned.MaxRows, SonnetDbMcpResults.DefaultToolRowLimit, SonnetDbMcpResults.MaxToolRowLimit),
                         null,
                         null,
-                        planned.Sql.Trim()),
+                        planned.Sql.Trim(),
+                        planned.Database),
                 "draft_sql" when !string.IsNullOrWhiteSpace(planned.Sql)
-                    => new CopilotToolInvocation(normalizedName, null, null, null, planned.Sql.Trim()),
+                    => new CopilotToolInvocation(normalizedName, null, null, null, planned.Sql.Trim(), planned.Database),
                 "execute_sql" when !string.IsNullOrWhiteSpace(planned.Sql)
                     => new CopilotToolInvocation(
                         normalizedName,
                         NormalizeLimit(planned.MaxRows, SonnetDbMcpResults.DefaultToolRowLimit, SonnetDbMcpResults.MaxToolRowLimit),
                         null,
                         null,
-                        planned.Sql.Trim()),
+                        planned.Sql.Trim(),
+                        planned.Database),
                 _ => null,
             };
 
             if (tool is null)
                 continue;
 
-            var key = $"{tool.Name}|{tool.Measurement}|{tool.Sql}|{tool.MaxRows}|{tool.N}";
+            var key = GetToolKey(tool);
             if (seen.Add(key))
                 tools.Add(tool);
         }
 
         return tools;
+    }
+
+    private static IReadOnlyList<CopilotToolInvocation> FilterExecutedTools(
+        IReadOnlyList<CopilotToolInvocation> plan,
+        HashSet<string> executedToolKeys)
+    {
+        if (plan.Count == 0 || executedToolKeys.Count == 0)
+            return plan;
+
+        var remaining = new List<CopilotToolInvocation>(plan.Count);
+        foreach (var tool in plan)
+        {
+            if (!executedToolKeys.Contains(GetToolKey(tool)))
+                remaining.Add(tool);
+        }
+
+        return remaining;
     }
 
     private static IReadOnlyList<CopilotToolInvocation> BuildHeuristicPlan(string message, IReadOnlyList<string> measurements)
@@ -420,6 +463,28 @@ internal sealed class CopilotAgent
                 null));
             if (measurement is not null)
                 tools.Add(new CopilotToolInvocation("describe_measurement", null, null, measurement, null));
+            return tools;
+        }
+
+        if (LooksLikeDatabaseOverviewIntent(lowered))
+        {
+            tools.Add(new CopilotToolInvocation(
+                "query_sql",
+                SonnetDbMcpResults.DefaultToolRowLimit,
+                null,
+                null,
+                "SHOW MEASUREMENTS"));
+            return tools;
+        }
+
+        if (LooksLikeMeasurementSchemaIntent(lowered) && measurement is not null)
+        {
+            tools.Add(new CopilotToolInvocation(
+                "query_sql",
+                SonnetDbMcpResults.DefaultToolRowLimit,
+                null,
+                null,
+                $"DESCRIBE MEASUREMENT {measurement}"));
             return tools;
         }
 
@@ -483,6 +548,48 @@ internal sealed class CopilotAgent
             : [new CopilotToolInvocation("list_measurements", SonnetDbMcpResults.DefaultToolRowLimit, null, null, null)];
     }
 
+    private static bool LooksLikeDatabaseOverviewIntent(string lowered)
+    {
+        var refersCurrentDatabase = lowered.Contains("当前这个数据库", StringComparison.Ordinal)
+            || lowered.Contains("当前数据库", StringComparison.Ordinal)
+            || lowered.Contains("这个数据库", StringComparison.Ordinal)
+            || lowered.Contains("当前这个库", StringComparison.Ordinal)
+            || lowered.Contains("当前库", StringComparison.Ordinal)
+            || lowered.Contains("这个库", StringComparison.Ordinal)
+            || lowered.Contains("库里", StringComparison.Ordinal)
+            || lowered.Contains("数据库里", StringComparison.Ordinal);
+        var asksOverview = lowered.Contains("有什么", StringComparison.Ordinal)
+            || lowered.Contains("有哪些", StringComparison.Ordinal)
+            || lowered.Contains("里面有什么", StringComparison.Ordinal)
+            || lowered.Contains("里有什么", StringComparison.Ordinal)
+            || lowered.Contains("看一下", StringComparison.Ordinal)
+            || lowered.Contains("看一看", StringComparison.Ordinal)
+            || lowered.Contains("查一下", StringComparison.Ordinal)
+            || lowered.Contains("查一查", StringComparison.Ordinal)
+            || lowered.Contains("看看", StringComparison.Ordinal)
+            || lowered.Contains("概览", StringComparison.Ordinal);
+        var asksSchema = lowered.Contains("measurement", StringComparison.Ordinal)
+            || lowered.Contains("schema", StringComparison.Ordinal)
+            || lowered.Contains("结构", StringComparison.Ordinal)
+            || lowered.Contains("表", StringComparison.Ordinal)
+            || lowered.Contains("字段", StringComparison.Ordinal)
+            || lowered.Contains("列", StringComparison.Ordinal);
+
+        return (refersCurrentDatabase && asksOverview)
+            || (refersCurrentDatabase && asksSchema)
+            || lowered.Contains("当前这个数据库里有什么", StringComparison.Ordinal)
+            || lowered.Contains("当前数据库里有什么", StringComparison.Ordinal)
+            || lowered.Contains("这个库里有什么", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeMeasurementSchemaIntent(string lowered)
+        => lowered.Contains("字段", StringComparison.Ordinal)
+            || lowered.Contains("列", StringComparison.Ordinal)
+            || lowered.Contains("schema", StringComparison.Ordinal)
+            || lowered.Contains("结构", StringComparison.Ordinal)
+            || lowered.Contains("tag", StringComparison.Ordinal)
+            || lowered.Contains("field", StringComparison.Ordinal);
+
     private static IReadOnlyList<CopilotToolInvocation> EnsureWriteDraftPlan(
         IReadOnlyList<CopilotToolInvocation> plan,
         string userMessage)
@@ -501,20 +608,166 @@ internal sealed class CopilotAgent
         if (sql is null)
             return plan;
 
-        var draft = new CopilotToolInvocation("draft_sql", MaxRows: null, N: null, Measurement: null, Sql: sql);
+        var draft = new CopilotToolInvocation("draft_sql", MaxRows: null, N: null, Measurement: null, Sql: sql, Database: null);
         if (plan.Count == 0)
             return [draft];
 
-        var augmented = new List<CopilotToolInvocation>(Math.Min(MaxPlannedTools, plan.Count + 1));
+        // ReAct 模式下每轮只执行 1 个工具；heuristic 已包含 list_measurements，
+        // 追加 draft 后返回，RunAsync 只会取 plan[0]，下一轮再执行 draft。
+        var augmented = new List<CopilotToolInvocation>(plan.Count + 1);
         foreach (var tool in plan)
-        {
-            if (augmented.Count >= MaxPlannedTools - 1)
-                break;
             augmented.Add(tool);
-        }
 
         augmented.Add(draft);
         return augmented;
+    }
+
+    private bool TryBuildProvisioningPlan(
+        CopilotAgentContext context,
+        CopilotConversation conversation,
+        IReadOnlyList<CopilotToolObservation> observations,
+        out IReadOnlyList<CopilotToolInvocation> plan)
+    {
+        var intent = CopilotProvisioning.TryExtractIntent(conversation.LatestUserMessage);
+        if (intent is null)
+        {
+            plan = [];
+            return false;
+        }
+
+        var createDatabaseSql = CopilotProvisioning.BuildCreateDatabaseSql(intent);
+        var createMeasurementSql = CopilotProvisioning.BuildCreateMeasurementSql(intent);
+        var databaseExists = context.VisibleDatabases.Any(database =>
+                string.Equals(database, intent.DatabaseName, StringComparison.OrdinalIgnoreCase))
+            || HasObservedSql(observations, "execute_sql", createDatabaseSql, intent.DatabaseName);
+
+        if (!databaseExists && !HasObservedSql(observations, "draft_sql", createDatabaseSql, intent.DatabaseName))
+        {
+            plan = [new CopilotToolInvocation("draft_sql", null, null, null, createDatabaseSql, intent.DatabaseName)];
+            return true;
+        }
+
+        if (createMeasurementSql is not null
+            && !HasObservedSql(observations, "draft_sql", createMeasurementSql, intent.DatabaseName))
+        {
+            plan = [new CopilotToolInvocation("draft_sql", null, null, null, createMeasurementSql, intent.DatabaseName)];
+            return true;
+        }
+
+        if (intent.ExecuteNow
+            && context.CanWrite
+            && context.CanUseControlPlane
+            && !databaseExists
+            && !HasObservedSql(observations, "execute_sql", createDatabaseSql, intent.DatabaseName))
+        {
+            plan = [new CopilotToolInvocation("execute_sql", SonnetDbMcpResults.DefaultToolRowLimit, null, null, createDatabaseSql, intent.DatabaseName)];
+            return true;
+        }
+
+        if (intent.ExecuteNow
+            && context.CanWrite
+            && createMeasurementSql is not null
+            && !HasObservedSql(observations, "execute_sql", createMeasurementSql, intent.DatabaseName))
+        {
+            plan = [new CopilotToolInvocation("execute_sql", SonnetDbMcpResults.DefaultToolRowLimit, null, null, createMeasurementSql, intent.DatabaseName)];
+            return true;
+        }
+
+        plan = [];
+        return true;
+    }
+
+    private static bool HasObservedSql(
+        IReadOnlyList<CopilotToolObservation> observations,
+        string toolName,
+        string sql,
+        string? database)
+    {
+        foreach (var observation in observations)
+        {
+            if (!string.Equals(observation.Name, toolName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!TryExtractToolArguments(observation.ArgumentsJson, out var observedSql, out var observedDatabase))
+                continue;
+
+            if (!string.Equals(CollapseWhitespace(observedSql), CollapseWhitespace(sql), StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var left = observedDatabase ?? string.Empty;
+            var right = database ?? string.Empty;
+            if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryExtractToolArguments(string argumentsJson, out string sql, out string? database)
+    {
+        sql = string.Empty;
+        database = null;
+
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(argumentsJson);
+            if (!document.RootElement.TryGetProperty("sql", out var sqlElement)
+                || sqlElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            sql = sqlElement.GetString() ?? string.Empty;
+            if (document.RootElement.TryGetProperty("database", out var databaseElement)
+                && databaseElement.ValueKind == JsonValueKind.String)
+            {
+                database = databaseElement.GetString();
+            }
+
+            return !string.IsNullOrWhiteSpace(sql);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private IReadOnlyList<string> GetMeasurements(string databaseName, Tsdb? database)
+        => database is null ? [] : _schemaCache.GetMeasurements(databaseName, database);
+
+    private static string ResolveToolDatabaseName(CopilotAgentContext context, CopilotToolInvocation tool, SqlStatement? statement = null)
+    {
+        if (!string.IsNullOrWhiteSpace(tool.Database))
+            return tool.Database.Trim();
+        if (statement is CreateDatabaseStatement createDatabase)
+            return createDatabase.DatabaseName;
+        return context.DatabaseName;
+    }
+
+    private Tsdb? TryResolveToolDatabase(CopilotAgentContext context, CopilotToolInvocation tool)
+    {
+        if (!string.IsNullOrWhiteSpace(tool.Database))
+        {
+            if (context.Database is not null
+                && string.Equals(context.DatabaseName, tool.Database, StringComparison.OrdinalIgnoreCase))
+            {
+                return context.Database;
+            }
+
+            return _registry.TryGet(tool.Database, out var explicitDatabase) ? explicitDatabase : null;
+        }
+
+        return context.Database;
+    }
+
+    private Tsdb RequireToolDatabase(CopilotAgentContext context, CopilotToolInvocation tool, string toolName)
+    {
+        var databaseName = ResolveToolDatabaseName(context, tool);
+        return TryResolveToolDatabase(context, tool)
+            ?? throw new InvalidOperationException($"工具 {toolName} 需要数据库上下文，但数据库 '{databaseName}' 当前不存在或不可用。");
     }
 
     private async Task<CopilotToolExecutionResult> ExecuteToolAsync(
@@ -562,13 +815,15 @@ internal sealed class CopilotAgent
     private string ExecuteListMeasurements(CopilotAgentContext context, CopilotToolInvocation tool)
     {
         var maxRows = tool.MaxRows ?? SonnetDbMcpResults.DefaultToolRowLimit;
-        var measurements = _schemaCache.GetMeasurements(context.DatabaseName, context.Database);
+        var databaseName = ResolveToolDatabaseName(context, tool);
+        var database = RequireToolDatabase(context, tool, "list_measurements");
+        var measurements = _schemaCache.GetMeasurements(databaseName, database);
         var names = new List<string>(Math.Min(measurements.Count, maxRows));
         for (var i = 0; i < measurements.Count && i < maxRows; i++)
             names.Add(measurements[i]);
 
         var payload = new McpMeasurementListResult(
-            context.DatabaseName,
+            databaseName,
             names,
             Truncated: measurements.Count > maxRows);
         return SerializeToolResult(payload, ServerJsonContext.Default.McpMeasurementListResult);
@@ -578,7 +833,9 @@ internal sealed class CopilotAgent
     {
         var measurement = tool.Measurement
             ?? throw new InvalidOperationException("describe_measurement 缺少 measurement 参数。");
-        var payload = _schemaCache.GetMeasurementSchema(context.DatabaseName, measurement, context.Database);
+        var databaseName = ResolveToolDatabaseName(context, tool);
+        var database = RequireToolDatabase(context, tool, "describe_measurement");
+        var payload = _schemaCache.GetMeasurementSchema(databaseName, measurement, database);
         return SerializeToolResult(payload, ServerJsonContext.Default.McpMeasurementSchemaResult);
     }
 
@@ -587,6 +844,8 @@ internal sealed class CopilotAgent
         var measurement = tool.Measurement
             ?? throw new InvalidOperationException("sample_rows 缺少 measurement 参数。");
         var rows = tool.N ?? SonnetDbMcpResults.DefaultSampleRowLimit;
+        var databaseName = ResolveToolDatabaseName(context, tool);
+        var database = RequireToolDatabase(context, tool, "sample_rows");
 
         var statement = new SelectStatement(
             Projections: [new SelectItem(StarExpression.Instance, Alias: null)],
@@ -596,13 +855,13 @@ internal sealed class CopilotAgent
             TableValuedFunction: null,
             Pagination: new PaginationSpec(0, checked(rows + 1)));
 
-        var executionResult = SqlExecutor.ExecuteStatement(context.Database, statement);
+        var executionResult = SqlExecutor.ExecuteStatement(database, statement);
         if (executionResult is not SelectExecutionResult selectResult)
             throw new InvalidOperationException("sample_rows 未返回结果集。");
 
         var (resultRows, truncated) = SonnetDbMcpResults.SliceRows(selectResult, rows, canTruncate: true);
         var payload = new McpSampleRowsResult(
-            Database: context.DatabaseName,
+            Database: databaseName,
             Measurement: measurement,
             RequestedRows: rows,
             Columns: selectResult.Columns,
@@ -617,6 +876,8 @@ internal sealed class CopilotAgent
     {
         var sql = tool.Sql
             ?? throw new InvalidOperationException("explain_sql 缺少 sql 参数。");
+        var databaseName = ResolveToolDatabaseName(context, tool);
+        var database = RequireToolDatabase(context, tool, "explain_sql");
         var statement = SqlParser.Parse(sql);
         if (!IsReadOnlyStatement(statement))
         {
@@ -624,7 +885,7 @@ internal sealed class CopilotAgent
                 "explain_sql 仅支持 SELECT、SHOW MEASUREMENTS / SHOW TABLES 与 DESCRIBE [MEASUREMENT]。");
         }
 
-        var payload = _explainSqlService.Explain(context.DatabaseName, context.Database, statement);
+        var payload = _explainSqlService.Explain(databaseName, database, statement);
         return SerializeToolResult(payload, ServerJsonContext.Default.McpExplainSqlResult);
     }
 
@@ -646,16 +907,31 @@ internal sealed class CopilotAgent
         if (!IsDraftableStatement(statement))
         {
             throw new InvalidOperationException(
-                "draft_sql 仅支持 CREATE MEASUREMENT、INSERT、DELETE、SELECT、SHOW MEASUREMENTS 与 DESCRIBE [MEASUREMENT]。");
+                "draft_sql 仅支持 CREATE DATABASE、CREATE MEASUREMENT、INSERT、DELETE、SELECT、SHOW MEASUREMENTS 与 DESCRIBE [MEASUREMENT]。");
         }
 
+        var databaseName = ResolveToolDatabaseName(context, tool, statement);
+        var database = TryResolveToolDatabase(context, tool);
         var (statementType, measurement, isWrite) = DescribeStatement(statement);
         bool? exists = null;
-        var notes = new List<string>(2);
+        var notes = new List<string>(3);
 
-        if (isWrite && measurement is not null)
+        if (statement is CreateDatabaseStatement createDatabase)
         {
-            var existing = context.Database.Measurements.TryGet(measurement);
+            var alreadyVisible = context.VisibleDatabases.Any(databaseItem =>
+                string.Equals(databaseItem, createDatabase.DatabaseName, StringComparison.OrdinalIgnoreCase));
+            notes.Add(alreadyVisible
+                ? $"数据库 '{createDatabase.DatabaseName}' 已存在，可以直接复用。"
+                : $"数据库 '{createDatabase.DatabaseName}' 当前不存在，可以先执行该 CREATE DATABASE 语句创建。");
+        }
+        else if (database is null)
+        {
+            notes.Add($"数据库 '{databaseName}' 当前不存在，执行该语句前需要先 CREATE DATABASE {databaseName}。");
+        }
+
+        if (isWrite && measurement is not null && database is not null)
+        {
+            var existing = database.Measurements.TryGet(measurement);
             exists = existing is not null;
             switch (statement)
             {
@@ -676,13 +952,22 @@ internal sealed class CopilotAgent
 
         if (isWrite)
         {
-            notes.Add(context.CanWrite
-                ? "当前凭据具备写权限，可以调用 execute_sql 直接执行。"
-                : "当前凭据没有写权限，请把该 SQL 交由具备写权限的用户执行。");
+            if (statement is CreateDatabaseStatement)
+            {
+                notes.Add(context.CanWrite && context.CanUseControlPlane
+                    ? "当前会话处于读写模式且具备控制面权限，可以调用 execute_sql 直接创建数据库。"
+                    : "当前会话无法直接创建数据库。你可以复制上方 SQL 交给管理员执行，或切换到具备控制面权限的账号后再试。");
+            }
+            else
+            {
+                notes.Add(context.CanWrite
+                    ? "当前凭据具备写权限，可以调用 execute_sql 直接执行。"
+                    : "当前凭据没有写权限。您可以：① 请管理员执行 GRANT WRITE ON DATABASE <db> TO <user> 为您授权（授权后在当前会话中即可生效）；② 将上方 SQL 复制后，切换到 SQL Console 选项卡，以具备写权限的账号粘贴执行。");
+            }
         }
 
         var payload = new McpDraftSqlResult(
-            Database: context.DatabaseName,
+            Database: databaseName,
             StatementType: statementType,
             Sql: sql.Trim(),
             Measurement: measurement,
@@ -712,16 +997,17 @@ internal sealed class CopilotAgent
             throw new SqlExecutionException(
                 sql,
                 "validate",
-                "execute_sql 仅支持 CREATE MEASUREMENT、INSERT、DELETE、SELECT、SHOW MEASUREMENTS 与 DESCRIBE [MEASUREMENT]。");
+                "execute_sql 仅支持 CREATE DATABASE、CREATE MEASUREMENT、INSERT、DELETE、SELECT、SHOW MEASUREMENTS 与 DESCRIBE [MEASUREMENT]。");
         }
 
+        var databaseName = ResolveToolDatabaseName(context, tool, statement);
         var (statementType, measurement, isWrite) = DescribeStatement(statement);
         if (isWrite && !context.CanWrite)
         {
             throw new SqlExecutionException(
                 sql,
                 "permission",
-                $"当前凭据对数据库 '{context.DatabaseName}' 没有写权限，无法执行 {statementType.ToUpperInvariant()} 语句。");
+                $"当前凭据对数据库 '{databaseName}' 没有写权限，无法执行 {statementType.ToUpperInvariant()} 语句。");
         }
 
         var maxRows = tool.MaxRows ?? SonnetDbMcpResults.DefaultToolRowLimit;
@@ -733,7 +1019,20 @@ internal sealed class CopilotAgent
         object? executionResult;
         try
         {
-            executionResult = SqlExecutor.ExecuteStatement(context.Database, executable);
+            if (statement is CreateDatabaseStatement)
+            {
+                if (!context.CanUseControlPlane)
+                {
+                    throw new InvalidOperationException("当前凭据没有控制面权限，无法直接创建数据库。");
+                }
+
+                executionResult = SqlExecutor.ExecuteControlPlaneStatement(statement, _controlPlane);
+            }
+            else
+            {
+                var database = RequireToolDatabase(context, tool, "execute_sql");
+                executionResult = SqlExecutor.ExecuteStatement(database, executable);
+            }
         }
         catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or ArgumentException)
         {
@@ -764,10 +1063,13 @@ internal sealed class CopilotAgent
             case MeasurementSchema schema:
                 rowsAffected = schema.Columns.Count;
                 break;
+            case int affected when statement is CreateDatabaseStatement:
+                rowsAffected = affected;
+                break;
         }
 
         var payload = new McpExecuteSqlResult(
-            Database: context.DatabaseName,
+            Database: databaseName,
             StatementType: statementType,
             Sql: sql.Trim(),
             Measurement: measurement,
@@ -782,6 +1084,7 @@ internal sealed class CopilotAgent
     private static (string StatementType, string? Measurement, bool IsWrite) DescribeStatement(SqlStatement statement)
         => statement switch
         {
+            CreateDatabaseStatement createDatabase => ("create_database", createDatabase.DatabaseName, true),
             CreateMeasurementStatement create => ("create_measurement", create.Name, true),
             InsertStatement insert => ("insert", insert.Measurement, true),
             DeleteStatement delete => ("delete", delete.Measurement, true),
@@ -792,7 +1095,8 @@ internal sealed class CopilotAgent
         };
 
     private static bool IsDraftableStatement(SqlStatement statement)
-        => statement is CreateMeasurementStatement
+        => statement is CreateDatabaseStatement
+            or CreateMeasurementStatement
             or InsertStatement
             or DeleteStatement
             or SelectStatement
@@ -890,11 +1194,13 @@ internal sealed class CopilotAgent
         }
     }
 
-    private static string TryExecuteQuerySql(CopilotAgentContext context, CopilotToolInvocation tool)
+    private string TryExecuteQuerySql(CopilotAgentContext context, CopilotToolInvocation tool)
     {
         var sql = tool.Sql
             ?? throw new InvalidOperationException("query_sql 缺少 sql 参数。");
         var maxRows = tool.MaxRows ?? SonnetDbMcpResults.DefaultToolRowLimit;
+        var databaseName = ResolveToolDatabaseName(context, tool);
+        var database = RequireToolDatabase(context, tool, "query_sql");
 
         SqlStatement statement;
         try
@@ -922,7 +1228,7 @@ internal sealed class CopilotAgent
         object? executionResult;
         try
         {
-            executionResult = SqlExecutor.ExecuteStatement(context.Database, executable);
+            executionResult = SqlExecutor.ExecuteStatement(database, executable);
         }
         catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or ArgumentException)
         {
@@ -934,7 +1240,7 @@ internal sealed class CopilotAgent
 
         var (rows, truncated) = SonnetDbMcpResults.SliceRows(selectResult, maxRows, canTruncate);
         var payload = new McpSqlQueryResult(
-            context.DatabaseName,
+            databaseName,
             StatementType: GetStatementType(statement),
             Columns: selectResult.Columns,
             Rows: rows,
@@ -948,7 +1254,8 @@ internal sealed class CopilotAgent
         CopilotAgentContext context,
         CopilotConversation conversation,
         IReadOnlyList<DocsSearchResult> docs,
-        IReadOnlyList<SkillLoadResult> loadedSkills)
+        IReadOnlyList<SkillLoadResult> loadedSkills,
+        IReadOnlyList<CopilotToolObservation> observations)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"当前数据库：{context.DatabaseName}");
@@ -990,6 +1297,22 @@ internal sealed class CopilotAgent
                 builder.Append(string.IsNullOrWhiteSpace(doc.Title) ? doc.Source : doc.Title);
                 builder.Append("：");
                 builder.AppendLine(Truncate(CollapseWhitespace(doc.Content), 240));
+            }
+        }
+
+        // 把本轮之前已执行的工具结果注入给 Planner，让它基于真实结果决定下一步
+        if (observations.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("【已执行工具结果】（请基于这些结果决定下一步，不要重复调用已成功的工具）：");
+            foreach (var obs in observations)
+            {
+                builder.Append("- tool=");
+                builder.Append(obs.Name);
+                builder.Append(" args=");
+                builder.Append(obs.ArgumentsJson);
+                builder.Append(" result=");
+                builder.AppendLine(Truncate(obs.ResultJson, 600));
             }
         }
 
@@ -1085,10 +1408,12 @@ internal sealed class CopilotAgent
         CopilotToolInvocation tool,
         SqlExecutionException exception)
     {
+        var databaseName = ResolveToolDatabaseName(context, tool);
+        var database = TryResolveToolDatabase(context, tool);
         var builder = new StringBuilder();
-        builder.AppendLine($"当前数据库：{context.DatabaseName}");
+        builder.AppendLine($"当前数据库：{databaseName}");
         builder.AppendLine($"当前可见数据库：{string.Join(", ", context.VisibleDatabases)}");
-        builder.AppendLine($"已知 measurements：{string.Join(", ", _schemaCache.GetMeasurements(context.DatabaseName, context.Database))}");
+        builder.AppendLine($"已知 measurements：{string.Join(", ", GetMeasurements(databaseName, database))}");
         builder.AppendLine();
         AppendConversationHistory(builder, conversation.History);
         builder.AppendLine("当前用户问题：");
@@ -1160,6 +1485,9 @@ internal sealed class CopilotAgent
         IReadOnlyList<CopilotToolObservation> observations,
         out string answer)
     {
+        if (TryBuildProvisioningSqlFallbackAnswer(observations, out answer))
+            return true;
+
         foreach (var observation in observations)
         {
             if (string.Equals(observation.Name, "draft_sql", StringComparison.OrdinalIgnoreCase)
@@ -1177,10 +1505,81 @@ internal sealed class CopilotAgent
             }
         }
 
+        foreach (var observation in observations)
+        {
+            if (string.Equals(observation.Name, "query_sql", StringComparison.OrdinalIgnoreCase)
+                && TryDeserializeToolResult(observation.ResultJson, ServerJsonContext.Default.McpSqlQueryResult) is { } queryResult
+                && TryBuildQuerySqlFallbackAnswer(queryResult, observation.ArgumentsJson, observation.Citation.Id, out answer))
+            {
+                return true;
+            }
+
+            if (string.Equals(observation.Name, "list_measurements", StringComparison.OrdinalIgnoreCase)
+                && TryDeserializeToolResult(observation.ResultJson, ServerJsonContext.Default.McpMeasurementListResult) is { } measurementList)
+            {
+                answer = BuildMeasurementListFallbackAnswer(
+                    measurementList.Database,
+                    measurementList.Measurements,
+                    measurementList.Truncated,
+                    observation.Citation.Id,
+                    fromSql: false);
+                return true;
+            }
+
+            if (string.Equals(observation.Name, "describe_measurement", StringComparison.OrdinalIgnoreCase)
+                && TryDeserializeToolResult(observation.ResultJson, ServerJsonContext.Default.McpMeasurementSchemaResult) is { } schema)
+            {
+                answer = BuildMeasurementSchemaFallbackAnswer(
+                    schema.Database,
+                    schema.Measurement,
+                    schema.Columns,
+                    observation.Citation.Id,
+                    fromSql: false);
+                return true;
+            }
+        }
+
         var createSql = TryBuildCreateMeasurementSql(conversation.LatestUserMessage);
         if (createSql is not null)
         {
             answer = BuildInferredCreateSqlFallbackAnswer(createSql);
+            return true;
+        }
+
+        answer = string.Empty;
+        return false;
+    }
+
+    private static bool TryBuildQuerySqlFallbackAnswer(
+        McpSqlQueryResult queryResult,
+        string argumentsJson,
+        string citationId,
+        out string answer)
+    {
+        if (string.Equals(queryResult.StatementType, "show_measurements", StringComparison.OrdinalIgnoreCase))
+        {
+            answer = BuildMeasurementListFallbackAnswer(
+                queryResult.Database,
+                ExtractMeasurementNames(queryResult),
+                queryResult.Truncated,
+                citationId,
+                fromSql: true);
+            return true;
+        }
+
+        if (string.Equals(queryResult.StatementType, "describe_measurement", StringComparison.OrdinalIgnoreCase)
+            && TryExtractMeasurementSchema(
+                queryResult,
+                TryExtractMeasurementFromToolArguments(argumentsJson),
+                out var measurement,
+                out var columns))
+        {
+            answer = BuildMeasurementSchemaFallbackAnswer(
+                queryResult.Database,
+                measurement,
+                columns,
+                citationId,
+                fromSql: true);
             return true;
         }
 
@@ -1207,6 +1606,7 @@ internal sealed class CopilotAgent
         var builder = new StringBuilder();
         builder.AppendLine(draft.StatementType switch
         {
+            "create_database" => "已经为你起草建库 SQL：",
             "create_measurement" => "已经为你起草建表 SQL：",
             "insert" => "已经为你起草写入 SQL：",
             "delete" => "已经为你起草删除 SQL：",
@@ -1218,11 +1618,72 @@ internal sealed class CopilotAgent
         return builder.ToString().Trim();
     }
 
+    private static string BuildMeasurementListFallbackAnswer(
+        string database,
+        IReadOnlyList<string> measurements,
+        bool truncated,
+        string citationId,
+        bool fromSql)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(fromSql
+            ? $"我已经对当前数据库 `{database}` 执行了 `SHOW MEASUREMENTS`。"
+            : $"我已经查看了当前数据库 `{database}` 的 measurement 列表。");
+
+        if (measurements.Count == 0)
+        {
+            builder.AppendLine("当前库里还没有任何 measurement。");
+            AppendCitation(builder, citationId);
+            return builder.ToString().Trim();
+        }
+
+        builder.AppendLine($"当前库里有 {measurements.Count}{(truncated ? "+" : string.Empty)} 个 measurement：");
+        foreach (var measurement in measurements)
+        {
+            if (!string.IsNullOrWhiteSpace(measurement))
+                builder.AppendLine($"- {measurement}");
+        }
+
+        builder.AppendLine("如果你愿意，我可以继续按其中某个 measurement 执行 `DESCRIBE MEASUREMENT <name>` 看字段结构。");
+        AppendCitation(builder, citationId);
+        return builder.ToString().Trim();
+    }
+
+    private static string BuildMeasurementSchemaFallbackAnswer(
+        string database,
+        string measurement,
+        IReadOnlyList<McpMeasurementColumnResult> columns,
+        string citationId,
+        bool fromSql)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(fromSql
+            ? $"我已经对数据库 `{database}` 执行了 `DESCRIBE MEASUREMENT {measurement}`。"
+            : $"我已经查看了数据库 `{database}` 中 measurement `{measurement}` 的结构。");
+
+        if (columns.Count == 0)
+        {
+            builder.AppendLine("当前没有读取到任何列定义。");
+            AppendCitation(builder, citationId);
+            return builder.ToString().Trim();
+        }
+
+        builder.AppendLine($"`{measurement}` 目前包含 {columns.Count} 列：");
+        foreach (var column in columns)
+        {
+            builder.AppendLine($"- {column.Name}：{column.ColumnType} / {column.DataType}");
+        }
+
+        AppendCitation(builder, citationId);
+        return builder.ToString().Trim();
+    }
+
     private static string BuildExecuteSqlFallbackAnswer(McpExecuteSqlResult executed, string citationId)
     {
         var builder = new StringBuilder();
         builder.AppendLine(executed.StatementType switch
         {
+            "create_database" => "SQL 已执行，数据库已创建：",
             "create_measurement" => "SQL 已执行，measurement 已创建：",
             "insert" => "SQL 已执行，数据已写入：",
             "delete" => "SQL 已执行，删除标记已写入：",
@@ -1235,6 +1696,72 @@ internal sealed class CopilotAgent
             builder.AppendLine($"返回行数：{executed.ReturnedRows.Value}。");
         AppendCitation(builder, citationId);
         return builder.ToString().Trim();
+    }
+
+    private static bool TryBuildProvisioningSqlFallbackAnswer(
+        IReadOnlyList<CopilotToolObservation> observations,
+        out string answer)
+    {
+        var drafted = new List<(McpDraftSqlResult Payload, string CitationId)>();
+        var executed = new List<(McpExecuteSqlResult Payload, string CitationId)>();
+
+        foreach (var observation in observations)
+        {
+            if (string.Equals(observation.Name, "draft_sql", StringComparison.OrdinalIgnoreCase)
+                && TryDeserializeToolResult(observation.ResultJson, ServerJsonContext.Default.McpDraftSqlResult) is { } draft)
+            {
+                drafted.Add((draft, observation.Citation.Id));
+            }
+
+            if (string.Equals(observation.Name, "execute_sql", StringComparison.OrdinalIgnoreCase)
+                && TryDeserializeToolResult(observation.ResultJson, ServerJsonContext.Default.McpExecuteSqlResult) is { } execute)
+            {
+                executed.Add((execute, observation.Citation.Id));
+            }
+        }
+
+        var hasCreateDatabase = drafted.Any(static item => string.Equals(item.Payload.StatementType, "create_database", StringComparison.OrdinalIgnoreCase))
+            || executed.Any(static item => string.Equals(item.Payload.StatementType, "create_database", StringComparison.OrdinalIgnoreCase));
+        if (!hasCreateDatabase)
+        {
+            answer = string.Empty;
+            return false;
+        }
+
+        var builder = new StringBuilder();
+        if (executed.Count > 0)
+        {
+            builder.AppendLine("我已经按顺序执行以下 provisioning SQL：");
+            foreach (var item in executed)
+            {
+                AppendSqlBlock(builder, item.Payload.Sql);
+            }
+
+            var citations = string.Concat(executed.Select(static item => $"[{item.CitationId}]"));
+            if (!string.IsNullOrWhiteSpace(citations))
+                builder.Append(citations);
+        }
+        else
+        {
+            builder.AppendLine("已经为你按顺序起草以下 provisioning SQL：");
+            foreach (var item in drafted)
+            {
+                AppendSqlBlock(builder, item.Payload.Sql);
+            }
+
+            var notes = drafted.SelectMany(static item => item.Payload.Notes)
+                .Where(static note => !string.IsNullOrWhiteSpace(note))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            AppendNotes(builder, notes);
+
+            var citations = string.Concat(drafted.Select(static item => $"[{item.CitationId}]"));
+            if (!string.IsNullOrWhiteSpace(citations))
+                builder.Append(citations);
+        }
+
+        answer = builder.ToString().Trim();
+        return true;
     }
 
     private static string BuildInferredCreateSqlFallbackAnswer(string sql)
@@ -1266,6 +1793,109 @@ internal sealed class CopilotAgent
     {
         if (!string.IsNullOrWhiteSpace(citationId))
             builder.Append('[').Append(citationId).Append(']');
+    }
+
+    private static IReadOnlyList<string> ExtractMeasurementNames(McpSqlQueryResult queryResult)
+    {
+        var names = new List<string>(queryResult.Rows.Count);
+        foreach (var row in queryResult.Rows)
+        {
+            var name = TryReadCellText(row, 0);
+            if (!string.IsNullOrWhiteSpace(name))
+                names.Add(name);
+        }
+
+        return names;
+    }
+
+    private static bool TryExtractMeasurementSchema(
+        McpSqlQueryResult queryResult,
+        string? measurementHint,
+        out string measurement,
+        out IReadOnlyList<McpMeasurementColumnResult> columns)
+    {
+        measurement = measurementHint ?? "目标 measurement";
+        columns = [];
+
+        var nameIndex = FindColumnIndex(queryResult.Columns, "column_name");
+        var typeIndex = FindColumnIndex(queryResult.Columns, "column_type");
+        var dataTypeIndex = FindColumnIndex(queryResult.Columns, "data_type");
+        if (nameIndex < 0 || typeIndex < 0 || dataTypeIndex < 0)
+            return false;
+
+        var parsed = new List<McpMeasurementColumnResult>(queryResult.Rows.Count);
+        foreach (var row in queryResult.Rows)
+        {
+            var name = TryReadCellText(row, nameIndex);
+            var columnType = TryReadCellText(row, typeIndex);
+            var dataType = TryReadCellText(row, dataTypeIndex);
+            if (string.IsNullOrWhiteSpace(name)
+                || string.IsNullOrWhiteSpace(columnType)
+                || string.IsNullOrWhiteSpace(dataType))
+            {
+                continue;
+            }
+
+            parsed.Add(new McpMeasurementColumnResult(name, columnType, dataType));
+        }
+
+        if (parsed.Count == 0)
+            return false;
+
+        columns = parsed;
+        return true;
+    }
+
+    private static string? TryExtractMeasurementFromToolArguments(string argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(argumentsJson);
+            if (!document.RootElement.TryGetProperty("sql", out var sqlElement))
+                return null;
+            if (sqlElement.ValueKind != JsonValueKind.String)
+                return null;
+
+            var sql = sqlElement.GetString();
+            if (string.IsNullOrWhiteSpace(sql))
+                return null;
+
+            var statement = SqlParser.Parse(sql);
+            return statement is DescribeMeasurementStatement describe ? describe.Name : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static int FindColumnIndex(IReadOnlyList<string> columns, string name)
+    {
+        for (var i = 0; i < columns.Count; i++)
+        {
+            if (string.Equals(columns[i], name, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static string? TryReadCellText(IReadOnlyList<JsonElementValue> row, int index)
+    {
+        if (index < 0 || index >= row.Count)
+            return null;
+
+        return row[index].Kind switch
+        {
+            ScalarKind.String => row[index].StringValue,
+            ScalarKind.Integer => row[index].IntegerValue?.ToString(CultureInfo.InvariantCulture),
+            ScalarKind.Double => row[index].DoubleValue?.ToString(CultureInfo.InvariantCulture),
+            ScalarKind.Boolean => row[index].BooleanValue is true ? "true" : "false",
+            _ => null,
+        };
     }
 
     private static List<CopilotCitation> BuildRetrievalCitations(
@@ -1754,6 +2384,8 @@ internal sealed class CopilotAgent
         using var writer = new Utf8JsonWriter(buffer);
         writer.WriteStartObject();
 
+        if (tool.Database is not null)
+            writer.WriteString("database", tool.Database);
         if (tool.Measurement is not null)
             writer.WriteString("measurement", tool.Measurement);
         if (tool.Sql is not null)
@@ -1767,6 +2399,24 @@ internal sealed class CopilotAgent
         writer.Flush();
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
+
+    private static string GetToolKey(CopilotToolInvocation tool)
+        => string.Create(
+            CultureInfo.InvariantCulture,
+            $"{tool.Name.ToLowerInvariant()}|{NormalizeKeyPart(tool.Database)}|{NormalizeKeyPart(tool.Measurement)}|{NormalizeSqlKeyPart(tool.Sql)}|{NormalizeNumericKeyPart(tool.MaxRows)}|{NormalizeNumericKeyPart(tool.N)}");
+
+    private static string NormalizeKeyPart(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim().ToLowerInvariant();
+
+    private static string NormalizeSqlKeyPart(string? sql)
+        => string.IsNullOrWhiteSpace(sql)
+            ? string.Empty
+            : CollapseWhitespace(sql);
+
+    private static string NormalizeNumericKeyPart(int? value)
+        => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
 
     private static string BuildSqlErrorPayload(SqlExecutionException exception, int attempt, bool final)
     {
@@ -1840,8 +2490,10 @@ internal sealed class CopilotAgent
 
     private const string PlannerSystemPrompt =
         """
-        你是 SonnetDB Copilot 的工具规划器。
-        你的任务是只从下面 8 个工具中选择最少必要的工具调用，最多 3 个：
+        你是 SonnetDB Copilot 的工具规划器，采用 ReAct（Reason + Act）模式逐步推进。
+        每次调用你只需决定【下一个最必要的单个工具】，看到该工具结果后再决定下一步。
+
+        可用工具（共 8 个）：
         - list_databases()
         - list_measurements(maxRows?)
         - describe_measurement(measurement)
@@ -1851,20 +2503,30 @@ internal sealed class CopilotAgent
         - draft_sql(sql)                        // 起草 / 校验 CREATE MEASUREMENT、INSERT、DELETE、SELECT 等 SQL，但不会改写数据
         - execute_sql(sql, maxRows?)            // 真正执行 CREATE MEASUREMENT / INSERT / DELETE / SELECT；写入需调用方具备写权限
 
-        输出必须是严格 JSON，格式如下：
-        {"tools":[{"name":"draft_sql","sql":"CREATE MEASUREMENT cpu (host TAG, usage FIELD FLOAT, temperature FIELD FLOAT)"}]}
+        输出必须是严格 JSON，每次只输出 1 个工具（或空数组表示已完成）：
+        {"tools":[{"name":"list_databases"}]}
+        {"tools":[{"name":"draft_sql","sql":"CREATE MEASUREMENT host_perf (host TAG, cpu_pct FIELD FLOAT, mem_pct FIELD FLOAT, cpu_temp_celsius FIELD FLOAT)"}]}
+        {"tools":[]}
 
         规则：
         - 只能输出 JSON，不要附加解释、Markdown 或代码块。
-        - 如果已有上下文足够回答，可以返回 {"tools":[]}
+        - 每次只输出 1 个工具；如果已有上下文足够回答，输出 {"tools":[]} 表示完成。
+        - 如果已有【已执行工具结果】，必须先阅读这些结果再决定下一步，不要重复调用已经成功执行过的工具。
         - 询问 schema/字段/列结构时，优先 describe_measurement 或 list_measurements。
         - 用户给出只读 SQL 并询问结果时，优先 query_sql；询问扫描/成本/解释时优先 explain_sql。
-        - 用户描述“建表 / 创建 measurement / 插入数据 / 写入 / 删除数据”等需求时：
-            * 先用 list_measurements 或 describe_measurement 获取已有结构（如尚未掌握）。
-            * 再用 draft_sql 给出可执行的 CREATE MEASUREMENT / INSERT / DELETE 语句。
-            * 仅当用户在最近一次消息中明确说“执行 / 立即建表 / 直接写入 / 帮我跑一下”等含义时，才追加 execute_sql。
-            * 不要在没有 draft_sql 验证的情况下直接调用 execute_sql。
+        - 用户描述建表/创建 measurement/写入/删除数据等需求时，按以下顺序逐步推进：
+            步骤 1：若尚未知道数据库是否存在，先调用 list_databases。
+            步骤 2：若数据库存在但不确定 measurement 是否已存在，调用 list_measurements。
+            步骤 3：调用 draft_sql 起草 CREATE MEASUREMENT（必须覆盖用户提到的所有字段）。
+            步骤 4：仅当用户明确说执行/立即建表/直接写入/帮我跑一下时，才调用 execute_sql。
+            不要跳过步骤，不要在没有 draft_sql 验证的情况下直接调用 execute_sql。
+        - 当用户的意图是【创建/新建一个数据库】（"建一个仓库"、"创建数据库"、"新建库"、"create database" 等），不要去 list_measurements / describe_measurement，也不要假设用户想往当前库里建表。优先按以下顺序推进：
+            步骤 1：调用 list_databases 确认目标库名是否已存在；如果用户没给名字，跳过该步骤直接进入步骤 2。
+            步骤 2：调用 draft_sql 起草 CREATE DATABASE 语句（语法：`CREATE DATABASE <name>`，name 必须是合法标识符；如果用户同时描述了想保存的指标，draft_sql 还需要紧跟一条 CREATE MEASUREMENT，覆盖所有字段）。
+            步骤 3：仅当用户明确说"执行/立即建/帮我创建"时才调用 execute_sql；否则直接返回 {"tools":[]} 让回答器把 SQL 给用户。
+        - 不要把 `__copilot__` / `_internal` 等系统库当成业务库去操作；它们不会出现在 list_databases 结果里。
         - 不要编造不存在的 measurement 名称、列名或函数。
+        - SonnetDB 的 CREATE DATABASE 语法：`CREATE DATABASE name`，不支持 IF NOT EXISTS / WITH 选项；同名库已存在时可直接复用。
         - SonnetDB 的 CREATE MEASUREMENT 语法：CREATE MEASUREMENT name (col TAG, col FIELD type, ...)，FIELD 类型只接受 FLOAT / INT / BOOL / STRING / VECTOR(N)，TAG 列固定为 STRING。
         - SonnetDB 的 INSERT 语法：INSERT INTO measurement (time, tag1, field1, ...) VALUES (1700000000000, 'host-1', 0.42, ...)，time 为毫秒时间戳。
         """;
@@ -1887,12 +2549,20 @@ internal sealed class CopilotAgent
         - 使用中文回答。
         - 优先给出直接结论，再补充必要说明。
         - 如果给定了 citations，请尽量在对应句子末尾用 [C1] 这样的编号引用。
-        - 若证据不足，请明确说明“不确定”或“当前结果不足以确认”。
-        - 当用户的意图是“建表 / 写入 / 删除 / 改 schema”时，必须给出可直接复制执行的 SQL：
+        - 若证据不足，请明确说明不确定或当前结果不足以确认。
+        - 不要向用户复述工具名；对于 SHOW MEASUREMENTS、DESCRIBE MEASUREMENT、measurement 列表或 schema 结果，直接翻译成自然语言结论。
+        - 当用户的意图是建表 / 写入 / 删除 / 改 schema 时，必须给出可直接复制执行的 SQL：
             * 把每条 SQL 单独放在 ```sql 代码块中。
             * 优先使用 draft_sql / execute_sql 工具返回的 SQL，不要自行改写列名或类型。
             * 如果工具返回了 notes（例如缺权限、measurement 已存在），请把这些注意事项明确转述给用户。
-        - 当用户给出只是“描述”而工具没生成 SQL 时，根据已有 measurement 列表与字段，自己起草一条最贴近需求的 CREATE MEASUREMENT / INSERT 语句，同样放进 ```sql 代码块。
+            * 生成建表 SQL 时，必须覆盖用户提到的所有指标字段，不要只写一两个示例字段就省略其余。例如用户说 CPU 使用率、内存使用率、温度，就必须把三者都建成独立的 FIELD 列。
+            * 如果当前数据库不存在（list_databases 结果为空或不含目标库），必须在建表 SQL 之前先给出 CREATE DATABASE 语句，并说明需要先创建数据库。
+            * 当 SQL 已准备好且界面提供了 SQL Console 选项卡时，请在回答末尾提示用户：可以点击页面上方的 SQL Console 按鈕，将上方 SQL 粘贴进去直接执行。
+        - 当用户的意图是【新建 / 创建一个数据库】（"建一个仓库 / 数据库"、"create database"、"新建库"）：
+            * 必须先给出一条 `CREATE DATABASE <name>` SQL（放在 ```sql 代码块内）；如果用户没指定名字，请基于场景给一个合理名（例如 "host_metrics"、"sys_perf"）并在文字里说明可以改名。
+            * 如果用户同时描述了想保存的指标（CPU、内存、温度等），紧跟一条 CREATE MEASUREMENT，覆盖所有字段；FIELD 类型按语义选 FLOAT/INT/BOOL/STRING。
+            * 不要去 SHOW MEASUREMENTS、不要把 `__copilot__` 之类的系统库当成用户的业务库去描述；如果工具结果显示当前选中库是系统库，请明确告诉用户："这是系统内置库，建议为你新建的指标单独创建一个数据库"。
+        - 当用户给出只是描述而工具没生成 SQL 时，根据已有 measurement 列表与字段，自己起草一条最贴近需求的 CREATE MEASUREMENT / INSERT 语句，同样放进 ```sql 代码块。
         """;
 }
 
@@ -1900,16 +2570,18 @@ internal sealed class CopilotAgent
 /// Copilot 执行上下文。
 /// </summary>
 /// <param name="DatabaseName">当前数据库名。</param>
-/// <param name="Database">当前数据库实例。</param>
+/// <param name="Database">当前数据库实例；建库型 provisioning 请求在数据库尚未存在时可为空。</param>
 /// <param name="VisibleDatabases">当前凭据可见的数据库集合。</param>
-/// <param name="CanWrite">当前调用方对该数据库是否拥有写权限（控制 <c>execute_sql</c> 是否可对 DDL/DML 生效）。</param>
+/// <param name="CanWrite">当前请求是否允许直接执行写入类工具（同时受权限模式与凭据本身能力约束）。</param>
 /// <param name="ModelOverride">可选模型覆盖（M8）：如果不为空，会传递给 chat provider 作为本次调用的模型名。</param>
+/// <param name="CanUseControlPlane">当前凭据是否具备控制面能力（例如 CREATE DATABASE）。</param>
 internal sealed record CopilotAgentContext(
     string DatabaseName,
-    Tsdb Database,
+    Tsdb? Database,
     IReadOnlyList<string> VisibleDatabases,
     bool CanWrite = false,
-    string? ModelOverride = null);
+    string? ModelOverride = null,
+    bool CanUseControlPlane = false);
 
 /// <summary>
 /// 多轮对话的规范化结果。
@@ -1931,6 +2603,7 @@ internal sealed record CopilotToolPlan(IReadOnlyList<CopilotPlannedTool> Tools);
 /// </summary>
 internal sealed record CopilotPlannedTool(
     string Name,
+    string? Database = null,
     string? Measurement = null,
     string? Sql = null,
     int? MaxRows = null,
@@ -1944,7 +2617,8 @@ internal sealed record CopilotToolInvocation(
     int? MaxRows,
     int? N,
     string? Measurement,
-    string? Sql);
+    string? Sql,
+    string? Database = null);
 
 /// <summary>
 /// 已执行工具的观测结果。

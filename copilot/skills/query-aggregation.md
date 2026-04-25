@@ -20,15 +20,13 @@ requires_tools:
 
 ```sql
 SELECT
-  time_bucket(time, '1m') AS bucket,
   avg(temperature) AS avg_temp,
   max(temperature) AS max_temp,
   count(*) AS samples
 FROM cpu
 WHERE host = 'server-01'
   AND time >= now() - 1h
-GROUP BY bucket
-ORDER BY bucket;
+GROUP BY time(1m);
 ```
 
 ## 步骤
@@ -38,9 +36,10 @@ ORDER BY bucket;
 3. 在 SELECT 中显式给聚合列起别名（`AS avg_temp`），让客户端字段名稳定。
 4. 始终带 `WHERE time >= ...` 做时间裁剪；对裸 `SELECT *` 务必在 `query_sql` 上加 `maxRows`。
 5. `GROUP BY time(...)` 的桶大小要参考查询区间：>30 天用 1h；>1 天用 5m；最近 1 小时用 5s/10s。
+6. 当前版本只返回聚合列，不会自动带出 bucket 起始时间列。
 
 ## 反模式
 
 - 不带时间过滤的全表聚合（容易扫描整个 segment）。
-- 把 tag 列放进聚合函数：tag 应放进 `GROUP BY`。
+- 期望 `GROUP BY host`、`GROUP BY device_id` 这类按 tag 聚合：当前版本只支持 `GROUP BY time(...)`。
 - 在客户端用 `SUM` 替代数据库聚合：会跨网络传送原始点。

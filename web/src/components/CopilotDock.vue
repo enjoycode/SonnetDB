@@ -7,6 +7,7 @@
   <!-- 展开态：浮窗面板 -->
   <div
     v-else
+    ref="dockEl"
     class="copilot-dock"
     :class="{ 'is-fullscreen': fullscreen }"
     :style="dockStyle"
@@ -20,7 +21,7 @@
         </n-tag>
       </div>
       <n-space size="small" :wrap="false">
-        <n-popover trigger="click" placement="bottom-end" :width="300" :show-arrow="false">
+        <n-popover trigger="click" placement="bottom-end" :width="300" :show-arrow="false" :to="dockEl ?? 'body'">
           <template #trigger>
             <n-button text size="tiny" title="会话历史">≡</n-button>
           </template>
@@ -29,7 +30,7 @@
               <n-text strong style="font-size: 12px">最近会话</n-text>
               <n-space size="small">
                 <n-button size="tiny" type="primary" @click="onNewSession">+ 新会话</n-button>
-                <n-popconfirm @positive-click="onClearAll">
+                <n-popconfirm @positive-click="onClearAll" :to="dockEl ?? 'body'">
                   <template #trigger>
                     <n-button size="tiny" quaternary type="error" :disabled="sessions.recent.length === 0">清空</n-button>
                   </template>
@@ -93,16 +94,7 @@
       </div>
     </section>
 
-    <!-- 数据库选择 -->
-    <section class="copilot-dock__db">
-      <n-select
-        size="small"
-        v-model:value="selectedDb"
-        :options="dbOptions"
-        placeholder="选择数据库（用于工具调用）"
-        :disabled="dbs.length === 0"
-      />
-    </section>
+    <!-- 数据库选择 已移除：数据库由 AI 根据上下文自动推断，无需手动选择 -->
 
     <!-- M8: 模型选择器 -->
     <section class="copilot-dock__model">
@@ -116,6 +108,7 @@
         tag
         :show="modelOptions.length > 0 || undefined"
         :title="modelDefault ? `服务端默认：${modelDefault}` : '未配置默认模型'"
+        :to="dockEl ?? 'body'"
       >
         <template #empty>
           {{ modelDefault ? `默认：${modelDefault}` : '可输入模型名（如 gpt-4o-mini、qwen2.5-coder-32b）' }}
@@ -125,23 +118,34 @@
 
     <!-- M7: 权限模式选择 -->
     <section class="copilot-dock__perm">
-      <n-popconfirm
-        v-if="permissionMode === 'read-only'"
-        positive-text="启用读写"
-        negative-text="保持只读"
-        @positive-click="permissionMode = 'read-write'"
-      >
-        <template #trigger>
-          <n-tag
-            size="tiny"
-            type="success"
-            :bordered="false"
-            style="cursor: pointer"
-            title="点击切换为读写模式"
-          >🔒 只读模式</n-tag>
-        </template>
-        切换为读写模式后，Copilot 可直接执行 INSERT / DELETE / CREATE MEASUREMENT 等写入语句。是否启用？
-      </n-popconfirm>
+      <!-- 只读模式：点击 tag 展开内联确认，避免 popconfirm teleport 被遮挡 -->
+      <template v-if="permissionMode === 'read-only'">
+        <n-tag
+          size="tiny"
+          type="success"
+          :bordered="false"
+          style="cursor: pointer"
+          title="点击切换为读写模式"
+          @click="permConfirmVisible = !permConfirmVisible"
+        >🔒 只读模式</n-tag>
+        <!-- 内联确认条：直接渲染在 dock 内，不 teleport，不会被遮挡 -->
+        <transition name="perm-confirm">
+          <div v-if="permConfirmVisible" class="copilot-dock__perm-confirm">
+            <n-text depth="3" style="font-size: 11px; flex: 1">
+              切换后 Copilot 可执行写入语句，是否启用？
+            </n-text>
+            <n-button
+              size="tiny"
+              type="primary"
+              @click="permissionMode = 'read-write'; permConfirmVisible = false"
+            >启用读写</n-button>
+            <n-button
+              size="tiny"
+              @click="permConfirmVisible = false"
+            >取消</n-button>
+          </div>
+        </transition>
+      </template>
       <n-tag
         v-else
         size="tiny"
@@ -242,6 +246,7 @@ import { useSqlConsoleStore } from '@/stores/sqlConsole';
 import { buildClientResultSet } from '@/api/sqlMeta';
 import type { SqlResultSet } from '@/api/sql';
 import { listDatabases } from '@/api/server';
+import { execControlPlaneSql, isValidIdentifier } from '@/api/sql';
 import {
   streamCopilotChat,
   fetchCopilotKnowledgeStatus,
@@ -262,12 +267,12 @@ const dialog = useDialog();
 
 const visible = ref(false);
 const fullscreen = ref(false);
+const dockEl = ref<HTMLElement | null>(null);  // dock 容器引用，供 Naive UI 浮层 teleport 到 dock 内部
 const status = ref<CopilotKnowledgeStatus | null>(null);
 const reindexing = ref(false);
 
 const dbs = ref<string[]>([]);
 const selectedDb = ref<string>('');
-const dbOptions = computed<SelectOption[]>(() => dbs.value.map((d) => ({ label: d, value: d })));
 
 const prompt = ref('');
 /** 来自当前会话的历史消息（只读引用，写入通过 sessions store）。 */
@@ -292,6 +297,7 @@ const contextEnabled = ref(true);
 type PermissionMode = 'read-only' | 'read-write';
 const PERM_STORAGE_KEY = 'sndb.copilot.permission.v1';
 const permissionMode = ref<PermissionMode>('read-only');
+const permConfirmVisible = ref(false);  // 内联确认条显示状态
 try {
   const saved = localStorage.getItem(PERM_STORAGE_KEY);
   if (saved === 'read-write') permissionMode.value = 'read-write';
@@ -384,6 +390,17 @@ const pageContext = computed<PageContext | null>(() => {
   };
 });
 
+const effectiveDb = computed<string>(() => {
+  const ctx = pageContext.value;
+  if (ctx?.routeKey === 'sql' && ctx.sqlDb) {
+    return ctx.sqlDb;
+  }
+  return selectedDb.value;
+});
+
+const activeRequestDb = ref<string>('');
+const toolTabDb = computed<string>(() => activeRequestDb.value || effectiveDb.value || selectedDb.value);
+
 const pageContextSummary = computed<string>(() => {
   const ctx = pageContext.value;
   if (!ctx) return '';
@@ -391,11 +408,21 @@ const pageContextSummary = computed<string>(() => {
   if (ctx.routeKey === 'sql' && ctx.sql.length > 0) {
     parts.push(`SQL ${ctx.sql.length} 字符`);
   }
-  if (ctx.sqlDb && ctx.sqlDb !== selectedDb.value) {
+  if (ctx.sqlDb) {
     parts.push(`db=${ctx.sqlDb}`);
   }
   return parts.join(' · ');
 });
+
+watch(
+  () => [pageContext.value?.routeKey ?? '', pageContext.value?.sqlDb ?? ''] as const,
+  ([routeKey, sqlDb]) => {
+    if (routeKey === 'sql' && sqlDb && sqlDb !== selectedDb.value) {
+      selectedDb.value = sqlDb;
+    }
+  },
+  { immediate: true },
+);
 
 /** 把页面上下文构造成一条 system message（仅在 send 时临时注入，不进入会话历史）。 */
 function buildContextMessage(): CopilotMessage | null {
@@ -452,10 +479,19 @@ async function reloadStatus(): Promise<void> {
   }
 }
 
+/** 系统内置数据库，不应暴露给用户或 AI 推断使用。 */
+const SYSTEM_DATABASES = new Set(['_internal', '__copilot__']);
+
+/** 判断给定库名是否属于系统库（名字以双下划线开头并以双下划线结尾，或在显式列表中）。 */
+function isSystemDatabase(name: string): boolean {
+  if (SYSTEM_DATABASES.has(name)) return true;
+  return name.length >= 4 && name.startsWith('__') && name.endsWith('__');
+}
+
 async function reloadDbs(): Promise<void> {
   try {
     const result = await listDatabases(auth.api);
-    dbs.value = result.databases;
+    dbs.value = result.databases.filter((db: string) => !isSystemDatabase(db));
     if (!selectedDb.value && dbs.value.length > 0) {
       selectedDb.value = dbs.value[0];
     }
@@ -495,7 +531,58 @@ const SqlToolNames = new Set(['draft_sql', 'query_sql', 'execute_sql']);
 const copilotToolTabs = new Map<string, string>();
 const copilotSqlSeen = new Set<string>();
 
+/**
+ * 当账号没有任何业务数据库时，弹出对话框引导用户即时新建一个。
+ * 成功返回新数据库名；用户取消或失败返回空串。
+ */
+async function promptCreateDatabase(): Promise<string> {
+  if (!auth.isSuperuser) {
+    message.error('当前账号下没有可用的业务数据库，请联系管理员先创建一个。');
+    return '';
+  }
+  const inputName = ref('metrics');
+  return new Promise<string>((resolve) => {
+    const d = dialog.create({
+      title: '尚无业务数据库，请先创建一个',
+      content: () => h('div', { style: 'display: flex; flex-direction: column; gap: 8px' }, [
+        h(NText, { depth: 3, style: 'font-size: 12px' }, {
+          default: () => 'Copilot 需要绑定到某个数据库才能工作。请输入新数据库名（字母开头，仅含字母数字下划线）：',
+        }),
+        h(NInput, {
+          value: inputName.value,
+          'onUpdate:value': (v: string) => { inputName.value = v; },
+          placeholder: '例如 metrics、host_perf',
+          autofocus: true,
+        }),
+      ]),
+      positiveText: '创建并继续',
+      negativeText: '取消',
+      onPositiveClick: async () => {
+        const name = inputName.value.trim();
+        if (!isValidIdentifier(name)) {
+          message.error('名称必须以字母开头，仅包含字母数字下划线。');
+          return false;
+        }
+        const rs = await execControlPlaneSql(auth.api, `CREATE DATABASE ${name}`);
+        if (rs.error) {
+          message.error(rs.error.message);
+          return false;
+        }
+        message.success(`已创建数据库 ${name}`);
+        await reloadDbs();
+        selectedDb.value = name;
+        resolve(name);
+        return true;
+      },
+      onNegativeClick: () => { resolve(''); },
+      onClose: () => { resolve(''); },
+      onMaskClick: () => { resolve(''); d.destroy(); },
+    });
+  });
+}
+
 interface ToolArgumentsPayload {
+  database?: string;
   sql?: string;
   maxRows?: number;
 }
@@ -575,15 +662,29 @@ function extractToolSql(event: CopilotChatEvent): string {
   return err?.sql ?? '';
 }
 
+function extractToolDatabase(event: CopilotChatEvent): string {
+  const args = parseJsonObject<ToolArgumentsPayload>(event.toolArguments);
+  if (args?.database) return args.database;
+
+  const draft = parseJsonObject<DraftSqlPayload>(event.toolResult);
+  if (draft?.database) return draft.database;
+
+  const executed = parseJsonObject<ExecuteSqlPayload>(event.toolResult);
+  if (executed?.database) return executed.database;
+
+  return '';
+}
+
 function ensureCopilotSqlTab(event: CopilotChatEvent, sql: string): string {
   const key = toolEventKey(event, sql);
   const existing = copilotToolTabs.get(key);
   if (existing) return existing;
 
   copilotSqlSeen.add(normalizeSqlForDedupe(sql));
+  const database = extractToolDatabase(event) || toolTabDb.value;
   const tab = sqlConsole.createTab({
     title: tabTitleForSqlTool(event.toolName ?? 'query_sql', sql),
-    db: selectedDb.value,
+    db: database,
     sql,
     source: 'copilot',
     summary: event.type === 'tool_call'
@@ -727,7 +828,7 @@ function syncFinalAnswerSql(answer: string): void {
     copilotSqlSeen.add(key);
     sqlConsole.createTab({
       title: tabTitleForSqlTool('draft_sql', sql),
-      db: selectedDb.value,
+      db: toolTabDb.value,
       sql,
       source: 'copilot',
       summary: 'Copilot 最终回答中的 SQL，等待你确认后运行。',
@@ -735,23 +836,77 @@ function syncFinalAnswerSql(answer: string): void {
   }
 }
 
+const ProvisioningDatabaseNameRegex = /(?:数据库|仓库|库)\s*(?:叫|名为|叫做|叫作)?\s*([A-Za-z][A-Za-z0-9_]*)/i;
+
+function looksLikeProvisioningRequest(message: string): boolean {
+  const lowered = message.trim().toLowerCase();
+  const asksToCreate = lowered.includes('新建')
+    || lowered.includes('创建')
+    || lowered.includes('建一个')
+    || lowered.includes('建一套')
+    || lowered.includes('create database');
+  const mentionsDatabase = lowered.includes('数据库')
+    || lowered.includes('仓库')
+    || lowered.includes('库')
+    || lowered.includes('database');
+
+  return asksToCreate && mentionsDatabase;
+}
+
+function inferProvisioningDatabaseName(message: string): string {
+  const explicit = ProvisioningDatabaseNameRegex.exec(message)?.[1];
+  if (explicit) return explicit;
+
+  const lowered = message.trim().toLowerCase();
+  const looksLikeComputerPerformance = (lowered.includes('电脑')
+      || lowered.includes('计算机')
+      || lowered.includes('主机')
+      || lowered.includes('系统')
+      || lowered.includes('host'))
+    && (lowered.includes('性能')
+      || lowered.includes('perf')
+      || lowered.includes('监控')
+      || lowered.includes('指标')
+      || lowered.includes('usage'));
+  if (looksLikeComputerPerformance) return 'computer_perf';
+
+  const looksLikeEnvironmentTelemetry = lowered.includes('温度')
+    || lowered.includes('湿度')
+    || lowered.includes('humidity')
+    || lowered.includes('temperature');
+  if (looksLikeEnvironmentTelemetry) return 'sensor_metrics';
+
+  return 'metrics';
+}
+
 async function send(): Promise<void> {
   if (!prompt.value.trim() || running.value) return;
-  if (!selectedDb.value) {
-    errorMsg.value = '请先选择一个数据库（Copilot 的工具调用以数据库为单位）';
-    return;
-  }
   if (!auth.state?.token) return;
+
+  const userText = prompt.value.trim();
+  const isProvisioningRequest = looksLikeProvisioningRequest(userText);
+  const provisioningDb = isProvisioningRequest ? inferProvisioningDatabaseName(userText) : '';
+
+  // 数据库自动推断：优先 SQL Console 当前库，其次已知库列表第一个，最后留空让后端处理
+  let targetDb = effectiveDb.value || (dbs.value.length > 0 ? dbs.value[0] : '');
+
+  // 无库场景下，建库意图允许直接走后端 provisioning；其它请求仍先引导建库。
+  if (!targetDb && !isProvisioningRequest) {
+    const created = await promptCreateDatabase();
+    if (!created) return;  // 用户取消或无权创建
+    targetDb = created;
+  }
+
+  const requestDb = provisioningDb || targetDb;
 
   // 没有当前会话则先建一个；切换数据库时同步到当前会话。
   if (!sessions.current) {
-    sessions.create(selectedDb.value);
-  } else if (sessions.current.db !== selectedDb.value) {
-    sessions.current.db = selectedDb.value;
+    sessions.create(requestDb);
+  } else if (requestDb && sessions.current.db !== requestDb) {
+    sessions.current.db = requestDb;
   }
   const sessionId = sessions.currentId;
 
-  const userText = prompt.value.trim();
   const userMsg: CopilotMessage = { role: 'user', content: userText };
   prompt.value = '';
   errorMsg.value = '';
@@ -774,11 +929,12 @@ async function send(): Promise<void> {
   let finalAnswer = '';
   copilotToolTabs.clear();
   copilotSqlSeen.clear();
+  activeRequestDb.value = requestDb;
   try {
     for await (const event of streamCopilotChat(
       auth.state.token,
       {
-        db: selectedDb.value,
+        ...(requestDb ? { db: requestDb } : {}),
         messages: requestMessages,
         mode: permissionMode.value,
         ...(selectedModel.value ? { model: selectedModel.value } : {}),
@@ -809,6 +965,9 @@ async function send(): Promise<void> {
         sessions.setMessages(sessionId!, sessions.current!.messages);
       }
       streamBuffer.value = '';
+      if (isProvisioningRequest) {
+        void reloadDbs();
+      }
     }
   } catch (e: unknown) {
     if (!ac.signal.aborted) {
@@ -817,6 +976,7 @@ async function send(): Promise<void> {
   } finally {
     running.value = false;
     abort.value = null;
+    activeRequestDb.value = '';
     await scrollToBottom();
   }
 }
@@ -827,7 +987,7 @@ function stop(): void {
 
 // === 会话历史（M5）===
 function onNewSession(): void {
-  sessions.create(selectedDb.value);
+  sessions.create(effectiveDb.value);
   streamBuffer.value = '';
   errorMsg.value = '';
 }
@@ -1019,6 +1179,29 @@ onMounted(() => {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  gap: 4px;
+}
+.copilot-dock__perm-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: rgba(44, 123, 229, 0.06);
+  border: 1px solid rgba(44, 123, 229, 0.18);
+  border-radius: 6px;
+  font-size: 11px;
+}
+/* 滑入/滑出动画 */
+.perm-confirm-enter-active,
+.perm-confirm-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.perm-confirm-enter-from,
+.perm-confirm-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 .copilot-dock__ctx {
   padding: 6px 12px 0;

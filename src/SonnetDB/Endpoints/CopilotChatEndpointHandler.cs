@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using SonnetDB.Auth;
 using SonnetDB.Contracts;
 using SonnetDB.Copilot;
+using SonnetDB.Engine;
 using SonnetDB.Hosting;
 using SonnetDB.Json;
 
@@ -54,48 +55,91 @@ internal static class CopilotChatEndpointHandler
         }
 
         var req = await ReadJsonAsync(ctx, ServerJsonContext.Default.CopilotChatRequest).ConfigureAwait(false);
-        if (req is null || string.IsNullOrWhiteSpace(req.Db))
+        if (req is null)
         {
-            await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体需包含 db。").ConfigureAwait(false);
+            await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体格式无效。")
+                .ConfigureAwait(false);
             return;
         }
 
-        var messages = NormalizeMessages(req);
+        var request = req;
+
+        var messages = NormalizeMessages(request);
         if (messages.Count == 0)
         {
             await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体需包含 message 或 messages。").ConfigureAwait(false);
             return;
         }
 
-        if (!TsdbRegistry.IsValidName(req.Db))
-        {
-            await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", $"非法数据库名 '{req.Db}'。").ConfigureAwait(false);
-            return;
-        }
-
-        if (!registry.TryGet(req.Db, out var tsdb))
-        {
-            await WriteErrorAsync(ctx, StatusCodes.Status404NotFound, "db_not_found", $"数据库 '{req.Db}' 不存在。").ConfigureAwait(false);
-            return;
-        }
-
-        var permission = DatabaseAccessEvaluator.GetEffectivePermission(ctx, grantsStore, req.Db);
-        if (!DatabaseAccessEvaluator.HasPermission(permission, DatabasePermission.Read))
-        {
-            await WriteErrorAsync(ctx, StatusCodes.Status403Forbidden, "forbidden", $"当前凭据对数据库 '{req.Db}' 没有 read 权限。").ConfigureAwait(false);
-            return;
-        }
-
+        var provisioningIntent = CopilotProvisioning.TryExtractIntent(messages[^1].Content);
+        var selectedDb = string.IsNullOrWhiteSpace(request.Db) ? null : request.Db.Trim();
         var visibleDatabases = DatabaseAccessEvaluator.GetVisibleDatabases(ctx, grantsStore, registry.ListDatabases());
-        var canWrite = DatabaseAccessEvaluator.HasPermission(permission, DatabasePermission.Write);
+        var isServerAdmin = DatabaseAccessEvaluator.IsServerAdmin(ctx);
+
+        string contextDatabaseName;
+        Tsdb? tsdb = null;
+        var targetPermission = DatabasePermission.None;
+
+        if (provisioningIntent is not null)
+        {
+            contextDatabaseName = provisioningIntent.DatabaseName;
+            if (visibleDatabases.Any(database => string.Equals(database, contextDatabaseName, StringComparison.OrdinalIgnoreCase))
+                && registry.TryGet(contextDatabaseName, out var visibleTsdb))
+            {
+                tsdb = visibleTsdb;
+                targetPermission = DatabaseAccessEvaluator.GetEffectivePermission(ctx, grantsStore, contextDatabaseName);
+            }
+        }
+        else
+        {
+            if (req is null || string.IsNullOrWhiteSpace(selectedDb))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "请求体需包含 db；如果你想让 Copilot 直接帮你建库，请在消息里明确说明“新建/创建数据库”。").ConfigureAwait(false);
+                return;
+            }
+
+            if (!TsdbRegistry.IsValidName(selectedDb))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", $"非法数据库名 '{selectedDb}'。")
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            // 系统内置库（如 __copilot__）不允许从对话端点直接操作，避免 LLM 把它当成业务库去 SHOW / CREATE。
+            if (DatabaseAccessEvaluator.IsSystemDatabase(selectedDb))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status403Forbidden, "system_database", $"数据库 '{selectedDb}' 是系统内置库，不可在 Copilot 对话中直接使用，请选择一个业务数据库。")
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            if (!registry.TryGet(selectedDb, out var selectedTsdb))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status404NotFound, "db_not_found", $"数据库 '{selectedDb}' 不存在。")
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            targetPermission = DatabaseAccessEvaluator.GetEffectivePermission(ctx, grantsStore, selectedDb);
+            if (!DatabaseAccessEvaluator.HasPermission(targetPermission, DatabasePermission.Read))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status403Forbidden, "forbidden", $"当前凭据对数据库 '{selectedDb}' 没有 read 权限。")
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            contextDatabaseName = selectedDb;
+            tsdb = selectedTsdb;
+        }
         // M7：客户端可显式声明 read-only 模式，强制收紧 execute_sql 写权限。
         // 仅 read-write 走凭据自身的权限上限；其它取值（含未提供 / read-only / 任意拼写）一律按只读处理。
-        var requestedMode = req.Mode?.Trim();
+        var requestedMode = request.Mode?.Trim();
         var clientAllowsWrite = string.Equals(requestedMode, "read-write", StringComparison.OrdinalIgnoreCase);
-        var effectiveCanWrite = canWrite && clientAllowsWrite;
+        var canWrite = DatabaseAccessEvaluator.HasPermission(targetPermission, DatabasePermission.Write);
+        var effectiveCanWrite = (canWrite || isServerAdmin) && clientAllowsWrite;
         // M8\uff1a\u5141\u8bb8\u5ba2\u6237\u7aef\u4e3a\u672c\u6b21\u8bf7\u6c42\u4e34\u65f6\u9009\u62e9 chat \u6a21\u578b\uff1b\u4e3a\u7a7a\u65f6\u8d70\u670d\u52a1\u7aef CopilotChatOptions.Model \u9ed8\u8ba4\u503c\u3002
-        var modelOverride = string.IsNullOrWhiteSpace(req.Model) ? null : req.Model.Trim();
-        var context = new CopilotAgentContext(req.Db, tsdb, visibleDatabases, effectiveCanWrite, modelOverride);
+        var modelOverride = string.IsNullOrWhiteSpace(request.Model) ? null : request.Model.Trim();
+        var context = new CopilotAgentContext(contextDatabaseName, tsdb, visibleDatabases, effectiveCanWrite, modelOverride, isServerAdmin);
 
         ctx.Response.StatusCode = StatusCodes.Status200OK;
         ctx.Response.ContentType = sse
@@ -106,7 +150,7 @@ internal static class CopilotChatEndpointHandler
 
         try
         {
-            await foreach (var evt in copilotAgent.RunAsync(context, messages, req.DocsK, req.SkillsK, ctx.RequestAborted).ConfigureAwait(false))
+            await foreach (var evt in copilotAgent.RunAsync(context, messages, request.DocsK, request.SkillsK, ctx.RequestAborted).ConfigureAwait(false))
             {
                 if (sse)
                 {

@@ -205,6 +205,28 @@ public sealed class ControlPlaneTests : IDisposable
     }
 
     [Fact]
+    public void TokenStatements_ViaSql_WithQuotedHyphenatedUser_Work()
+    {
+        _controlPlane.CreateUser("ops-admin", "p", isSuperuser: false);
+
+        var issued = Assert.IsType<SelectExecutionResult>(
+            SqlExecutor.ExecuteControlPlaneStatement(SqlParser.Parse("ISSUE TOKEN FOR 'ops-admin'"), _controlPlane));
+        Assert.Single(issued.Rows);
+        var tokenId = Assert.IsType<string>(issued.Rows[0][0]);
+        var token = Assert.IsType<string>(issued.Rows[0][1]);
+        Assert.True(_users.TryAuthenticate(token, out var user));
+        Assert.Equal("ops-admin", user.UserName);
+
+        var listed = Assert.IsType<SelectExecutionResult>(
+            SqlExecutor.ExecuteControlPlaneStatement(SqlParser.Parse("SHOW TOKENS FOR 'ops-admin'"), _controlPlane));
+        Assert.Single(listed.Rows);
+        Assert.Equal(tokenId, listed.Rows[0][0]);
+
+        SqlExecutor.ExecuteControlPlaneStatement(SqlParser.Parse($"REVOKE TOKEN '{tokenId}'"), _controlPlane);
+        Assert.False(_users.TryAuthenticate(token, out _));
+    }
+
+    [Fact]
     public void Grant_OnWildcardDatabase_DoesNotRequireExistingDatabase()
     {
         using var bootstrap = Tsdb.Open(new SonnetDB.Engine.TsdbOptions { RootDirectory = Path.Combine(_dir, "_bootstrap") });

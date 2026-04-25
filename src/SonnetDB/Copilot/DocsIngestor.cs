@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using SonnetDB.Catalog;
 using SonnetDB.Engine;
 using SonnetDB.Hosting;
 using SonnetDB.Sql.Ast;
@@ -56,7 +57,9 @@ internal sealed class DocsIngestor
         ArgumentNullException.ThrowIfNull(roots);
         var files = _scanner.Scan(roots);
         var stateBySource = await LoadStateAsync(cancellationToken).ConfigureAwait(false);
-        var scannedSources = new HashSet<string>(files.Select(static item => item.Source), StringComparer.OrdinalIgnoreCase);
+        var scannedSources = new HashSet<string>(
+            files.Select(static item => NormalizeStoredSource(item.Source)),
+            StringComparer.OrdinalIgnoreCase);
 
         var indexedFiles = 0;
         var skippedFiles = 0;
@@ -73,7 +76,8 @@ internal sealed class DocsIngestor
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!force && stateBySource.TryGetValue(file.Source, out var existing) && existing.Matches(file))
+            var storedSource = NormalizeStoredSource(file.Source);
+            if (!force && stateBySource.TryGetValue(storedSource, out var existing) && existing.Matches(file))
             {
                 skippedFiles++;
                 continue;
@@ -87,9 +91,9 @@ internal sealed class DocsIngestor
                 continue;
 
             var database = GetKnowledgeDb();
-            DeleteSource(database, file.Source);
-            await InsertChunksAsync(database, file, chunks, cancellationToken).ConfigureAwait(false);
-            InsertState(database, file, chunks.Count);
+            DeleteSource(database, storedSource);
+            await InsertChunksAsync(database, file, storedSource, chunks, cancellationToken).ConfigureAwait(false);
+            InsertState(database, file, storedSource, chunks.Count);
         }
 
         return new DocsIngestStats(files.Count, indexedFiles, skippedFiles, deletedFiles, writtenChunks, dryRun);
@@ -160,10 +164,25 @@ internal sealed class DocsIngestor
         return rows;
     }
 
-    private async Task InsertChunksAsync(Tsdb database, DocsSourceFile file, IReadOnlyList<DocsChunk> chunks, CancellationToken cancellationToken)
+    private async Task InsertChunksAsync(
+        Tsdb database,
+        DocsSourceFile file,
+        string storedSource,
+        IReadOnlyList<DocsChunk> chunks,
+        CancellationToken cancellationToken)
     {
         if (chunks.Count == 0)
             return;
+
+        var docsSchema = database.Measurements.TryGet(DocsMeasurementName)
+            ?? throw new InvalidOperationException($"measurement '{DocsMeasurementName}' 不存在。");
+        var usesLegacyTagCompatibility = UsesLegacyTagCompatibility(docsSchema);
+        if (usesLegacyTagCompatibility)
+        {
+            _logger.LogWarning(
+                "Legacy docs schema detected in {Measurement}: section/title are TAG columns. Reserved characters will be normalized for compatibility during ingest.",
+                DocsMeasurementName);
+        }
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var rows = new List<IReadOnlyList<SqlExpression>>(chunks.Count);
@@ -175,9 +194,9 @@ internal sealed class DocsIngestor
                 throw new InvalidOperationException($"embedding 维度必须为 {ExpectedEmbeddingDimensions}，实际为 {embedding.Length}。");
 
             rows.Add([
-                LiteralExpression.String(chunks[i].Source),
-                LiteralExpression.String(chunks[i].Section),
-                LiteralExpression.String(chunks[i].Title),
+                LiteralExpression.String(storedSource),
+                LiteralExpression.String(PrepareStringValueForColumn(docsSchema, "section", chunks[i].Section)),
+                LiteralExpression.String(PrepareStringValueForColumn(docsSchema, "title", chunks[i].Title)),
                 LiteralExpression.String(chunks[i].Content),
                 LiteralExpression.Integer(now + i),
                 new VectorLiteralExpression(embedding.Select(static value => (double)value).ToArray()),
@@ -192,14 +211,14 @@ internal sealed class DocsIngestor
         _logger.LogInformation("Indexed {ChunkCount} chunks for docs source {Source}.", chunks.Count, file.Source);
     }
 
-    private static void InsertState(Tsdb database, DocsSourceFile file, int chunkCount)
+    private static void InsertState(Tsdb database, DocsSourceFile file, string storedSource, int chunkCount)
     {
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var state = new InsertStatement(
             DocsStateMeasurementName,
             ["source", "fingerprint", "modified_utc", "chunk_count", "time"],
             [[
-                LiteralExpression.String(file.Source),
+                LiteralExpression.String(storedSource),
                 LiteralExpression.String(file.Fingerprint),
                 LiteralExpression.String(file.LastWriteTimeUtc.UtcDateTime.ToString("O")),
                 LiteralExpression.Integer(chunkCount),
@@ -226,8 +245,8 @@ internal sealed class DocsIngestor
                 DocsMeasurementName,
                 [
                     new ColumnDefinition("source", ColumnKind.Tag, SqlDataType.String),
-                    new ColumnDefinition("section", ColumnKind.Tag, SqlDataType.String),
-                    new ColumnDefinition("title", ColumnKind.Tag, SqlDataType.String),
+                    new ColumnDefinition("section", ColumnKind.Field, SqlDataType.String),
+                    new ColumnDefinition("title", ColumnKind.Field, SqlDataType.String),
                     new ColumnDefinition("content", ColumnKind.Field, SqlDataType.String),
                     new ColumnDefinition("embedding", ColumnKind.Field, SqlDataType.Vector, VectorDimension: ExpectedEmbeddingDimensions),
                 ]));
@@ -251,5 +270,34 @@ internal sealed class DocsIngestor
         public bool Matches(DocsSourceFile file)
             => string.Equals(Fingerprint, file.Fingerprint, StringComparison.Ordinal)
                && string.Equals(ModifiedUtc, file.LastWriteTimeUtc.UtcDateTime.ToString("O"), StringComparison.Ordinal);
+    }
+
+    private static bool UsesLegacyTagCompatibility(MeasurementSchema schema)
+        => IsTagColumn(schema, "section") || IsTagColumn(schema, "title");
+
+    private static bool IsTagColumn(MeasurementSchema schema, string columnName)
+        => schema.TryGetColumn(columnName)?.Role == MeasurementColumnRole.Tag;
+
+    private static string PrepareStringValueForColumn(MeasurementSchema schema, string columnName, string value)
+    {
+        var column = schema.TryGetColumn(columnName)
+            ?? throw new InvalidOperationException($"measurement '{schema.Name}' 缺少列 '{columnName}'。");
+        return column.Role == MeasurementColumnRole.Tag
+            ? NormalizeTagValue(value)
+            : value;
+    }
+
+    private static string NormalizeStoredSource(string source) => NormalizeTagValue(source);
+
+    private static string NormalizeTagValue(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return value
+            .Replace(",", "，", StringComparison.Ordinal)
+            .Replace("=", "＝", StringComparison.Ordinal)
+            .Replace("\"", "'", StringComparison.Ordinal)
+            .Replace('\n', ' ')
+            .Replace('\r', ' ')
+            .Replace('\t', ' ');
     }
 }

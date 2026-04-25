@@ -144,7 +144,7 @@ public sealed record CopilotModelsResponse(
 /// <summary>
 /// Copilot 聊天请求体（PR #67 / #68）。
 /// </summary>
-/// <param name="Db">目标数据库名。</param>
+/// <param name="Db">目标数据库名。建库型 provisioning 请求可为空，此时由服务端根据用户消息推断目标库名。</param>
 /// <param name="Message">兼容旧客户端的单条用户问题；若同时提供 <paramref name="Messages"/>，以后者为准。</param>
 /// <param name="Messages">多轮对话历史，通常按 <c>user/assistant</c> 交替排列，最后一条应为当前用户问题。</param>
 /// <param name="DocsK">文档召回条数；为空时使用服务端默认值。</param>
@@ -152,7 +152,7 @@ public sealed record CopilotModelsResponse(
 /// <param name="Mode">权限模式（M7）：<c>read-only</c>（默认，禁止写入工具调用）或 <c>read-write</c>（允许，但仍受凭据本身权限上限约束）。</param>
 /// <param name="Model">模型覆盖（M8）：不为空时覆盖 <c>CopilotOptions.Chat.Model</c>，允许用户临时选择不同 chat 模型。</param>
 public sealed record CopilotChatRequest(
-    string Db,
+    string? Db,
     string? Message = null,
     List<AiMessage>? Messages = null,
     int? DocsK = null,
