@@ -1,4 +1,4 @@
-using SonnetDB.Catalog;
+﻿using SonnetDB.Catalog;
 using SonnetDB.Engine;
 using SonnetDB.Model;
 using SonnetDB.Query;
@@ -149,4 +149,62 @@ public sealed class SqlExecutorGeoPointTests : IDisposable
         Assert.Equal(new GeoPoint(39.9042, 116.4074), points[0].Value.AsGeoPoint());
         Assert.Equal(new GeoPoint(31.2304, 121.4737), points[1].Value.AsGeoPoint());
     }
+
+    [Fact]
+    public void Select_TrajectoryAggregates_ReturnExpectedValues()
+    {
+        using var db = Tsdb.Open(Options());
+        SqlExecutor.Execute(db,
+            "CREATE MEASUREMENT vehicle (device TAG, position FIELD GEOPOINT)");
+        SqlExecutor.Execute(db,
+            "INSERT INTO vehicle (time, device, position) VALUES " +
+            "(1000, 'car-1', POINT(0, 0)), " +
+            "(2000, 'car-1', POINT(0, 0.001)), " +
+            "(4000, 'car-1', POINT(0.001, 0.001))");
+
+        var result = Assert.IsType<SelectExecutionResult>(SqlExecutor.Execute(db,
+            "SELECT trajectory_length(position), trajectory_centroid(position), trajectory_bbox(position), " +
+            "trajectory_speed_max(position, time), trajectory_speed_avg(position, time), trajectory_speed_p95(position, time) FROM vehicle"));
+
+        var row = Assert.Single(result.Rows);
+        Assert.InRange(Convert.ToDouble(row[0]), 220d, 225d);
+        var centroid = Assert.IsType<GeoPoint>(row[1]);
+        Assert.Equal(0.00033333333333333332d, centroid.Lat, 12);
+        Assert.Equal(0.00066666666666666664d, centroid.Lon, 12);
+        var bbox = Assert.IsType<string>(row[2]);
+        Assert.Contains("\"min_lat\":0", bbox);
+        Assert.Contains("\"min_lon\":0", bbox);
+        Assert.Contains("\"max_lat\":0.001", bbox);
+        Assert.Contains("\"max_lon\":0.001", bbox);
+        Assert.InRange(Convert.ToDouble(row[3]), 110d, 112d);
+        Assert.InRange(Convert.ToDouble(row[4]), 83d, 84d);
+        Assert.InRange(Convert.ToDouble(row[5]), 107d, 112d);
+    }
+
+    [Fact]
+    public void Select_TrajectoryAggregates_GroupByTime_ReturnBucketedValues()
+    {
+        using var db = Tsdb.Open(Options());
+        SqlExecutor.Execute(db,
+            "CREATE MEASUREMENT vehicle (device TAG, position FIELD GEOPOINT)");
+        SqlExecutor.Execute(db,
+            "INSERT INTO vehicle (time, device, position) VALUES " +
+            "(1, 'car-1', POINT(0, 0)), " +
+            "(500, 'car-1', POINT(0, 0.001)), " +
+            "(1500, 'car-1', POINT(0.5, 0.5)), " +
+            "(2000, 'car-1', POINT(1, 1)), " +
+            "(2500, 'car-1', POINT(1, 1.001))");
+
+        var result = Assert.IsType<SelectExecutionResult>(SqlExecutor.Execute(db,
+            "SELECT trajectory_length(position), trajectory_speed_avg(position, time) FROM vehicle GROUP BY time(1000ms)"));
+
+        Assert.Equal(3, result.Rows.Count);
+        Assert.InRange(Convert.ToDouble(result.Rows[0][0]), 110d, 112d);
+        Assert.InRange(Convert.ToDouble(result.Rows[0][1]), 220d, 225d);
+        Assert.Equal(0d, Convert.ToDouble(result.Rows[1][0]));
+        Assert.Null(result.Rows[1][1]);
+        Assert.InRange(Convert.ToDouble(result.Rows[2][0]), 110d, 112d);
+        Assert.InRange(Convert.ToDouble(result.Rows[2][1]), 220d, 225d);
+    }
+
 }

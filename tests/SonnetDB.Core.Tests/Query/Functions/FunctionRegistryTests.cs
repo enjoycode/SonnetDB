@@ -17,6 +17,7 @@ public sealed class FunctionRegistryTests
             new MeasurementColumn("usage", MeasurementColumnRole.Field, FieldType.Float64),
             new MeasurementColumn("label", MeasurementColumnRole.Field, FieldType.String),
             new MeasurementColumn("embedding", MeasurementColumnRole.Field, FieldType.Vector, 3),
+            new MeasurementColumn("position", MeasurementColumnRole.Field, FieldType.GeoPoint),
         });
 
     [Theory]
@@ -58,6 +59,12 @@ public sealed class FunctionRegistryTests
     [InlineData("centroid", FunctionKind.Aggregate)]
     [InlineData("p95", FunctionKind.Aggregate)]
     [InlineData("histogram", FunctionKind.Aggregate)]
+    [InlineData("trajectory_length", FunctionKind.Aggregate)]
+    [InlineData("trajectory_centroid", FunctionKind.Aggregate)]
+    [InlineData("trajectory_bbox", FunctionKind.Aggregate)]
+    [InlineData("trajectory_speed_max", FunctionKind.Aggregate)]
+    [InlineData("trajectory_speed_avg", FunctionKind.Aggregate)]
+    [InlineData("trajectory_speed_p95", FunctionKind.Aggregate)]
     [InlineData("derivative", FunctionKind.Window)]
     [InlineData("ewma", FunctionKind.Window)]
     [InlineData("interpolate", FunctionKind.Window)]
@@ -184,6 +191,25 @@ public sealed class FunctionRegistryTests
             new FunctionCallExpression("centroid", new[] { new IdentifierExpression("embedding") }),
             _schema);
         Assert.Equal("embedding", fieldName);
+    }
+
+
+    [Fact]
+    public void ResolveFieldName_Trajectory_GeoPointField_ReturnsColumnName()
+    {
+        Assert.True(FunctionRegistry.TryGetAggregate("trajectory_length", out var length));
+        Assert.Equal("position", length.ResolveFieldName(
+            new FunctionCallExpression("trajectory_length", new[] { new IdentifierExpression("position") }),
+            _schema));
+
+        Assert.True(FunctionRegistry.TryGetAggregate("trajectory_speed_avg", out var speed));
+        Assert.Equal("position", speed.ResolveFieldName(
+            new FunctionCallExpression("trajectory_speed_avg", new SqlExpression[]
+            {
+                new IdentifierExpression("position"),
+                new IdentifierExpression("time"),
+            }),
+            _schema));
     }
 
     private static IScalarFunction GetScalar(string name)

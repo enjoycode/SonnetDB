@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using SonnetDB.Data.Internal;
+using SonnetDB.Model;
 
 namespace SonnetDB.Data.Remote;
 
@@ -204,9 +205,40 @@ internal sealed class RemoteExecutionResult : IExecutionResult
         JsonValueKind.String => element.GetString(),
         JsonValueKind.Number => ReadNumber(element),
         JsonValueKind.Array => element.GetRawText(),
-        JsonValueKind.Object => element.GetRawText(),
+        JsonValueKind.Object => TryReadGeoPoint(element, out var point) ? point : element.GetRawText(),
         _ => null,
     };
+
+    private static bool TryReadGeoPoint(JsonElement element, out GeoPoint point)
+    {
+        point = default;
+        if (!element.TryGetProperty("type", out var type)
+            || type.ValueKind != JsonValueKind.String
+            || !string.Equals(type.GetString(), "Point", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!element.TryGetProperty("coordinates", out var coordinates)
+            || coordinates.ValueKind != JsonValueKind.Array
+            || coordinates.GetArrayLength() < 2)
+        {
+            return false;
+        }
+
+        var lonElement = coordinates[0];
+        var latElement = coordinates[1];
+        if (lonElement.ValueKind != JsonValueKind.Number
+            || latElement.ValueKind != JsonValueKind.Number
+            || !lonElement.TryGetDouble(out var lon)
+            || !latElement.TryGetDouble(out var lat))
+        {
+            return false;
+        }
+
+        point = GeoPoint.Create(lat, lon);
+        return true;
+    }
 
     private static object ReadNumber(JsonElement element)
     {

@@ -1,4 +1,6 @@
-﻿namespace SonnetDB.Query.Functions;
+﻿using SonnetDB.Model;
+
+namespace SonnetDB.Query.Functions;
 
 /// <summary>
 /// 可合并聚合状态。Tier 2 起的扩展聚合函数（PR #52+）通过实现该接口接入查询管线，
@@ -41,6 +43,18 @@ public interface IAggregateAccumulator
     /// <param name="timestampMs">数据点时间戳（毫秒）。</param>
     /// <param name="vector">向量数据点。</param>
     void Add(long timestampMs, ReadOnlyMemory<float> vector) => Add(vector);
+
+    /// <summary>??????????</summary>
+    /// <param name="geoPoint">WGS84 ????</param>
+    void Add(GeoPoint geoPoint)
+        => throw new InvalidOperationException("???????? GEOPOINT ???");
+
+    /// <summary>
+    /// ??????????????????????????????????
+    /// </summary>
+    /// <param name="timestampMs">???????????</param>
+    /// <param name="geoPoint">WGS84 ????</param>
+    void Add(long timestampMs, GeoPoint geoPoint) => Add(geoPoint);
 
     /// <summary>合并另一个同类型累加器的状态。</summary>
     /// <param name="other">需要合并的另一份累加器。</param>

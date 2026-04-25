@@ -686,6 +686,10 @@ internal static class SelectExecutor
             {
                 _extended.Add(timestamp, value.AsVector());
             }
+            else if (value.Type == FieldType.GeoPoint)
+            {
+                _extended.Add(timestamp, value.AsGeoPoint());
+            }
             else
             {
                 _extended.Add(timestamp, FieldValueToDouble(value, col));

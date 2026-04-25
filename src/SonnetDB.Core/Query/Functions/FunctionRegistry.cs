@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using SonnetDB.Catalog;
 using SonnetDB.Query.Functions.Aggregates;
 using SonnetDB.Query.Functions.Control;
@@ -117,6 +117,12 @@ public static class FunctionRegistry
         new DistinctCountFunction(),
         new HistogramFunction(),
         new CentroidFunction(),
+        new TrajectoryLengthFunction(),
+        new TrajectoryCentroidFunction(),
+        new TrajectoryBboxFunction(),
+        new TrajectorySpeedMaxFunction(),
+        new TrajectorySpeedAvgFunction(),
+        new TrajectorySpeedP95Function(),
         // Tier 4 — PID 控制律（PR #54）
         new PidAggregateFunction(),
         new PidEstimateFunction(),

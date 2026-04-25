@@ -1,4 +1,5 @@
 ﻿using SonnetDB.Catalog;
+using SonnetDB.Model;
 using SonnetDB.Sql.Ast;
 
 namespace SonnetDB.Query.Functions.Aggregates;
@@ -480,3 +481,316 @@ internal sealed class CentroidAccumulator : IAggregateAccumulator
         return result;
     }
 }
+
+// ?? trajectory geo aggregates ?????????????????????????????????????????????
+
+internal abstract class TrajectoryAggregateFunction : ExtendedAggregateFunction
+{
+    protected TrajectoryAggregateFunction(string name) => Name = name;
+
+    public override string Name { get; }
+
+    public override string? ResolveFieldName(FunctionCallExpression call, MeasurementSchema schema)
+        => ExtendedAggregateBinder.ResolveSingleGeoPointField(call, schema, Name);
+}
+
+internal sealed class TrajectoryLengthFunction : TrajectoryAggregateFunction
+{
+    public TrajectoryLengthFunction() : base("trajectory_length") { }
+
+    public override IAggregateAccumulator CreateAccumulator(
+        FunctionCallExpression call, MeasurementSchema schema) => new TrajectoryLengthAccumulator();
+}
+
+internal sealed class TrajectoryCentroidFunction : TrajectoryAggregateFunction
+{
+    public TrajectoryCentroidFunction() : base("trajectory_centroid") { }
+
+    public override IAggregateAccumulator CreateAccumulator(
+        FunctionCallExpression call, MeasurementSchema schema) => new TrajectoryCentroidAccumulator();
+}
+
+internal sealed class TrajectoryBboxFunction : TrajectoryAggregateFunction
+{
+    public TrajectoryBboxFunction() : base("trajectory_bbox") { }
+
+    public override IAggregateAccumulator CreateAccumulator(
+        FunctionCallExpression call, MeasurementSchema schema) => new TrajectoryBboxAccumulator();
+}
+
+internal abstract class TrajectorySpeedFunction : ExtendedAggregateFunction
+{
+    protected TrajectorySpeedFunction(string name) => Name = name;
+
+    public override string Name { get; }
+
+    public override string? ResolveFieldName(FunctionCallExpression call, MeasurementSchema schema)
+        => ExtendedAggregateBinder.ResolveGeoPointFieldAndTime(call, schema, Name);
+}
+
+internal sealed class TrajectorySpeedMaxFunction : TrajectorySpeedFunction
+{
+    public TrajectorySpeedMaxFunction() : base("trajectory_speed_max") { }
+
+    public override IAggregateAccumulator CreateAccumulator(
+        FunctionCallExpression call, MeasurementSchema schema) => new TrajectorySpeedAccumulator(TrajectorySpeedMode.Max);
+}
+
+internal sealed class TrajectorySpeedAvgFunction : TrajectorySpeedFunction
+{
+    public TrajectorySpeedAvgFunction() : base("trajectory_speed_avg") { }
+
+    public override IAggregateAccumulator CreateAccumulator(
+        FunctionCallExpression call, MeasurementSchema schema) => new TrajectorySpeedAccumulator(TrajectorySpeedMode.Avg);
+}
+
+internal sealed class TrajectorySpeedP95Function : TrajectorySpeedFunction
+{
+    public TrajectorySpeedP95Function() : base("trajectory_speed_p95") { }
+
+    public override IAggregateAccumulator CreateAccumulator(
+        FunctionCallExpression call, MeasurementSchema schema) => new TrajectorySpeedAccumulator(TrajectorySpeedMode.P95);
+}
+
+internal abstract class TrajectoryAccumulatorBase : IAggregateAccumulator
+{
+    protected GeoPoint? FirstPoint { get; private set; }
+    protected long FirstTimestamp { get; private set; }
+    protected GeoPoint? LastPoint { get; private set; }
+    protected long LastTimestamp { get; private set; }
+
+    public long Count { get; protected set; }
+
+    public void Add(double value)
+        => throw new InvalidOperationException("?????? GEOPOINT ???");
+
+    public void Add(GeoPoint geoPoint) => Add(0, geoPoint);
+
+    public virtual void Add(long timestampMs, GeoPoint geoPoint)
+    {
+        if (Count == 0)
+        {
+            FirstPoint = geoPoint;
+            FirstTimestamp = timestampMs;
+        }
+
+        LastPoint = geoPoint;
+        LastTimestamp = timestampMs;
+        Count++;
+    }
+
+    protected void MergeEndpoints(TrajectoryAccumulatorBase other)
+    {
+        if (other.Count == 0)
+            return;
+        if (Count == 0 || other.FirstTimestamp < FirstTimestamp)
+        {
+            FirstPoint = other.FirstPoint;
+            FirstTimestamp = other.FirstTimestamp;
+        }
+        if (Count == 0 || other.LastTimestamp > LastTimestamp)
+        {
+            LastPoint = other.LastPoint;
+            LastTimestamp = other.LastTimestamp;
+        }
+    }
+
+    protected static double DistanceMeters(GeoPoint left, GeoPoint right)
+    {
+        const double EarthRadiusMeters = 6_371_008.8d;
+        double lat1 = DegreesToRadians(left.Lat);
+        double lat2 = DegreesToRadians(right.Lat);
+        double dLat = DegreesToRadians(right.Lat - left.Lat);
+        double dLon = DegreesToRadians(right.Lon - left.Lon);
+        double sinLat = Math.Sin(dLat / 2d);
+        double sinLon = Math.Sin(dLon / 2d);
+        double a = sinLat * sinLat + Math.Cos(lat1) * Math.Cos(lat2) * sinLon * sinLon;
+        double c = 2d * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1d - a));
+        return EarthRadiusMeters * c;
+    }
+
+    private static double DegreesToRadians(double degrees) => degrees * Math.PI / 180d;
+
+    public abstract void Merge(IAggregateAccumulator other);
+
+    public abstract object? Finalize();
+}
+
+internal sealed class TrajectoryLengthAccumulator : TrajectoryAccumulatorBase
+{
+    private double _lengthMeters;
+
+    public override void Add(long timestampMs, GeoPoint geoPoint)
+    {
+        if (LastPoint is { } last)
+            _lengthMeters += DistanceMeters(last, geoPoint);
+        base.Add(timestampMs, geoPoint);
+    }
+
+    public override void Merge(IAggregateAccumulator other)
+    {
+        if (other is not TrajectoryLengthAccumulator t)
+            throw new ArgumentException($"Cannot merge {other.GetType().Name} into TrajectoryLengthAccumulator.", nameof(other));
+        if (t.Count == 0)
+            return;
+        if (Count > 0 && LastPoint is { } last && t.FirstPoint is { } first)
+            _lengthMeters += DistanceMeters(last, first);
+        _lengthMeters += t._lengthMeters;
+        MergeEndpoints(t);
+        Count += t.Count;
+    }
+
+    public override object? Finalize() => Count == 0 ? null : _lengthMeters;
+}
+
+internal sealed class TrajectoryCentroidAccumulator : TrajectoryAccumulatorBase
+{
+    private double _latSum;
+    private double _lonSum;
+
+    public override void Add(long timestampMs, GeoPoint geoPoint)
+    {
+        _latSum += geoPoint.Lat;
+        _lonSum += geoPoint.Lon;
+        base.Add(timestampMs, geoPoint);
+    }
+
+    public override void Merge(IAggregateAccumulator other)
+    {
+        if (other is not TrajectoryCentroidAccumulator t)
+            throw new ArgumentException($"Cannot merge {other.GetType().Name} into TrajectoryCentroidAccumulator.", nameof(other));
+        if (t.Count == 0)
+            return;
+        _latSum += t._latSum;
+        _lonSum += t._lonSum;
+        MergeEndpoints(t);
+        Count += t.Count;
+    }
+
+    public override object? Finalize()
+        => Count == 0 ? null : GeoPoint.Create(_latSum / Count, _lonSum / Count);
+}
+
+internal sealed class TrajectoryBboxAccumulator : TrajectoryAccumulatorBase
+{
+    private double _minLat = double.PositiveInfinity;
+    private double _minLon = double.PositiveInfinity;
+    private double _maxLat = double.NegativeInfinity;
+    private double _maxLon = double.NegativeInfinity;
+
+    public override void Add(long timestampMs, GeoPoint geoPoint)
+    {
+        if (geoPoint.Lat < _minLat) _minLat = geoPoint.Lat;
+        if (geoPoint.Lon < _minLon) _minLon = geoPoint.Lon;
+        if (geoPoint.Lat > _maxLat) _maxLat = geoPoint.Lat;
+        if (geoPoint.Lon > _maxLon) _maxLon = geoPoint.Lon;
+        base.Add(timestampMs, geoPoint);
+    }
+
+    public override void Merge(IAggregateAccumulator other)
+    {
+        if (other is not TrajectoryBboxAccumulator t)
+            throw new ArgumentException($"Cannot merge {other.GetType().Name} into TrajectoryBboxAccumulator.", nameof(other));
+        if (t.Count == 0)
+            return;
+        if (t._minLat < _minLat) _minLat = t._minLat;
+        if (t._minLon < _minLon) _minLon = t._minLon;
+        if (t._maxLat > _maxLat) _maxLat = t._maxLat;
+        if (t._maxLon > _maxLon) _maxLon = t._maxLon;
+        MergeEndpoints(t);
+        Count += t.Count;
+    }
+
+    public override object? Finalize()
+    {
+        if (Count == 0)
+            return null;
+        return string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"{{\"min_lat\":{_minLat:R},\"min_lon\":{_minLon:R},\"max_lat\":{_maxLat:R},\"max_lon\":{_maxLon:R}}}");
+    }
+}
+
+internal enum TrajectorySpeedMode
+{
+    Max,
+    Avg,
+    P95,
+}
+
+internal sealed class TrajectorySpeedAccumulator : TrajectoryAccumulatorBase
+{
+    private readonly TrajectorySpeedMode _mode;
+    private readonly List<double> _speeds = [];
+    private double _sum;
+    private double _max = double.NegativeInfinity;
+
+    public TrajectorySpeedAccumulator(TrajectorySpeedMode mode) => _mode = mode;
+
+    public override void Add(long timestampMs, GeoPoint geoPoint)
+    {
+        if (LastPoint is { } last)
+        {
+            long elapsedMs = timestampMs - LastTimestamp;
+            if (elapsedMs > 0)
+            {
+                double speed = DistanceMeters(last, geoPoint) / (elapsedMs / 1000d);
+                _speeds.Add(speed);
+                _sum += speed;
+                if (speed > _max) _max = speed;
+            }
+        }
+        base.Add(timestampMs, geoPoint);
+    }
+
+    public override void Merge(IAggregateAccumulator other)
+    {
+        if (other is not TrajectorySpeedAccumulator t)
+            throw new ArgumentException($"Cannot merge {other.GetType().Name} into TrajectorySpeedAccumulator.", nameof(other));
+        if (t._mode != _mode)
+            throw new ArgumentException("Cannot merge trajectory speed accumulators with different modes.", nameof(other));
+        if (t.Count == 0)
+            return;
+        if (Count > 0 && LastPoint is { } last && t.FirstPoint is { } first)
+        {
+            long elapsedMs = t.FirstTimestamp - LastTimestamp;
+            if (elapsedMs > 0)
+            {
+                double speed = DistanceMeters(last, first) / (elapsedMs / 1000d);
+                _speeds.Add(speed);
+                _sum += speed;
+                if (speed > _max) _max = speed;
+            }
+        }
+        _speeds.AddRange(t._speeds);
+        _sum += t._sum;
+        if (t._max > _max) _max = t._max;
+        MergeEndpoints(t);
+        Count += t.Count;
+    }
+
+    public override object? Finalize()
+    {
+        if (_speeds.Count == 0)
+            return null;
+        return _mode switch
+        {
+            TrajectorySpeedMode.Max => _max,
+            TrajectorySpeedMode.Avg => _sum / _speeds.Count,
+            TrajectorySpeedMode.P95 => Percentile(0.95d),
+            _ => throw new InvalidOperationException($"???????????? {_mode}?"),
+        };
+    }
+
+    private double Percentile(double q)
+    {
+        _speeds.Sort();
+        double rank = q * (_speeds.Count - 1);
+        int lo = (int)Math.Floor(rank);
+        int hi = (int)Math.Ceiling(rank);
+        if (lo == hi)
+            return _speeds[lo];
+        double weight = rank - lo;
+        return _speeds[lo] * (1d - weight) + _speeds[hi] * weight;
+    }
+}
+

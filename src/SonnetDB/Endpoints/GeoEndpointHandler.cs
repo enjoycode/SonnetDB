@@ -38,8 +38,10 @@ internal static class GeoEndpointHandler
             return;
         }
 
-        if (!TryParseRange(context, out var from, out var to))
+        var rangeResult = await TryParseRangeAsync(context).ConfigureAwait(false);
+        if (rangeResult is null)
             return;
+        var (from, to) = rangeResult.Value;
 
         string format = context.Request.Query["format"].ToString();
         bool asLineString = string.Equals(format, "linestring", StringComparison.OrdinalIgnoreCase);
@@ -76,28 +78,28 @@ internal static class GeoEndpointHandler
         return schema.FieldColumns.FirstOrDefault(c => c.DataType == FieldType.GeoPoint);
     }
 
-    private static bool TryParseRange(HttpContext context, out long from, out long to)
+    private static async Task<(long From, long To)?> TryParseRangeAsync(HttpContext context)
     {
-        from = 0;
-        to = long.MaxValue;
+        long from = 0;
+        long to = long.MaxValue;
         string fromText = context.Request.Query["from"].ToString();
         string toText = context.Request.Query["to"].ToString();
         if (!string.IsNullOrWhiteSpace(fromText) && !long.TryParse(fromText, out from))
         {
-            _ = WriteErrorAsync(context, StatusCodes.Status400BadRequest, "bad_request", "from 必须是 Unix 毫秒时间戳。");
-            return false;
+            await WriteErrorAsync(context, StatusCodes.Status400BadRequest, "bad_request", "from 必须是 Unix 毫秒时间戳。").ConfigureAwait(false);
+            return null;
         }
         if (!string.IsNullOrWhiteSpace(toText) && !long.TryParse(toText, out to))
         {
-            _ = WriteErrorAsync(context, StatusCodes.Status400BadRequest, "bad_request", "to 必须是 Unix 毫秒时间戳。");
-            return false;
+            await WriteErrorAsync(context, StatusCodes.Status400BadRequest, "bad_request", "to 必须是 Unix 毫秒时间戳。").ConfigureAwait(false);
+            return null;
         }
         if (from < 0 || to < 0 || from > to)
         {
-            _ = WriteErrorAsync(context, StatusCodes.Status400BadRequest, "bad_request", "时间范围必须满足 0 <= from <= to。");
-            return false;
+            await WriteErrorAsync(context, StatusCodes.Status400BadRequest, "bad_request", "时间范围必须满足 0 <= from <= to。").ConfigureAwait(false);
+            return null;
         }
-        return true;
+        return (from, to);
     }
 
     private static Dictionary<string, string>? BuildTagFilter(MeasurementSchema schema, IQueryCollection query)

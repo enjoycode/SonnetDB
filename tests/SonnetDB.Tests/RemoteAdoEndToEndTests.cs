@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using SonnetDB.Data;
 using SonnetDB.Data.Remote;
 using SonnetDB.Configuration;
+using SonnetDB.Model;
 using Xunit;
 
 namespace SonnetDB.Tests;
@@ -160,6 +161,33 @@ public sealed class RemoteAdoEndToEndTests : IAsyncLifetime
         Assert.True(r.Read());
         Assert.Equal("o'reilly", r.GetString(0));
         Assert.Equal(7.25, r.GetDouble(1));
+        Assert.False(r.Read());
+    }
+
+    [Fact]
+    public void Remote_GeoPointColumn_ReturnsGeoPointStruct()
+    {
+        using var c = OpenRemote();
+        using (var ddl = c.CreateCommand())
+        {
+            ddl.CommandText = "CREATE MEASUREMENT vehicle (device TAG, position FIELD GEOPOINT)";
+            ddl.ExecuteNonQuery();
+        }
+        using (var ins = c.CreateCommand())
+        {
+            ins.CommandText = "INSERT INTO vehicle (time, device, position) VALUES (1000, 'car-1', POINT(39.9042, 116.4074))";
+            Assert.Equal(1, ins.ExecuteNonQuery());
+        }
+
+        using var sel = c.CreateCommand();
+        sel.CommandText = "SELECT position FROM vehicle";
+        using var r = sel.ExecuteReader();
+
+        Assert.True(r.Read());
+        Assert.Equal(typeof(GeoPoint), r.GetFieldType(0));
+        var point = Assert.IsType<GeoPoint>(r.GetValue(0));
+        Assert.Equal(39.9042, point.Lat, 6);
+        Assert.Equal(116.4074, point.Lon, 6);
         Assert.False(r.Read());
     }
 
