@@ -82,6 +82,7 @@ const route = useRoute();
 const baseMenu: MenuOption[] = [
   { label: '概览', key: 'dashboard' },
   { label: 'SQL Console', key: 'sql' },
+  { label: '轨迹地图', key: 'trajectory-map' },
   { label: '数据库', key: 'databases' },
   { label: '事件流', key: 'events' },
 ];
@@ -100,6 +101,7 @@ const menuOptions = computed<MenuOption[]>(() => (
 const titleByKey: Record<string, string> = {
   dashboard: '概览',
   sql: 'SQL Console',
+  'trajectory-map': '轨迹地图',
   databases: '数据库',
   events: '事件流',
   users: '用户',
