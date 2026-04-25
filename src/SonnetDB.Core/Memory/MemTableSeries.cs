@@ -255,6 +255,7 @@ public sealed class MemTableSeries
             FieldType.Boolean => count * 9L,
             FieldType.String => ComputeStringBytes(),
             FieldType.Vector => ComputeVectorBytes(),
+            FieldType.GeoPoint => count * 24L,
             _ => count * 16L, // Float64 / Int64
         };
     }

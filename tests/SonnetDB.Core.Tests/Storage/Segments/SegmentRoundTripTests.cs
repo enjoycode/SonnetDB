@@ -190,6 +190,7 @@ public sealed class SegmentRoundTripTests : IDisposable
     [InlineData(FieldType.Int64)]
     [InlineData(FieldType.Boolean)]
     [InlineData(FieldType.String)]
+    [InlineData(FieldType.GeoPoint)]
     public void SinglePoint_AllFieldTypes_RoundTrip(FieldType fieldType)
     {
         string path = TempPath($"single_{fieldType}.SDBSEG");
@@ -200,6 +201,7 @@ public sealed class SegmentRoundTripTests : IDisposable
             FieldType.Int64 => FieldValue.FromLong(42L),
             FieldType.Boolean => FieldValue.FromBool(true),
             FieldType.String => FieldValue.FromString("hello"),
+            FieldType.GeoPoint => FieldValue.FromGeoPoint(39.9042, 116.4074),
             _ => throw new InvalidOperationException()
         };
         mt.Append(1UL, 1000L, "field", value, 1L);

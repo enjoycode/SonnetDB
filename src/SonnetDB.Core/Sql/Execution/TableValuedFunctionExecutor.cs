@@ -330,6 +330,7 @@ internal static class TableValuedFunctionExecutor
         FieldType.Boolean => value.AsBool(),
         FieldType.String => value.AsString(),
         FieldType.Vector => value.AsVector().ToArray(),
+        FieldType.GeoPoint => value.AsGeoPoint(),
         _ => null,
     };
 }

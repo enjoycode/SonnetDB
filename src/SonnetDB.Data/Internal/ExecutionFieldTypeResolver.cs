@@ -1,5 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 
+using SonnetDB.Model;
+
 namespace SonnetDB.Data.Internal;
 
 internal enum ExecutionFieldTypeKind
@@ -17,6 +19,7 @@ internal enum ExecutionFieldTypeKind
     DateTime,
     DateTimeOffset,
     Guid,
+    GeoPoint,
 }
 
 internal static class ExecutionFieldTypeResolver
@@ -38,6 +41,7 @@ internal static class ExecutionFieldTypeResolver
             DateTime => ExecutionFieldTypeKind.DateTime,
             DateTimeOffset => ExecutionFieldTypeKind.DateTimeOffset,
             Guid => ExecutionFieldTypeKind.Guid,
+            GeoPoint => ExecutionFieldTypeKind.GeoPoint,
             _ => ExecutionFieldTypeKind.Object,
         };
     }
@@ -59,6 +63,7 @@ internal static class ExecutionFieldTypeResolver
             ExecutionFieldTypeKind.DateTime => typeof(DateTime),
             ExecutionFieldTypeKind.DateTimeOffset => typeof(DateTimeOffset),
             ExecutionFieldTypeKind.Guid => typeof(Guid),
+            ExecutionFieldTypeKind.GeoPoint => typeof(GeoPoint),
             _ => typeof(object),
         };
     }

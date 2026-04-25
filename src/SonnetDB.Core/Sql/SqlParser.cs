@@ -162,7 +162,8 @@ public sealed class SqlParser
             case TokenKind.KeywordInt: Advance(); return SqlDataType.Int64;
             case TokenKind.KeywordBool: Advance(); return SqlDataType.Boolean;
             case TokenKind.KeywordString: Advance(); return SqlDataType.String;
-            default: throw Error("期望数据类型 FLOAT / INT / BOOL / STRING");
+            case TokenKind.KeywordGeoPoint: Advance(); return SqlDataType.GeoPoint;
+            default: throw Error("期望数据类型 FLOAT / INT / BOOL / STRING / GEOPOINT");
         }
     }
 
@@ -191,7 +192,7 @@ public sealed class SqlParser
     private static bool IsDataTypeKeyword(TokenKind kind)
         => kind is TokenKind.KeywordFloat or TokenKind.KeywordInt
                 or TokenKind.KeywordBool or TokenKind.KeywordString
-                or TokenKind.KeywordVector;
+                or TokenKind.KeywordVector or TokenKind.KeywordGeoPoint;
 
     private VectorIndexSpec? ParseOptionalVectorIndex()
     {
@@ -658,6 +659,8 @@ public sealed class SqlParser
                 return inner;
             case TokenKind.LeftBracket:
                 return ParseVectorLiteral();
+            case TokenKind.IdentifierLiteral when string.Equals(Current.Text, "point", StringComparison.OrdinalIgnoreCase):
+                return ParsePointLiteralOrFunctionCall();
             case TokenKind.KeywordTime:
                 // time 既可以作为列名（time >= 100），也可以作为函数（time(1m)）；
                 // 看下一个 token 是否为 '(' 决定。
@@ -678,6 +681,21 @@ public sealed class SqlParser
             return ParseFunctionCallTail(name);
         }
         return new IdentifierExpression(name);
+    }
+
+    private SqlExpression ParsePointLiteralOrFunctionCall()
+    {
+        var name = Current.Text;
+        Advance();
+        if (Current.Kind != TokenKind.LeftParen)
+            return new IdentifierExpression(name);
+
+        Expect(TokenKind.LeftParen);
+        double lat = ParseVectorComponent();
+        Expect(TokenKind.Comma);
+        double lon = ParseVectorComponent();
+        Expect(TokenKind.RightParen);
+        return new GeoPointLiteralExpression(lat, lon);
     }
 
     private SqlExpression ParseFunctionCallTail(string name)

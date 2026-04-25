@@ -34,13 +34,19 @@ public static class TsdbMagic
     /// <see cref="SonnetDB.Storage.Format.BlockHeader"/> 大小不变；仅会在新增 VECTOR 列时实际写入。
     /// 读取层兼容 v2（v2 段文件不会包含 Vector Block，按原路径读取）。
     /// </para>
+    /// <para>
+    /// v4（PR #70）：新增 <see cref="SonnetDB.Storage.Format.FieldType.GeoPoint"/> 与
+    /// <see cref="SonnetDB.Storage.Format.BlockEncoding.GeoPointRaw"/>，每个点按
+    /// <c>lat(8) + lon(8)</c> 小端 float64 固定 16 字节编码。BlockHeader 布局不变；
+    /// 读取层兼容 v3（v3 段文件不会包含 GeoPoint Block）。
+    /// </para>
     /// </summary>
-    public const int SegmentFormatVersion = 3;
+    public const int SegmentFormatVersion = 4;
 
     /// <summary>
     /// SegmentReader 允许读取的段格式版本集合（含历史只读兼容版本）。
     /// </summary>
-    public static ReadOnlySpan<int> SupportedSegmentFormatVersions => [2, 3];
+    public static ReadOnlySpan<int> SupportedSegmentFormatVersions => [2, 3, 4];
 
     /// <summary>构造文件 magic <see cref="InlineBytes8"/>。</summary>
     /// <returns>内容为 <c>"SONNETDB"</c>（8 字节 ASCII）的 <see cref="InlineBytes8"/> 实例。</returns>

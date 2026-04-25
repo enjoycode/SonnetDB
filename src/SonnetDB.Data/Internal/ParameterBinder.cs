@@ -1,6 +1,8 @@
 ﻿using System.Globalization;
 using System.Text;
 
+using SonnetDB.Model;
+
 namespace SonnetDB.Data.Internal;
 
 /// <summary>
@@ -108,6 +110,7 @@ internal static class ParameterBinder
                 ? DateTime.SpecifyKind(dt, DateTimeKind.Utc)
                 : dt).ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture),
             DateTimeOffset dto => dto.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture),
+            GeoPoint p => string.Create(CultureInfo.InvariantCulture, $"POINT({p.Lat:R}, {p.Lon:R})"),
             _ => throw new NotSupportedException(
                 $"不支持的参数类型 '{value.GetType().FullName}'。"),
         };

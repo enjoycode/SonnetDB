@@ -32,7 +32,7 @@ internal static class ExtendedAggregateBinder
         if (col.Role != MeasurementColumnRole.Field)
             throw new InvalidOperationException(
                 $"{functionName} 只能作用于 FIELD 列（'{id.Name}' 是 {col.Role}）。");
-        if (col.DataType is FieldType.String or FieldType.Vector)
+        if (col.DataType is FieldType.String or FieldType.Vector or FieldType.GeoPoint)
             throw new InvalidOperationException(
                 $"{functionName} 仅支持数值字段，'{id.Name}' 的类型为 {col.DataType}。");
         return col.Name;
@@ -61,7 +61,7 @@ internal static class ExtendedAggregateBinder
         if (col.Role != MeasurementColumnRole.Field)
             throw new InvalidOperationException(
                 $"{functionName} 只能作用于 FIELD 列（'{id.Name}' 是 {col.Role}）。");
-        if (col.DataType is FieldType.String or FieldType.Vector)
+        if (col.DataType is FieldType.String or FieldType.Vector or FieldType.GeoPoint)
             throw new InvalidOperationException(
                 $"{functionName} 仅支持数值字段，'{id.Name}' 的类型为 {col.DataType}。");
 

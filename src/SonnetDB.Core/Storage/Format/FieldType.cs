@@ -22,4 +22,7 @@ public enum FieldType : byte
 
     /// <summary>定长 32 位浮点向量（IEEE 754，dim 由 schema 声明；WAL 内按 dim×4 字节小端排布）。</summary>
     Vector = 5,
+
+    /// <summary>WGS84 地理点（纬度 lat + 经度 lon，均为 64 位双精度浮点）。</summary>
+    GeoPoint = 6,
 }

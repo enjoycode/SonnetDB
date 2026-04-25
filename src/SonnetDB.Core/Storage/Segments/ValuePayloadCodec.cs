@@ -16,6 +16,7 @@ namespace SonnetDB.Storage.Segments;
 ///   <item><description><see cref="FieldType.Boolean"/>：每个点 1 字节（0=false，1=true）。</description></item>
 ///   <item><description><see cref="FieldType.String"/>：每个点先写 int32 LE 字节长度，再写 UTF-8 字节。</description></item>
 ///   <item><description><see cref="FieldType.Vector"/>：每个点 <c>dim × 4</c> 字节（dim×float32 LE，dim 由首个数据点确定，所有点必须一致；PR #58 c）。</description></item>
+///   <item><description><see cref="FieldType.GeoPoint"/>：每个点 <c>lat(8) + lon(8)</c> 字节（float64 LE；PR #70）。</description></item>
 /// </list>
 /// </para>
 /// </summary>
@@ -39,6 +40,7 @@ internal static class ValuePayloadCodec
             FieldType.Float64 => count * 8,
             FieldType.Int64 => count * 8,
             FieldType.Boolean => count,
+            FieldType.GeoPoint => count * 16,
             FieldType.Vector => MeasureVectorPayload(points),
             FieldType.String => MeasureStringPayload(points),
             _ => throw new ArgumentOutOfRangeException(nameof(fieldType), fieldType, null),
@@ -78,6 +80,15 @@ internal static class ValuePayloadCodec
 
             case FieldType.String:
                 WriteStringPayload(ref writer, points);
+                break;
+
+            case FieldType.GeoPoint:
+                foreach (var dp in points.Span)
+                {
+                    var p = dp.Value.AsGeoPoint();
+                    writer.WriteDouble(p.Lat);
+                    writer.WriteDouble(p.Lon);
+                }
                 break;
 
             case FieldType.Vector:

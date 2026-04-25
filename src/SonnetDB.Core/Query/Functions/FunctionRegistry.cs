@@ -5,6 +5,7 @@ using SonnetDB.Query.Functions.Control;
 using SonnetDB.Query.Functions.Window;
 using SonnetDB.Sql.Ast;
 using SonnetDB.Storage.Format;
+using SonnetDB.Model;
 
 namespace SonnetDB.Query.Functions;
 
@@ -132,6 +133,8 @@ public static class FunctionRegistry
         new BuiltInScalarFunction("l2_distance", 2, 2, EvaluateL2Distance),
         new BuiltInScalarFunction("inner_product", 2, 2, EvaluateInnerProduct),
         new BuiltInScalarFunction("vector_norm", 1, 1, EvaluateVectorNorm),
+        new BuiltInScalarFunction("lat", 1, 1, static args => RequireGeoPoint(args[0], "lat").Lat),
+        new BuiltInScalarFunction("lon", 1, 1, static args => RequireGeoPoint(args[0], "lon").Lon),
     ];
 
     private static IWindowFunction[] CreateWindowFunctionList() =>
@@ -306,6 +309,16 @@ public static class FunctionRegistry
         };
     }
 
+    private static GeoPoint RequireGeoPoint(object? value, string functionName)
+    {
+        return value switch
+        {
+            GeoPoint point => point,
+            null => throw new InvalidOperationException($"函数 {functionName} 不接受 NULL 参数。"),
+            _ => throw new InvalidOperationException($"函数 {functionName} 需要 GEOPOINT 参数。"),
+        };
+    }
+
     private static void EnsureSameVectorDimension(
         ReadOnlySpan<float> left, ReadOnlySpan<float> right, string functionName)
     {
@@ -354,7 +367,7 @@ public static class FunctionRegistry
             if (col.Role != MeasurementColumnRole.Field)
                 throw new InvalidOperationException(
                     $"聚合函数 {call.Name}({id.Name}) 只能作用于 FIELD 列。");
-            if (LegacyAggregator != Aggregator.Count && col.DataType is FieldType.String or FieldType.Vector)
+            if (LegacyAggregator != Aggregator.Count && col.DataType is FieldType.String or FieldType.Vector or FieldType.GeoPoint)
                 throw new InvalidOperationException(
                     $"聚合函数 {call.Name} 仅支持数值字段，'{id.Name}' 的类型为 {col.DataType}。");
             return col.Name;

@@ -169,6 +169,7 @@ public sealed class SegmentReader : IDisposable
                 $"Version={header.FormatVersion}，期望 v{TsdbMagic.SegmentFormatVersion}，兼容版本 v{string.Join("/v", TsdbMagic.SupportedSegmentFormatVersions.ToArray())}）。" +
                 "SonnetDB v2（PR #50）将 BlockHeader.AggregateMin/Max 升级为 8 字节 double，BlockHeader 大小由 64B 增至 72B；" +
                 "v3（PR #58 c）新增 BlockEncoding.VectorRaw 与 FieldType.Vector，仅在使用 VECTOR 列时落盘；" +
+                "v4（PR #70）新增 BlockEncoding.GeoPointRaw 与 FieldType.GeoPoint，仅在使用 GEOPOINT 列时落盘；" +
                 "旧 v1 段文件需通过重放 WAL（删除 .SDBSEG 后启动）重新生成。");
 
         if (header.HeaderSize != FormatSizes.SegmentHeaderSize)
@@ -275,7 +276,9 @@ public sealed class SegmentReader : IDisposable
                     ? BlockEncoding.DeltaValue
                     : ((bh.Encoding & BlockEncoding.VectorRaw) != 0
                         ? BlockEncoding.VectorRaw
-                        : BlockEncoding.None),
+                        : ((bh.Encoding & BlockEncoding.GeoPointRaw) != 0
+                            ? BlockEncoding.GeoPointRaw
+                            : BlockEncoding.None)),
                 FieldName = fieldName,
                 FileOffset = headerStart,
                 BlockLength = entry.BlockLength,

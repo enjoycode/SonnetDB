@@ -363,6 +363,7 @@ internal static class SelectExecutor
             UnaryExpression unary => EvaluateUnaryExpression(unary, timestamp, series, fieldLookups),
             BinaryExpression binary => EvaluateBinaryExpression(binary, timestamp, series, fieldLookups),
             VectorLiteralExpression vector => EvaluateVectorLiteral(vector),
+            GeoPointLiteralExpression geoPoint => GeoPoint.Create(geoPoint.Lat, geoPoint.Lon),
             FunctionCallExpression nested when FunctionRegistry.TryGetScalar(nested.Name, out var scalarFunction)
                 => EvaluateNestedScalarFunction(nested, scalarFunction, timestamp, series, fieldLookups),
             FunctionCallExpression nested
@@ -500,6 +501,7 @@ internal static class SelectExecutor
         FieldType.Boolean => v.AsBool(),
         FieldType.String => v.AsString(),
         FieldType.Vector => v.AsVector().ToArray(),
+        FieldType.GeoPoint => v.AsGeoPoint(),
         _ => throw new InvalidOperationException($"不支持的 FieldType {v.Type}。"),
     };
 
@@ -546,8 +548,8 @@ internal static class SelectExecutor
                 foreach (var fname in fields)
                 {
                     var col = schema.TryGetColumn(fname);
-                    // count(*) 时跨所有 field 列累加，但跳过 String（语义上不参与数值统计）
-                    if (spec.IsCountStar && col is not null && col.DataType == FieldType.String)
+                    // count(*) 时跨所有 field 列累加，但跳过非数值复合字段（语义上不参与数值统计）
+                    if (spec.IsCountStar && col is not null && col.DataType is FieldType.String or FieldType.Vector or FieldType.GeoPoint)
                         continue;
 
                     foreach (var dp in tsdb.Query.Execute(new PointQuery(series.Id, fname, where.TimeRange)))

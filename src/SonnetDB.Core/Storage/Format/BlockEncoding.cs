@@ -25,4 +25,11 @@ public enum BlockEncoding : byte
     /// 同一 Block 内所有点的 dim 必须一致。该 Block 不可同时启用 <see cref="DeltaValue"/>。
     /// </summary>
     VectorRaw = 4,
+
+    /// <summary>
+    /// 值列为 <see cref="FieldType.GeoPoint"/> 的原始定长编码（Milestone 15 PR #70 启用）：
+    /// 每个数据点写入 <c>lat(8) + lon(8)</c> 字节小端 IEEE-754 float64。
+    /// 该 Block 不可同时启用 <see cref="DeltaValue"/>。
+    /// </summary>
+    GeoPointRaw = 8,
 }

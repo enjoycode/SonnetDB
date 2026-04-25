@@ -1,1 +1,9 @@
-{}
+{
+  "chat.agent.sandbox.fileSystem.mac": {
+    "denyRead": [],
+    "allowWrite": [
+      "."
+    ],
+    "denyWrite": []
+  }
+}

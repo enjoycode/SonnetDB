@@ -27,6 +27,7 @@ internal static class WalPayloadCodec
             FieldType.Boolean => 1,
             FieldType.String => _utf8.GetByteCount(value.AsString()),
             FieldType.Vector => 4 + value.VectorDimension * 4, // dim(4) + dim*float32
+            FieldType.GeoPoint => 16,
             _ => throw new ArgumentOutOfRangeException(nameof(value), $"Unsupported FieldType: {value.Type}"),
         };
         // SeriesId(8) + PointTs(8) + FieldType(1) + Padding(3) + FieldNameLen(4) + FieldNameBytes + ValueLen(4) + ValueBytes
@@ -97,6 +98,14 @@ internal static class WalPayloadCodec
                     writer.WriteInt32(vec.Length); // dim
                     for (int i = 0; i < vec.Length; i++)
                         writer.WriteSingle(vec[i]);
+                    break;
+                }
+            case FieldType.GeoPoint:
+                {
+                    var p = value.AsGeoPoint();
+                    writer.WriteInt32(16);
+                    writer.WriteDouble(p.Lat);
+                    writer.WriteDouble(p.Lon);
                     break;
                 }
             default:
@@ -196,6 +205,7 @@ internal static class WalPayloadCodec
             FieldType.Boolean => FieldValue.FromBool(reader.ReadByte() != 0),
             FieldType.String => FieldValue.FromString(_utf8.GetString(reader.ReadBytes(valueLen))),
             FieldType.Vector => ReadVectorPayload(ref reader, valueLen),
+            FieldType.GeoPoint => ReadGeoPointPayload(ref reader, valueLen),
             _ => throw new InvalidDataException($"Unsupported FieldType in WAL: {fieldType}"),
         };
 
@@ -215,6 +225,15 @@ internal static class WalPayloadCodec
         for (int i = 0; i < dim; i++)
             arr[i] = reader.ReadSingle();
         return FieldValue.FromVector(arr);
+    }
+
+    private static FieldValue ReadGeoPointPayload(ref SpanReader reader, int valueLen)
+    {
+        if (valueLen != 16)
+            throw new InvalidDataException($"Invalid geopoint payload: valueLen={valueLen} (expected 16).");
+        double lat = reader.ReadDouble();
+        double lon = reader.ReadDouble();
+        return FieldValue.FromGeoPoint(lat, lon);
     }
 
     /// <summary>

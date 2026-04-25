@@ -37,6 +37,7 @@ public sealed class SqlLexer
         ["bool"] = TokenKind.KeywordBool,
         ["string"] = TokenKind.KeywordString,
         ["vector"] = TokenKind.KeywordVector,
+        ["geopoint"] = TokenKind.KeywordGeoPoint,
 
         // PR #34a：控制面 DDL 关键字
         ["user"] = TokenKind.KeywordUser,

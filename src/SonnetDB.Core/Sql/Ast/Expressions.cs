@@ -54,6 +54,13 @@ public sealed record DurationLiteralExpression(long Milliseconds) : SqlExpressio
 /// <param name="Components">按声明顺序的分量值（长度即维度，&gt;= 1）。</param>
 public sealed record VectorLiteralExpression(IReadOnlyList<double> Components) : SqlExpression;
 
+/// <summary>
+/// 地理点字面量 <c>POINT(lat, lon)</c>（PR #70）。
+/// </summary>
+/// <param name="Lat">纬度，范围由执行器校验为 [-90, 90]。</param>
+/// <param name="Lon">经度，范围由执行器校验为 [-180, 180]。</param>
+public sealed record GeoPointLiteralExpression(double Lat, double Lon) : SqlExpression;
+
 /// <summary>标识符引用（列名 / 字段名 / tag 名）。</summary>
 /// <param name="Name">标识符名称（保留原始大小写）。</param>
 public sealed record IdentifierExpression(string Name) : SqlExpression;

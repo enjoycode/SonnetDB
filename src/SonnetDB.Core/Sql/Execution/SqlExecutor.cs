@@ -131,6 +131,7 @@ public static class SqlExecutor
         FieldType.Boolean => "boolean",
         FieldType.String => "string",
         FieldType.Vector => "vector",
+        FieldType.GeoPoint => "geopoint",
         _ => type.ToString().ToLowerInvariant(),
     };
 
@@ -295,6 +296,7 @@ public static class SqlExecutor
         SqlDataType.Boolean => FieldType.Boolean,
         SqlDataType.String => FieldType.String,
         SqlDataType.Vector => FieldType.Vector,
+        SqlDataType.GeoPoint => FieldType.GeoPoint,
         _ => throw new NotSupportedException($"未知数据类型 {type}。"),
     };
 
@@ -403,6 +405,16 @@ public static class SqlExecutor
                         continue;
                     }
 
+                    if (binding.Column.DataType == FieldType.GeoPoint)
+                    {
+                        if (row[i] is not GeoPointLiteralExpression geoExpr)
+                            throw new InvalidOperationException(
+                                $"Field 列 '{binding.Column.Name}' 期望 POINT(lat, lon) 字面量，实际为 {row[i].GetType().Name}。");
+                        fields ??= new Dictionary<string, FieldValue>(StringComparer.Ordinal);
+                        fields[binding.Column.Name] = FieldValue.FromGeoPoint(geoExpr.Lat, geoExpr.Lon);
+                        continue;
+                    }
+
                     var literal = AsLiteral(row[i], binding.Column.Name);
                     if (literal.Kind == SqlLiteralKind.Null)
                         throw new InvalidOperationException(
@@ -505,6 +517,9 @@ public static class SqlExecutor
             case FieldType.Vector:
                 throw new InvalidOperationException(
                     $"Field 列 '{column.Name}' 是 VECTOR 列，必须传入 [..] 向量字面量，不允许标量字面量。");
+            case FieldType.GeoPoint:
+                throw new InvalidOperationException(
+                    $"Field 列 '{column.Name}' 是 GEOPOINT 列，必须传入 POINT(lat, lon) 字面量，不允许标量字面量。");
             default:
                 throw new NotSupportedException($"不支持的列类型 {column.DataType}。");
         }

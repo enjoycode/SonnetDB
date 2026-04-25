@@ -125,6 +125,26 @@ public sealed class WalWriterTests : IDisposable
     }
 
     [Fact]
+    public void AppendWritePoint_WithGeoPoint_RoundTrips()
+    {
+        string path = TempFile();
+        var expected = FieldValue.FromGeoPoint(31.2304, 121.4737);
+
+        using (var writer = WalWriter.Open(path))
+        {
+            writer.AppendWritePoint(7UL, 1234L, "position", expected);
+            writer.Sync();
+        }
+
+        using var reader = WalReader.Open(path);
+        var record = Assert.IsType<WritePointRecord>(Assert.Single(reader.Replay()));
+        Assert.Equal(7UL, record.SeriesId);
+        Assert.Equal(1234L, record.PointTimestamp);
+        Assert.Equal("position", record.FieldName);
+        Assert.Equal(expected, record.Value);
+    }
+
+    [Fact]
     public void IsOpen_TrueBeforeDispose_FalseAfter()
     {
         string path = TempFile();

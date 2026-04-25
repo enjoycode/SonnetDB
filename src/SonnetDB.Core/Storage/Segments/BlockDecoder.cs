@@ -204,6 +204,10 @@ internal static class BlockDecoder
                 ReadStringValues(valPayload, count, result, startIndex: 0, resultOffset: 0);
                 break;
 
+            case FieldType.GeoPoint:
+                ReadGeoPointValues(valPayload, result, startIndex: 0, rangeCount: count, resultOffset: 0);
+                break;
+
             case FieldType.Vector:
                 ReadVectorValues(valPayload, count, result, startIndex: 0, rangeCount: count, resultOffset: 0);
                 break;
@@ -259,6 +263,10 @@ internal static class BlockDecoder
 
             case FieldType.Vector:
                 ReadVectorValues(valPayload, totalCount, result, startIndex: start, rangeCount: rangeCount, resultOffset: 0);
+                break;
+
+            case FieldType.GeoPoint:
+                ReadGeoPointValues(valPayload, result, startIndex: start, rangeCount: rangeCount, resultOffset: 0);
                 break;
 
             case FieldType.String:
@@ -337,6 +345,25 @@ internal static class BlockDecoder
             result[resultOffset + i] = new DataPoint(
                 result[resultOffset + i].Timestamp,
                 FieldValue.FromVector(arr));
+        }
+    }
+
+    private static void ReadGeoPointValues(
+        ReadOnlySpan<byte> valPayload,
+        DataPoint[] result,
+        int startIndex,
+        int rangeCount,
+        int resultOffset)
+    {
+        const int BytesPerPoint = 16;
+        for (int i = 0; i < rangeCount; i++)
+        {
+            int srcOffset = (startIndex + i) * BytesPerPoint;
+            double lat = BinaryPrimitives.ReadDoubleLittleEndian(valPayload.Slice(srcOffset, 8));
+            double lon = BinaryPrimitives.ReadDoubleLittleEndian(valPayload.Slice(srcOffset + 8, 8));
+            result[resultOffset + i] = new DataPoint(
+                result[resultOffset + i].Timestamp,
+                FieldValue.FromGeoPoint(lat, lon));
         }
     }
 

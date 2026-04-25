@@ -3,7 +3,7 @@
 namespace SonnetDB.Model;
 
 /// <summary>
-/// 字段值的统一表示，支持 Float64 / Int64 / Boolean / String 四种类型，
+/// 字段值的统一表示，支持 Float64 / Int64 / Boolean / String / Vector / GeoPoint 类型，
 /// 通过显式 <see cref="FieldType"/> 标签区分，零装箱。
 /// </summary>
 /// <remarks>
@@ -25,12 +25,16 @@ public readonly struct FieldValue : IEquatable<FieldValue>
     /// <summary>仅当 <see cref="Type"/> 为 <see cref="FieldType.Vector"/> 时有值（dim = <c>_vector.Length</c>）。</summary>
     private readonly ReadOnlyMemory<float> _vector;
 
+    /// <summary>仅当 <see cref="Type"/> 为 <see cref="FieldType.GeoPoint"/> 时有值。</summary>
+    private readonly GeoPoint _geoPoint;
+
     private FieldValue(FieldType type, long numeric, string? str)
     {
         Type = type;
         _numeric = numeric;
         _string = str;
         _vector = default;
+        _geoPoint = default;
     }
 
     private FieldValue(ReadOnlyMemory<float> vector)
@@ -39,6 +43,16 @@ public readonly struct FieldValue : IEquatable<FieldValue>
         _numeric = vector.Length;
         _string = null;
         _vector = vector;
+        _geoPoint = default;
+    }
+
+    private FieldValue(GeoPoint geoPoint)
+    {
+        Type = FieldType.GeoPoint;
+        _numeric = 0;
+        _string = null;
+        _vector = default;
+        _geoPoint = geoPoint;
     }
 
     // ── 工厂方法 ────────────────────────────────────────────────────────────
@@ -81,6 +95,18 @@ public readonly struct FieldValue : IEquatable<FieldValue>
         return FromVector(vector.AsMemory());
     }
 
+    /// <summary>从地理空间点创建字段值。</summary>
+    /// <param name="geoPoint">WGS84 地理点。</param>
+    public static FieldValue FromGeoPoint(GeoPoint geoPoint)
+        => new(GeoPoint.Create(geoPoint.Lat, geoPoint.Lon));
+
+    /// <summary>从经纬度创建地理空间字段值。</summary>
+    /// <param name="lat">纬度，范围 [-90, 90]。</param>
+    /// <param name="lon">经度，范围 [-180, 180]。</param>
+    /// <exception cref="ArgumentOutOfRangeException">纬度或经度超出合法范围。</exception>
+    public static FieldValue FromGeoPoint(double lat, double lon)
+        => new(GeoPoint.Create(lat, lon));
+
     // ── 取值方法 ────────────────────────────────────────────────────────────
 
     /// <summary>以 double 形式返回字段值。</summary>
@@ -118,6 +144,12 @@ public readonly struct FieldValue : IEquatable<FieldValue>
     public int VectorDimension => Type == FieldType.Vector
         ? (int)_numeric
         : throw new InvalidOperationException($"Field is {Type}, not Vector.");
+
+    /// <summary>以地理点形式返回字段值。</summary>
+    /// <exception cref="InvalidOperationException">字段类型不是 GeoPoint。</exception>
+    public GeoPoint AsGeoPoint() => Type == FieldType.GeoPoint
+        ? _geoPoint
+        : throw new InvalidOperationException($"Field is {Type}, not GeoPoint.");
 
     // ── 辅助方法 ────────────────────────────────────────────────────────────
 
@@ -157,6 +189,7 @@ public readonly struct FieldValue : IEquatable<FieldValue>
         {
             FieldType.String => string.Equals(_string, other._string, StringComparison.Ordinal),
             FieldType.Vector => _vector.Span.SequenceEqual(other._vector.Span),
+            FieldType.GeoPoint => _geoPoint.Equals(other._geoPoint),
             _ => _numeric == other._numeric,
         };
     }
@@ -179,6 +212,8 @@ public readonly struct FieldValue : IEquatable<FieldValue>
             if (span.Length >= 3) hc.Add(span[^1]);
             return hc.ToHashCode();
         }
+        if (Type == FieldType.GeoPoint)
+            return HashCode.Combine(Type, _geoPoint);
         return HashCode.Combine(Type, _numeric, _string);
     }
 
@@ -190,6 +225,7 @@ public readonly struct FieldValue : IEquatable<FieldValue>
         FieldType.Boolean => _numeric != 0 ? "true" : "false",
         FieldType.String => _string!,
         FieldType.Vector => FormatVector(_vector.Span),
+        FieldType.GeoPoint => _geoPoint.ToString(),
         _ => $"Unknown({Type})",
     };
 

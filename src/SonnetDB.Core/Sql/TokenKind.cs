@@ -70,6 +70,8 @@ public enum TokenKind
     KeywordString,
     /// <summary>VECTOR(dim) 列声明（PR #58 b）。</summary>
     KeywordVector,
+    /// <summary>GEOPOINT 列声明（PR #70）。</summary>
+    KeywordGeoPoint,
 
     // PR #34a：控制面 DDL
     KeywordUser,
