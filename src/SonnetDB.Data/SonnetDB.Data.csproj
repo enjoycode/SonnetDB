@@ -4,8 +4,8 @@
     <OutputType>Library</OutputType>
     <RootNamespace>SonnetDB.Data</RootNamespace>
     <AssemblyName>SonnetDB.Data</AssemblyName>
-    <PackageId>SonnetDB.Data</PackageId>
-    <Title>SonnetDB.Data</Title>
+    <PackageId>SonnetDB</PackageId>
+    <Title>SonnetDB</Title>
     <Description>SonnetDB 的 ADO.NET 提供程序，统一支持本地嵌入式连接与远程 SonnetDB 连接。</Description>
     <PackageReadmeFile>PackageReadme.md</PackageReadmeFile>
     <!--
