@@ -13,10 +13,32 @@ permalink: /releases/installers/
 %ProgramFiles%\SonnetDB Server
 ```
 
-安装后可直接运行：
+MSI 会安装并启动 Windows 服务：
 
 ```powershell
-start-sonnetdb.cmd
+msiexec /i sonnetdb-<version>-win-x64.msi
+Get-Service SonnetDB
+```
+
+默认数据目录为：
+
+```text
+C:\ProgramData\SonnetDB\data
+```
+
+安装时可通过 `DATAROOT` 指定数据目录：
+
+```powershell
+msiexec /i sonnetdb-<version>-win-x64.msi DATAROOT="D:\sonnetdb-data"
+```
+
+该路径会写入服务启动参数，并同步设置系统环境变量 `SONNETDB_SonnetDBServer__DataRoot`。
+
+安装程序还会把安装目录加入系统 `PATH`。重新打开终端后，可在任意目录运行：
+
+```powershell
+sndb version
+sndb remote --url http://127.0.0.1:5080 --database metrics --token sonnetdb-admin-token
 ```
 
 ## Linux DEB / RPM
@@ -38,4 +60,7 @@ sudo rpm -i sonnetdb-<version>-linux-x64.rpm
 
 ```bash
 sonnetdb
+sndb version
 ```
+
+Linux 安装包通过 `/usr/bin/sonnetdb` 与 `/usr/bin/sndb` 软链接暴露全局命令，不修改 shell 配置文件。

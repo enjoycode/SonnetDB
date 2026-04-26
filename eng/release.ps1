@@ -5,7 +5,9 @@
     [string]$Rid,
     [string]$Configuration = 'Release',
     [string]$OutputRoot,
-    [switch]$BuildAdminUi
+    [switch]$BuildAdminUi,
+    [string]$FinalOutputDir,
+    [switch]$CleanIntermediate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -582,20 +584,22 @@ function New-WixSourceFile
         [string]$WxsPath
     )
 
-    $files = Get-ChildItem -LiteralPath $ServerBundleDir -Recurse -File | Sort-Object FullName
-    $directories = Get-ChildItem -LiteralPath $ServerBundleDir -Recurse -Directory | Sort-Object FullName
+    $bundleRoot = (Resolve-Path -LiteralPath $ServerBundleDir).Path
+    $msiVersion = ConvertTo-MsiVersion $Version
+    $files = Get-ChildItem -LiteralPath $bundleRoot -Recurse -File | Sort-Object FullName
+    $directories = Get-ChildItem -LiteralPath $bundleRoot -Recurse -Directory | Sort-Object FullName
 
     $dirEntries = @{}
     foreach ($directory in $directories)
     {
-        $rel = Get-RelativePathNormalized $ServerBundleDir $directory.FullName
-        $parentRel = if ($directory.Parent.FullName -eq $ServerBundleDir)
+        $rel = Get-RelativePathNormalized $bundleRoot $directory.FullName
+        $parentRel = if ($directory.Parent.FullName -eq $bundleRoot)
         {
             ''
         }
         else
         {
-            Get-RelativePathNormalized $ServerBundleDir $directory.Parent.FullName
+            Get-RelativePathNormalized $bundleRoot $directory.Parent.FullName
         }
 
         $dirEntries[$rel] = [pscustomobject]@{
@@ -610,13 +614,13 @@ function New-WixSourceFile
     foreach ($file in $files)
     {
         $parent = Split-Path -Parent $file.FullName
-        $rel = if ($parent -eq $ServerBundleDir)
+        $rel = if ($parent -eq $bundleRoot)
         {
             ''
         }
         else
         {
-            Get-RelativePathNormalized $ServerBundleDir $parent
+            Get-RelativePathNormalized $bundleRoot $parent
         }
 
         if (-not $filesByDirectory.ContainsKey($rel))
@@ -632,8 +636,9 @@ function New-WixSourceFile
     $componentIndex = 0
 
     $lines.Add('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
-    $lines.Add("  <Package Name=""SonnetDB Server"" Manufacturer=""maikebing"" Version=""$Version"" UpgradeCode=""{7B5FA3D0-9660-4D0B-BB8B-1F293BF4F4A4}"" Language=""1033"" Scope=""perMachine"">")
+    $lines.Add("  <Package Name=""SonnetDB Server"" Manufacturer=""maikebing"" Version=""$msiVersion"" UpgradeCode=""{7B5FA3D0-9660-4D0B-BB8B-1F293BF4F4A4}"" Language=""1033"" Scope=""perMachine"">")
     $lines.Add('    <MajorUpgrade DowngradeErrorMessage="A newer version of SonnetDB Server is already installed." />')
+    $lines.Add('    <Property Id="DATAROOT" Value="C:\ProgramData\SonnetDB\data" Secure="yes" />')
     $lines.Add('    <MediaTemplate EmbedCab="yes" />')
     $lines.Add('    <StandardDirectory Id="ProgramFiles64Folder">')
     $lines.Add('      <Directory Id="INSTALLFOLDER" Name="SonnetDB Server">')
@@ -718,6 +723,13 @@ function Add-WixFileComponents
         $ComponentRefs.Add("      <ComponentRef Id=""$componentId"" />")
         $Lines.Add("$indent<Component Id=""$componentId"" Guid=""*"">")
         $Lines.Add("$indent  <File Id=""$fileId"" Source=""$(Escape-Xml $file.FullName)"" KeyPath=""yes"" />")
+        if ([string]::IsNullOrEmpty($DirectoryRel) -and $file.Name -eq 'SonnetDB.exe')
+        {
+            $Lines.Add("$indent  <Environment Id=""SonnetDBDataRootEnvironment"" Name=""SONNETDB_SonnetDBServer__DataRoot"" Value=""[DATAROOT]"" Action=""set"" Part=""all"" System=""yes"" Permanent=""no"" />")
+            $Lines.Add("$indent  <Environment Id=""SonnetDBCliPathEnvironment"" Name=""PATH"" Value=""[INSTALLFOLDER]"" Action=""set"" Part=""last"" System=""yes"" Permanent=""no"" />")
+            $Lines.Add("$indent  <ServiceInstall Id=""SonnetDBServiceInstall"" Type=""ownProcess"" Vital=""yes"" Name=""SonnetDB"" DisplayName=""SonnetDB Server"" Description=""SonnetDB embedded time-series database server."" Start=""auto"" Account=""LocalSystem"" ErrorControl=""normal"" Arguments=""--SonnetDBServer:DataRoot &quot;[DATAROOT]&quot;"" />")
+            $Lines.Add("$indent  <ServiceControl Id=""SonnetDBServiceControl"" Name=""SonnetDB"" Start=""install"" Stop=""both"" Remove=""uninstall"" Wait=""yes"" />")
+        }
         $Lines.Add("$indent</Component>")
     }
 }
@@ -861,6 +873,155 @@ function ConvertTo-YamlLiteral
     return $Value.Replace("'", "''")
 }
 
+function ConvertTo-MsiVersion
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageVersion
+    )
+
+    $coreVersion = $PackageVersion.Split('+')[0].Split('-')[0]
+    $parts = $coreVersion.Split('.')
+    if ($parts.Length -lt 1 -or $parts.Length -gt 4)
+    {
+        throw "Version '$PackageVersion' cannot be converted to a Windows Installer product version."
+    }
+
+    $major = ConvertTo-MsiVersionPart $parts 0 255 $PackageVersion
+    $minor = ConvertTo-MsiVersionPart $parts 1 255 $PackageVersion
+    $build = ConvertTo-MsiVersionPart $parts 2 65535 $PackageVersion
+
+    return "$major.$minor.$build"
+}
+
+function ConvertTo-MsiVersionPart
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Parts,
+        [Parameter(Mandatory = $true)]
+        [int]$Index,
+        [Parameter(Mandatory = $true)]
+        [int]$Maximum,
+        [Parameter(Mandatory = $true)]
+        [string]$OriginalVersion
+    )
+
+    if ($Index -ge $Parts.Length)
+    {
+        return 0
+    }
+
+    $value = 0
+    if (-not [int]::TryParse($Parts[$Index], [ref]$value) -or $value -lt 0 -or $value -gt $Maximum)
+    {
+        throw "Version '$OriginalVersion' cannot be converted to a Windows Installer product version."
+    }
+
+    return $value
+}
+
+function Copy-FinalReleaseArtifacts
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    Write-Section 'Collecting final release artifacts'
+    Reset-Directory $Destination
+
+    $sourceRoots = @(
+        (Join-Path $OutputRoot 'nuget'),
+        (Join-Path $OutputRoot 'bundles'),
+        (Join-Path $OutputRoot 'installers')
+    )
+
+    $filesByName = [ordered]@{}
+    foreach ($sourceRoot in $sourceRoots)
+    {
+        if (-not (Test-Path $sourceRoot))
+        {
+            continue
+        }
+
+        Get-ChildItem -LiteralPath $sourceRoot -Recurse -File |
+            Where-Object {
+                $_.Name.EndsWith('.nupkg', [StringComparison]::OrdinalIgnoreCase) -or
+                $_.Name.EndsWith('.zip', [StringComparison]::OrdinalIgnoreCase) -or
+                $_.Name.EndsWith('.tar.gz', [StringComparison]::OrdinalIgnoreCase) -or
+                $_.Name.EndsWith('.msi', [StringComparison]::OrdinalIgnoreCase) -or
+                $_.Name.EndsWith('.deb', [StringComparison]::OrdinalIgnoreCase) -or
+                $_.Name.EndsWith('.rpm', [StringComparison]::OrdinalIgnoreCase) -or
+                $_.Name.EndsWith('.sha256', [StringComparison]::OrdinalIgnoreCase)
+            } |
+            ForEach-Object {
+                $filesByName[$_.Name] = $_.FullName
+            }
+    }
+
+    if ($filesByName.Count -eq 0)
+    {
+        throw "No release artifacts were found under '$OutputRoot'."
+    }
+
+    foreach ($entry in $filesByName.GetEnumerator())
+    {
+        Copy-Item -LiteralPath $entry.Value -Destination (Join-Path $Destination $entry.Key) -Force
+    }
+}
+
+function Remove-ReleaseIntermediateDirectories
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FinalDirectory
+    )
+
+    Write-Section 'Cleaning release intermediate directories'
+
+    $outputRootResolved = (Resolve-Path -LiteralPath $OutputRoot).Path
+    $finalResolved = (Resolve-Path -LiteralPath $FinalDirectory).Path
+    $intermediateNames = @('nuget', 'bundles', 'installers', 'publish', 'staging')
+
+    foreach ($name in $intermediateNames)
+    {
+        $path = Join-Path $OutputRoot $name
+        if (-not (Test-Path $path))
+        {
+            continue
+        }
+
+        $resolved = (Resolve-Path -LiteralPath $path).Path
+        if ([string]::Equals($resolved, $finalResolved, [StringComparison]::OrdinalIgnoreCase))
+        {
+            continue
+        }
+
+        Assert-PathIsWithin -BasePath $outputRootResolved -TargetPath $resolved
+        Remove-Item -LiteralPath $resolved -Recurse -Force
+    }
+}
+
+function Assert-PathIsWithin
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BasePath,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath
+    )
+
+    $baseFull = [System.IO.Path]::GetFullPath($BasePath).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $targetFull = [System.IO.Path]::GetFullPath($TargetPath).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $prefix = $baseFull + [System.IO.Path]::DirectorySeparatorChar
+
+    if (-not $targetFull.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase))
+    {
+        throw "Refusing to remove '$TargetPath' because it is outside '$BasePath'."
+    }
+}
+
 function Get-CurrentRid
 {
     if ($IsWindows) { return 'win-x64' }
@@ -936,6 +1097,10 @@ function Assert-LastExitCode
 }
 
 Ensure-Directory $OutputRoot
+if ($CleanIntermediate -and [string]::IsNullOrWhiteSpace($FinalOutputDir))
+{
+    throw 'CleanIntermediate requires FinalOutputDir so release files are collected before cleanup.'
+}
 
 if ($ReleaseTasks -contains 'nuget')
 {
@@ -959,5 +1124,19 @@ if ($ReleaseTasks -contains 'bundles' -or $ReleaseTasks -contains 'installers')
     }
 }
 
+if (-not [string]::IsNullOrWhiteSpace($FinalOutputDir))
+{
+    Copy-FinalReleaseArtifacts -Destination $FinalOutputDir
+
+    if ($CleanIntermediate)
+    {
+        Remove-ReleaseIntermediateDirectories -FinalDirectory $FinalOutputDir
+    }
+}
+
 Write-Host ''
 Write-Host "Release outputs are available under: $OutputRoot"
+if (-not [string]::IsNullOrWhiteSpace($FinalOutputDir))
+{
+    Write-Host "Final release artifacts are available under: $FinalOutputDir"
+}

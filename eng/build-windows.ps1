@@ -3,8 +3,10 @@ param(
     [ValidateSet('Release', 'Debug')]
     [string]$Configuration = 'Release',
     [string]$OutputRoot,
+    [string]$FinalOutputDir,
     [switch]$RunTests,
     [switch]$SkipAdminUi,
+    [switch]$SkipInstaller,
     [switch]$Installer
 )
 
@@ -15,6 +17,10 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if ([string]::IsNullOrWhiteSpace($OutputRoot))
 {
     $OutputRoot = Join-Path $RepoRoot 'artifacts\windows'
+}
+if ([string]::IsNullOrWhiteSpace($FinalOutputDir))
+{
+    $FinalOutputDir = Join-Path $OutputRoot 'final'
 }
 
 $env:DOTNET_NOLOGO = 'true'
@@ -98,8 +104,9 @@ if ($RunTests)
     Assert-LastExitCode 'dotnet test'
 }
 
+# -Installer is kept for compatibility; Windows installers are produced by default.
 $releaseTasks = @('nuget', 'bundles')
-if ($Installer)
+if (-not $SkipInstaller)
 {
     $releaseTasks += 'installers'
 }
@@ -111,6 +118,8 @@ $releaseArgs = @{
     Rid = 'win-x64'
     Configuration = $Configuration
     OutputRoot = $OutputRoot
+    FinalOutputDir = $FinalOutputDir
+    CleanIntermediate = $true
 }
 
 if (-not $SkipAdminUi)
@@ -124,9 +133,4 @@ Assert-LastExitCode 'eng/release.ps1'
 
 Write-Host ''
 Write-Host "Windows release outputs are available under: $OutputRoot"
-Write-Host "NuGet packages: $(Join-Path $OutputRoot 'nuget')"
-Write-Host "Windows bundle: $(Join-Path $OutputRoot 'bundles\win-x64')"
-if ($Installer)
-{
-    Write-Host "Windows installer: $(Join-Path $OutputRoot 'installers\win-x64')"
-}
+Write-Host "Final artifacts: $FinalOutputDir"

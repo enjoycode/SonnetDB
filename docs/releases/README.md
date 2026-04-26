@@ -38,7 +38,23 @@ http://127.0.0.1:5080
 .\eng\build-windows.ps1 -Version 1.0.0
 ```
 
-默认产物输出到 `artifacts/windows/`。如只验证 .NET 发布链路、不重建管理后台前端，可追加 `-SkipAdminUi`；如需 MSI，可追加 `-Installer`（需本机已安装 WiX CLI）。
+默认最终产物会汇总到 `artifacts/windows/final/`，并同时生成 Windows MSI（需本机已安装 WiX CLI）。`publish/`、`staging/`、`nuget/`、`bundles/`、`installers/` 等中间目录会在汇总后自动清理。如只验证 .NET 发布链路、不重建管理后台前端，可追加 `-SkipAdminUi`；如暂不生成 MSI，可追加 `-SkipInstaller`。
+
+`final/` 目录中只保留可发布文件，例如：
+
+- `SonnetDB.Core.<version>.nupkg`
+- `SonnetDB.<version>.nupkg`
+- `SonnetDB.Cli.<version>.nupkg`
+- `sndb-sdk-<version>-win-x64.zip`
+- `sonnetdb-full-<version>-win-x64.zip`
+- `sonnetdb-<version>-win-x64.msi`
+- 对应 `.sha256`
+
+MSI 默认安装并启动 `SonnetDB` Windows 服务，数据目录默认为 `C:\ProgramData\SonnetDB\data`，并把安装目录加入系统 `PATH`，让 `sndb` 可在任意目录使用。安装时可覆盖：
+
+```powershell
+msiexec /i sonnetdb-1.0.0-win-x64.msi DATAROOT="D:\sonnetdb-data"
+```
 
 ## 推荐阅读顺序
 

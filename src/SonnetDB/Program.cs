@@ -48,6 +48,10 @@ public static class Program
 
         // 配置：appsettings + 环境变量 SONNETDB_*
         builder.Configuration.AddEnvironmentVariables(prefix: "SONNETDB_");
+        if (OperatingSystem.IsWindows())
+        {
+            builder.Services.AddWindowsService(options => options.ServiceName = "SonnetDB");
+        }
 
         var serverOptions = overrideOptions ?? LoadServerOptions(builder.Configuration);
 
