@@ -28,7 +28,7 @@ internal sealed class ServerBatchRequest
 
 /// <summary>
 /// SonnetDB 模式写入 1,000,000 条（HTTP Batch API）性能基准。
-/// 需要 sonnetdb 容器运行在 http://localhost:5080（见 docker/docker-compose.yml）。
+/// 默认连接 http://localhost:5080，可通过 SONNETDB_BENCH_URL 覆盖（见 docker/docker-compose.yml）。
 /// </summary>
 [Config(typeof(ServerInsertConfig))]
 [MemoryDiagnoser]
@@ -36,7 +36,8 @@ internal sealed class ServerBatchRequest
 public class ServerInsertBenchmark
 {
     private const int _dataPointCount = 1_000_000;
-    private const string _serverUrl = "http://localhost:5080";
+    private static readonly string _serverUrl =
+        Environment.GetEnvironmentVariable("SONNETDB_BENCH_URL") ?? "http://localhost:5080";
     // PR #47：允许环境变量 SONNETDB_BENCH_TOKEN 覆盖，便于本地手工启动的容器使用其他 token。
     private static readonly string _adminToken =
         Environment.GetEnvironmentVariable("SONNETDB_BENCH_TOKEN") ?? "bench-admin-token";
@@ -273,14 +274,15 @@ public class ServerInsertBenchmark
 
 /// <summary>
 /// SonnetDB 模式范围查询性能基准：预先写入 100 万条，查询最后 10%。
-/// 需要 sonnetdb 容器运行在 http://localhost:5080。
+/// 默认连接 http://localhost:5080，可通过 SONNETDB_BENCH_URL 覆盖。
 /// </summary>
 [MemoryDiagnoser]
 [BenchmarkCategory("Server")]
 public class ServerQueryBenchmark
 {
     private const int _dataPointCount = 1_000_000;
-    private const string _serverUrl = "http://localhost:5080";
+    private static readonly string _serverUrl =
+        Environment.GetEnvironmentVariable("SONNETDB_BENCH_URL") ?? "http://localhost:5080";
     private static readonly string _adminToken =
         Environment.GetEnvironmentVariable("SONNETDB_BENCH_TOKEN") ?? "bench-admin-token";
     private const string _dbName = "bench_server_query";
@@ -433,14 +435,15 @@ public class ServerQueryBenchmark
 
 /// <summary>
 /// SonnetDB 模式聚合查询性能基准：预先写入 100 万条，按 1 分钟桶聚合。
-/// 需要 sonnetdb 容器运行在 http://localhost:5080。
+/// 默认连接 http://localhost:5080，可通过 SONNETDB_BENCH_URL 覆盖。
 /// </summary>
 [MemoryDiagnoser]
 [BenchmarkCategory("Server")]
 public class ServerAggregateBenchmark
 {
     private const int _dataPointCount = 1_000_000;
-    private const string _serverUrl = "http://localhost:5080";
+    private static readonly string _serverUrl =
+        Environment.GetEnvironmentVariable("SONNETDB_BENCH_URL") ?? "http://localhost:5080";
     private static readonly string _adminToken =
         Environment.GetEnvironmentVariable("SONNETDB_BENCH_TOKEN") ?? "bench-admin-token";
     private const string _dbName = "bench_server_aggregate";

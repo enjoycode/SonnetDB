@@ -39,6 +39,9 @@ dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --fi
 
 # 仅运行向量召回基准
 dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --filter *Vector*
+
+# 仅运行 PID 控制函数基准
+dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --filter *Pid*
 ```
 
 ### 2. 单独管理 Docker 环境
@@ -83,6 +86,9 @@ dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *Compactio
 
 # 仅运行向量召回基准
 dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *Vector*
+
+# 仅运行 PID 控制函数基准
+dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *Pid*
 ```
 
 ### 4. 停止外部数据库
@@ -128,6 +134,13 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 预先写入多个 `.SDBSEG` 段，然后执行一次 `4 -> 1` 的段合并，
 用于度量 SonnetDB 引擎在真实段文件上的 Compaction 耗时与内存分配。
 
+### PidBenchmark（PID 控制函数）
+
+- 默认规模：**50k** 反应器阶跃响应点。
+- 数据模型：`reactor(device TAG, temperature FIELD FLOAT)`。
+- 覆盖函数：`pid_series(...)`、`pid(...) GROUP BY time(1m)`、`pid_estimate(..., 'zn', ...)`、`pid_estimate(..., 'imc', ...)`。
+- 当前 PID benchmark 聚焦 SonnetDB 内置控制函数；SQLite、InfluxDB、TDengine 等对照库没有等价内置 PID 语义，后续如需横向比较可追加客户端侧 UDF / SQL 表达式方案。
+
 ### GeoQueryBenchmark（地理空间 / 轨迹）
 
 - 默认规模：**100k** 轨迹点。
@@ -171,6 +184,21 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 
 ## 外部数据库连接配置
 
+### SonnetDB Server
+
+| 参数 | 值 |
+|------|----|
+| URL | `http://localhost:${SONNETDB_BENCH_PORT:-5080}` |
+| Token | `bench-admin-token` |
+
+如本机 `5080` 已被开发服务器占用，可使用：
+
+```powershell
+$env:SONNETDB_BENCH_PORT="5081"
+$env:SONNETDB_BENCH_URL="http://localhost:5081"
+dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --filter *Server*
+```
+
 ### InfluxDB
 
 | 参数 | 值 |
@@ -188,7 +216,7 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 | Username | `root` |
 | Password | `taosdata` |
 
-如需修改连接参数，请编辑各 `*Benchmark.cs` 文件顶部的常量。
+如需修改外部数据库连接参数，请编辑各 `*Benchmark.cs` 文件顶部的常量。
 
 ---
 

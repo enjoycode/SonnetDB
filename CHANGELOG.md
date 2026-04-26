@@ -6,6 +6,8 @@
 ## [Unreleased]
 
 ### Added
+- **Benchmark 服务端端口可配置**：`tests/SonnetDB.Benchmarks/docker/docker-compose.yml` 新增 `SONNETDB_BENCH_PORT` 宿主机端口覆盖，`ServerBenchmark` 新增 `SONNETDB_BENCH_URL` 覆盖，并修复 SonnetDB / TDengine compose 健康检查，方便在本机已有 SonnetDB 开发容器占用 `5080` 时隔离运行基准。
+- **PID 控制函数基准**：新增 `PidBenchmark`，覆盖 50k 阶跃响应数据上的 `pid_series`、`pid(...) GROUP BY time(1m)`、`pid_estimate(..., 'zn', ...)` 与 `pid_estimate(..., 'imc', ...)`，用于回归工业控制函数端到端 SQL 性能。
 - **PR #70 — GEOPOINT 数据类型 + 编解码**：新增 `FieldType.GeoPoint = 6`、`GeoPoint` / `FieldValue.FromGeoPoint`，Segment 格式升级到 v4 并支持 `BlockEncoding.GeoPointRaw`（lat/lon 各 8 字节 little-endian），保留 v3 只读兼容；WAL、Segment、SQL `GEOPOINT` 列声明、`POINT(lat, lon)` 字面量、ADO.NET `GeoPoint` 参数化与 `lat(field)` / `lon(field)` 标量提取函数已接通。
 - **CopilotDock 页面感知快捷能力**：全局 Copilot 仍保持伴随式聊天入口，但主界面收起模型选择与知识库状态到「选项」弹层；根据当前页面自动展示快捷动作，SQL Console 页面提供「生成 SQL / 修复 SQL / 解释 SQL / 优化 SQL」，其它页面提供结构梳理、事件排查、权限检查、配置检查等上下文能力。
 - **PR #71 — 地理空间标量函数（Tier 1）**：新增 `geo_distance` / `geo_bearing` / `geo_within` / `geo_bbox` / `geo_speed`，基于 Haversine 计算距离、方位角、圆形围栏、矩形围栏与速度，并注册 `ST_Distance` / `ST_Within` / `ST_DWithin` PostGIS 兼容别名。

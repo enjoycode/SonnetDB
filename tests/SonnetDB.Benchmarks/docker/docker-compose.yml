@@ -5,7 +5,7 @@
 #   docker compose down -v          # 停止并删除容器与卷
 #
 # SonnetDB 连接信息：
-#   URL:    http://localhost:5080
+#   URL:    http://localhost:${SONNETDB_BENCH_PORT:-5080}
 #   Token:  bench-admin-token（角色：admin）
 #
 # InfluxDB 连接信息：
@@ -27,7 +27,7 @@ services:
     image: iotsharp/sonnetdb:bench
     container_name: sndb-bench-server
     ports:
-      - "5080:5080"
+      - "${SONNETDB_BENCH_PORT:-5080}:5080"
     environment:
       - SONNETDB_SonnetDBServer__DataRoot=/data
       - SONNETDB_SonnetDBServer__AutoLoadExistingDatabases=true
@@ -36,7 +36,7 @@ services:
     volumes:
       - sonnetdb-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:5080/healthz || exit 1"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/5080' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -73,7 +73,7 @@ services:
     volumes:
       - tdengine-data:/var/lib/taos
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:6041/rest/sql", "-d", "SELECT SERVER_VERSION()"]
+      test: ["CMD-SHELL", "curl -sf -u root:taosdata http://localhost:6041/rest/sql -d 'SELECT SERVER_VERSION()' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
