@@ -1,12 +1,13 @@
 ﻿# SonnetDB.Benchmarks — 时序数据库性能对比基准
 
-本项目使用 [BenchmarkDotNet](https://benchmarkdotnet.org/) 在相同环境下对比以下四种数据库的
+本项目使用 [BenchmarkDotNet](https://benchmarkdotnet.org/) 在相同环境下对比以下数据库的
 **100 万条数据写入、时间范围查询、1 分钟桶聚合与 Compaction** 的性能：
 
 | 数据库 | 类型 | 说明 |
 |--------|------|------|
 | **SonnetDB** | 嵌入式时序数据库 | 真实引擎路径，覆盖 WAL、MemTable、Segment、查询、聚合与 Compaction |
 | **SQLite** | 嵌入式关系数据库 | 文件模式，WAL 日志，事务批量提交 |
+| **LiteDB** | 嵌入式文档数据库 | 单文件文档库，`InsertBulk`、`Ts` 索引范围查询、文档顺扫聚合 |
 | **InfluxDB 2.x** | 时序数据库 | Line Protocol 写入，Flux 查询 |
 | **TDengine 3.x** | 时序数据库 | REST API，超级表模型 |
 
@@ -114,6 +115,7 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 |------|------|
 | `SonnetDB_Insert_1M` | 真实 `Tsdb.WriteMany` + `FlushNow` 路径（MemTable + WAL + Segment） |
 | `SQLite_Insert_1M` | 文件数据库 + WAL + 单事务批量 INSERT |
+| `LiteDB_Insert_1M` | LiteDB 单文件文档库 + `InsertBulk` 批量写入 |
 | `InfluxDB_Insert_1M` | WriteApiAsync，10,000 条/批 Line Protocol |
 | `TDengine_Insert_1M` | REST API，1,000 条/批 SQL INSERT（显式 STable + 子表） |
 | `TDengine_InsertSchemaless_1M` | InfluxDB-compat schemaless 端点 `POST /influxdb/v1/write?precision=ms`，100,000 行/批 LP（PR #49 引入） |
@@ -124,10 +126,14 @@ dotnet run --project eng/benchmarks/start-benchmark-env/start-benchmark-env.cspr
 
 查询最后 10% 的时间段（约 100,000 条）：`ts >= 2024-01-11T09:46:40Z && ts < 2024-01-12T13:46:40Z`
 
+LiteDB 使用 `Ts` 索引做范围查询，并物化约 100k 个文档用于和其他嵌入式读取路径对齐。
+
 ### AggregateBenchmark（聚合）
 
 对全量 100 万条按 **1 分钟桶** 计算 AVG / MIN / MAX / COUNT，
 结果约含 **16,667 个桶**。
+
+LiteDB 没有 SonnetDB/SQL/TSDB 等价的时间桶聚合算子，本基准采用文档顺序扫描后在进程内分桶，结果表中会标注该语义差异。
 
 ### CompactionBenchmark（压缩）
 
@@ -283,6 +289,16 @@ dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --fi
 > 当前已回填 `10k / 100k` 两档的 BenchmarkDotNet 实测耗时（Windows 11 / Intel Core Ultra 9 185H / .NET 10.0.7，`IterationCount=3`、`WarmupCount=1`）。`1M` 保留为显式长测入口，不作为日常回归必跑项；`sqlite-vec` / `pgvector` 同机粗略对比在本 README 中保留结果区，后续如具备环境可单独补数。
 >
 > 说明：`Hnsw_RecallAt10` 这一行的 `Mean` 是“计算平均 Recall@10 这段逻辑本身的耗时”，而不是 Recall 数值；BenchmarkDotNet 摘要不会直接展示该方法的返回值，因此 `Recall@10` 列本轮暂保留 `TBD`，后续通过单独 probe 补齐。
+
+### LiteDB 补跑结果
+
+> 以下数据为 2026-04-26 在 Windows 11 / Intel Core Ultra 9 185H / .NET 10.0.7 上补跑 `--filter *LiteDB*` 的结果。外部 TDengine 容器未启动，因此日志中出现 TDengine skip 信息，但本段只使用 LiteDB 三项 BenchmarkDotNet 导出值。
+
+| Method | Mean | Allocated | 说明 |
+|--------|-----:|----------:|------|
+| `LiteDB_Insert_1M` | 10.96 s | 14.95 GB | `InsertBulk` 写入 100 万文档 |
+| `LiteDB_Query_Range` | 239.0 ms | 208.73 MB | `Ts` 索引范围查询，返回约 100k 文档 |
+| `LiteDB_Aggregate_1Min` | 1.550 s | 1.99 GB | 文档顺扫 + 进程内 1 分钟桶分组 |
 
 ### PR #49 关键结论
 

@@ -3,6 +3,7 @@ using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using InfluxDB.Client;
 using InfluxDB.Client.Writes;
+using LiteQuery = LiteDB.Query;
 using Microsoft.Data.Sqlite;
 using SonnetDB.Benchmarks.Helpers;
 using SonnetDB.Engine;
@@ -15,7 +16,7 @@ using SonnetDB.Query;
 namespace SonnetDB.Benchmarks.Benchmarks;
 
 /// <summary>
-/// 时间范围查询性能对比：SonnetDB、SQLite、InfluxDB、TDengine。
+/// 时间范围查询性能对比：SonnetDB、SQLite、LiteDB、InfluxDB、TDengine。
 /// 预先写入 1,000,000 条数据，然后反复查询最后 10%（约 100,000 条）的时间范围。
 /// </summary>
 [MemoryDiagnoser]
@@ -40,6 +41,9 @@ public class QueryBenchmark
 
     // ── SQLite ─────────────────────────────────────────────────────────────
     private string _sqliteDbPath = string.Empty;
+
+    // ── LiteDB ─────────────────────────────────────────────────────────────
+    private string _liteDbPath = string.Empty;
 
     // ── InfluxDB ───────────────────────────────────────────────────────────
     private InfluxDBClient? _influxClient;
@@ -101,6 +105,14 @@ public class QueryBenchmark
                             "(ts INTEGER NOT NULL, host TEXT NOT NULL, value REAL NOT NULL)");
         SqliteExecute(conn, "CREATE INDEX IF NOT EXISTS idx_ts ON sensor_data (ts)");
         SqliteBulkInsert(conn, _dataPoints);
+
+        // ── LiteDB ─────────────────────────────────────────────────────
+        _liteDbPath = LiteDbBenchmark.CreateTempPath("query");
+        using (var liteDb = LiteDbBenchmark.Open(_liteDbPath))
+            LiteDbBenchmark.InsertBulk(
+                liteDb,
+                LiteDbBenchmark.CreatePoints(_dataPoints),
+                ensureQueryIndexes: true);
 
         // ── InfluxDB ────────────────────────────────────────────────────
         try
@@ -180,6 +192,18 @@ public class QueryBenchmark
         return result;
     }
 
+    /// <summary>LiteDB 时间范围查询（Ts 索引，约 100,000 条）。</summary>
+    [Benchmark(Description = "LiteDB 范围查询")]
+    public int LiteDB_Query_Range()
+    {
+        using var db = LiteDbBenchmark.Open(_liteDbPath);
+        var collection = db.GetCollection<LiteDbDataPoint>(LiteDbBenchmark.CollectionName);
+        var result = collection.Find(
+            LiteQuery.Between(nameof(LiteDbDataPoint.Ts), _queryFromMs, _queryToMs - 1))
+            .ToList();
+        return result.Count;
+    }
+
     /// <summary>InfluxDB 时间范围查询（Flux，约 100,000 条）。</summary>
     [Benchmark(Description = "InfluxDB 范围查询")]
     public async Task<int> InfluxDB_Query_Range()
@@ -235,6 +259,7 @@ public class QueryBenchmark
         SqliteConnection.ClearAllPools();
         if (File.Exists(_sqliteDbPath))
             File.Delete(_sqliteDbPath);
+        LiteDbBenchmark.DeleteDatabaseFiles(_liteDbPath);
 
         if (_influxAvailable)
         {

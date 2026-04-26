@@ -14,7 +14,7 @@ SonnetDB 的写入基准分为两组：进程内嵌入式基准与服务端 HTTP
 | --- | --- | --- |
 | 嵌入式 | SonnetDB Core | 已实现，`InsertBenchmark.SonnetDB_Insert_1M` |
 | 嵌入式 | SQLite | 已实现，`InsertBenchmark.SQLite_Insert_1M` |
-| 嵌入式 | LiteDB | 待补，需新增 LiteDB benchmark 依赖与文档化 schema |
+| 嵌入式 | LiteDB | 已实现，`InsertBenchmark.LiteDB_Insert_1M` |
 | 服务端 | SonnetDB Server | 已实现，`ServerInsertBenchmark` |
 | 服务端 | InfluxDB 2.7 | 已实现，Line Protocol 写入 |
 | 服务端 | TDengine 3.3.4.3 | 已实现，REST INSERT 与 schemaless LP |
@@ -55,6 +55,7 @@ dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *ServerIns
 | --- | ---: | ---: | ---: | --- |
 | SonnetDB Core 写入 1M | 704.8 ms | 693.29 MB | 141.9 万点/秒 | 嵌入式基线 |
 | SQLite 写入 1M | 1,183.2 ms | 465.40 MB | 84.5 万点/秒 | 嵌入式关系库对照 |
+| LiteDB 写入 1M | 10.96 s | 14.95 GB | 9.1 万点/秒 | 嵌入式文档库，`InsertBulk` |
 | InfluxDB 写入 1M | 7,392.0 ms | 1,458.95 MB | 13.5 万点/秒 | 服务端 TSDB 对照 |
 | TDengine REST INSERT 写入 1M | 16,421.5 ms | 169.33 MB | 6.1 万点/秒 | SQL REST 路径 |
 | TDengine schemaless LP 写入 1M | 2,097.0 ms | 61.35 MB | 47.7 万点/秒 | 快速写入路径 |
@@ -65,4 +66,4 @@ dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *ServerIns
 
 ### 结论口径
 
-发布时只使用本轮 CSV/Markdown 报告中的实测值。LiteDB、IoTDB、TimescaleDB 尚未纳入可执行基准前，不在结论里给出性能断言。
+发布时只使用本轮 CSV/Markdown 报告中的实测值。IoTDB、TimescaleDB 尚未纳入可执行基准前，不在结论里给出性能断言。

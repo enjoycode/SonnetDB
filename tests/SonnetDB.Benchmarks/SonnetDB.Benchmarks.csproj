@@ -11,6 +11,7 @@
     <PackageReference Include="BenchmarkDotNet" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="InfluxDB.Client" />
+    <PackageReference Include="LiteDB" />
   </ItemGroup>
 
   <ItemGroup>

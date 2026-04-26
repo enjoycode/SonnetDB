@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | 嵌入式 | SonnetDB Core | 已实现，`AggregateBenchmark.SonnetDB_Aggregate_1Min` |
 | 嵌入式 | SQLite | 已实现，整数除法分桶 + SQL 聚合 |
-| 嵌入式 | LiteDB | 待补，需明确客户端分桶还是聚合管线 |
+| 嵌入式 | LiteDB | 已实现，`AggregateBenchmark.LiteDB_Aggregate_1Min`，文档顺扫 + 进程内分桶 |
 | 服务端 | SonnetDB Server | 已实现，`ServerAggregateBenchmark` |
 | 服务端 | InfluxDB 2.7 | 已实现，Flux `aggregateWindow` |
 | 服务端 | TDengine 3.3.4.3 | 已实现，`INTERVAL(1m)` |
@@ -44,6 +44,7 @@ dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *ServerAgg
 | --- | ---: | ---: | ---: | --- |
 | SonnetDB Core 1m 聚合 | 12.18 ms | 3.84 MB | ~16,667 | 嵌入式基线 |
 | SQLite 1m 聚合 | 387.64 ms | 2.50 MB | ~16,667 | SQL 分桶对照 |
+| LiteDB 1m 聚合 | 1.550 s | 1.99 GB | ~16,667 | 文档顺扫 + 进程内 AVG/MIN/MAX/COUNT |
 | InfluxDB 1m 聚合 | 122.05 ms | 47.25 MB | ~16,667 | Flux 聚合 |
 | TDengine 1m 聚合 | 93.16 ms | 4.10 MB | ~16,667 | TSDB 时间窗口 |
 | SonnetDB Server 1m 聚合 | 205.6 ms | 2.76 MB | ~16,667 | HTTP SQL |

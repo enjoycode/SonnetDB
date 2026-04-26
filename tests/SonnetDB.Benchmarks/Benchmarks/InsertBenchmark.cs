@@ -16,7 +16,7 @@ using SonnetDB.Model;
 namespace SonnetDB.Benchmarks.Benchmarks;
 
 /// <summary>
-/// 1,000,000 条数据批量写入性能对比：SonnetDB、SQLite、InfluxDB、TDengine。
+/// 1,000,000 条数据批量写入性能对比：SonnetDB、SQLite、LiteDB、InfluxDB、TDengine。
 /// 每次迭代均先清空数据，再执行完整的 100 万条写入操作。
 /// </summary>
 [Config(typeof(InsertConfig))]
@@ -44,6 +44,10 @@ public class InsertBenchmark
 
     // ── SQLite ─────────────────────────────────────────────────────────────
     private string _sqliteDbPath = string.Empty;
+
+    // ── LiteDB ─────────────────────────────────────────────────────────────
+    private string _liteDbPath = string.Empty;
+    private LiteDbDataPoint[] _liteDbPoints = [];
 
     // ── InfluxDB ───────────────────────────────────────────────────────────
     private InfluxDBClient? _influxClient;
@@ -77,6 +81,9 @@ public class InsertBenchmark
         using var conn = OpenSqlite(_sqliteDbPath);
         SqliteExecute(conn, "CREATE TABLE IF NOT EXISTS sensor_data " +
                             "(ts INTEGER NOT NULL, host TEXT NOT NULL, value REAL NOT NULL)");
+
+        // ── LiteDB：预构建文档数组，插入迭代时从空库批量写入 ─────────────
+        _liteDbPoints = LiteDbBenchmark.CreatePoints(_dataPoints);
 
         // ── InfluxDB ────────────────────────────────────────────────────
         try
@@ -144,6 +151,10 @@ public class InsertBenchmark
         // SQLite
         using var conn = OpenSqlite(_sqliteDbPath);
         SqliteExecute(conn, "DELETE FROM sensor_data");
+
+        // LiteDB
+        LiteDbBenchmark.DeleteDatabaseFiles(_liteDbPath);
+        _liteDbPath = LiteDbBenchmark.CreateTempPath("insert");
 
         // InfluxDB
         if (_influxAvailable)
@@ -227,6 +238,14 @@ public class InsertBenchmark
         tx.Commit();
     }
 
+    /// <summary>LiteDB 写入 100 万条（单文件文档数据库，InsertBulk 批量写入）。</summary>
+    [Benchmark(Description = "LiteDB 写入 100万条")]
+    public void LiteDB_Insert_1M()
+    {
+        using var db = LiteDbBenchmark.Open(_liteDbPath);
+        LiteDbBenchmark.InsertBulk(db, _liteDbPoints, ensureQueryIndexes: false);
+    }
+
     /// <summary>InfluxDB 写入 100 万条（Line Protocol，10k 批次）。</summary>
     [Benchmark(Description = "InfluxDB 写入 100万条")]
     public async Task InfluxDB_Insert_1M()
@@ -302,6 +321,8 @@ public class InsertBenchmark
         SqliteConnection.ClearAllPools();
         if (File.Exists(_sqliteDbPath))
             File.Delete(_sqliteDbPath);
+        // LiteDB
+        LiteDbBenchmark.DeleteDatabaseFiles(_liteDbPath);
         // InfluxDB：仅删除数据，保留 bucket，避免后续基准进程因 bucket 不存在而失败。
         if (_influxAvailable)
         {

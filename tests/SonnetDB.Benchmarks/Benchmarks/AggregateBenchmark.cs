@@ -14,7 +14,7 @@ using SonnetDB.Query;
 namespace SonnetDB.Benchmarks.Benchmarks;
 
 /// <summary>
-/// 聚合查询性能对比：SonnetDB、SQLite、InfluxDB、TDengine。
+/// 聚合查询性能对比：SonnetDB、SQLite、LiteDB、InfluxDB、TDengine。
 /// 预先写入 1,000,000 条数据，然后反复执行按 1 分钟桶的 AVG/MIN/MAX/COUNT 聚合。
 /// </summary>
 [MemoryDiagnoser]
@@ -37,6 +37,9 @@ public class AggregateBenchmark
 
     // ── SQLite ─────────────────────────────────────────────────────────────
     private string _sqliteDbPath = string.Empty;
+
+    // ── LiteDB ─────────────────────────────────────────────────────────────
+    private string _liteDbPath = string.Empty;
 
     // ── InfluxDB ───────────────────────────────────────────────────────────
     private InfluxDBClient? _influxClient;
@@ -102,6 +105,14 @@ public class AggregateBenchmark
             "(ts INTEGER NOT NULL, host TEXT NOT NULL, value REAL NOT NULL)");
         SqliteExecute(conn, "CREATE INDEX IF NOT EXISTS idx_ts ON sensor_data (ts)");
         SqliteBulkInsert(conn, _dataPoints);
+
+        // ── LiteDB ─────────────────────────────────────────────────────
+        _liteDbPath = LiteDbBenchmark.CreateTempPath("aggregate");
+        using (var liteDb = LiteDbBenchmark.Open(_liteDbPath))
+            LiteDbBenchmark.InsertBulk(
+                liteDb,
+                LiteDbBenchmark.CreatePoints(_dataPoints),
+                ensureQueryIndexes: true);
 
         // ── InfluxDB ────────────────────────────────────────────────────
         try
@@ -189,6 +200,16 @@ public class AggregateBenchmark
         return result;
     }
 
+    /// <summary>LiteDB 1 分钟桶聚合（Ts 索引顺序扫描 + 进程内分桶）。</summary>
+    [Benchmark(Description = "LiteDB 1分钟聚合")]
+    public int LiteDB_Aggregate_1Min()
+    {
+        using var db = LiteDbBenchmark.Open(_liteDbPath);
+        var collection = db.GetCollection<LiteDbDataPoint>(LiteDbBenchmark.CollectionName);
+        var result = LiteDbBenchmark.Aggregate1Min(collection.FindAll());
+        return result.Count;
+    }
+
     /// <summary>InfluxDB 1 分钟桶聚合（Flux aggregateWindow，全量 100 万条）。</summary>
     [Benchmark(Description = "InfluxDB 1分钟聚合")]
     public async Task<int> InfluxDB_Aggregate_1Min()
@@ -243,6 +264,7 @@ public class AggregateBenchmark
         SqliteConnection.ClearAllPools();
         if (File.Exists(_sqliteDbPath))
             File.Delete(_sqliteDbPath);
+        LiteDbBenchmark.DeleteDatabaseFiles(_liteDbPath);
 
         if (_influxAvailable)
         {

@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Added
+- **LiteDB 嵌入式基准**：`tests/SonnetDB.Benchmarks` 新增 LiteDB 5.0.21 对照，覆盖 100 万点 `InsertBulk` 写入、`Ts` 索引范围查询与 1 分钟桶文档顺扫聚合，并在 benchmark 文档与对比通稿中补充实测数据。
 - **Benchmark 服务端端口可配置**：`tests/SonnetDB.Benchmarks/docker/docker-compose.yml` 新增 `SONNETDB_BENCH_PORT` 宿主机端口覆盖，`ServerBenchmark` 新增 `SONNETDB_BENCH_URL` 覆盖，并修复 SonnetDB / TDengine compose 健康检查，方便在本机已有 SonnetDB 开发容器占用 `5080` 时隔离运行基准。
 - **PID 控制函数基准**：新增 `PidBenchmark`，覆盖 50k 阶跃响应数据上的 `pid_series`、`pid(...) GROUP BY time(1m)`、`pid_estimate(..., 'zn', ...)` 与 `pid_estimate(..., 'imc', ...)`，用于回归工业控制函数端到端 SQL 性能。
 - **PR #70 — GEOPOINT 数据类型 + 编解码**：新增 `FieldType.GeoPoint = 6`、`GeoPoint` / `FieldValue.FromGeoPoint`，Segment 格式升级到 v4 并支持 `BlockEncoding.GeoPointRaw`（lat/lon 各 8 字节 little-endian），保留 v3 只读兼容；WAL、Segment、SQL `GEOPOINT` 列声明、`POINT(lat, lon)` 字面量、ADO.NET `GeoPoint` 参数化与 `lat(field)` / `lon(field)` 标量提取函数已接通。
