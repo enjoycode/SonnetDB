@@ -16,7 +16,7 @@ using SonnetDB.Model;
 namespace SonnetDB.Benchmarks.Benchmarks;
 
 /// <summary>
-/// 1,000,000 条数据批量写入性能对比：SonnetDB、SQLite、LiteDB、InfluxDB、TDengine。
+/// 1,000,000 条数据批量写入性能对比：SonnetDB、SQLite、LiteDB、InfluxDB、TDengine、IoTDB、TimescaleDB。
 /// 每次迭代均先清空数据，再执行完整的 100 万条写入操作。
 /// </summary>
 [Config(typeof(InsertConfig))]
@@ -38,6 +38,11 @@ public class InsertBenchmark
     private const string _tDengineSchemalessDb = "bench_insert_schemaless";
     // 每个 HTTP POST 的行数，避免 taosadapter 默认 16MB body 上限。
     private const int _tDengineSchemalessLpBatch = 100_000;
+    private const string _iotdbUrl = "http://localhost:18080";
+    private const string _iotdbDatabase = "root.bench_insert";
+    private const string _iotdbDevice = _iotdbDatabase + ".server001";
+    private const string _timescaleTable = "sensor_data_insert";
+    private static readonly string _timescaleConnectionString = TimescaleDbBenchmark.DefaultConnectionString;
 
     // ── 共享数据 ──────────────────────────────────────────────────────────
     private BenchmarkDataPoint[] _dataPoints = [];
@@ -58,6 +63,13 @@ public class InsertBenchmark
     private bool _tdengineAvailable;
     // PR #49：TDengine schemaless（InfluxDB 兼容端点）预生成的 LP payload 分批。
     private string[] _tdengineLpChunks = [];
+
+    // ── IoTDB ─────────────────────────────────────────────────────────────
+    private IoTDBRestClient? _iotdbClient;
+    private bool _iotdbAvailable;
+
+    // ── TimescaleDB ───────────────────────────────────────────────────────
+    private bool _timescaleAvailable;
 
     // ── SonnetDB ─────────────────────────────────────────────────────────────
     private string _sonnetDbRootDir = string.Empty;
@@ -127,6 +139,29 @@ public class InsertBenchmark
                 "[SKIP] TDengine 不可用。请先执行: docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d tdengine");
         }
 
+        // ── IoTDB ───────────────────────────────────────────────────────
+        try
+        {
+            _iotdbClient = new IoTDBRestClient(_iotdbUrl);
+            await _iotdbClient.QueryAsync("SHOW VERSION").ConfigureAwait(false);
+            _iotdbAvailable = true;
+        }
+        catch
+        {
+            _iotdbAvailable = false;
+            Console.Error.WriteLine(
+                "[SKIP] IoTDB 不可用。请先执行: docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d iotdb");
+        }
+
+        // ── TimescaleDB ─────────────────────────────────────────────────
+        _timescaleAvailable = await TimescaleDbBenchmark.IsAvailableAsync(_timescaleConnectionString)
+            .ConfigureAwait(false);
+        if (!_timescaleAvailable)
+        {
+            Console.Error.WriteLine(
+                "[SKIP] TimescaleDB 不可用。请先执行: docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d timescaledb");
+        }
+
         // ── SonnetDB：预构建 Point 数组（共享 tags，避免每次迭代重新分配） ────
         _sonnetDbPoints = new Point[_dataPointCount];
         for (int i = 0; i < _dataPointCount; i++)
@@ -175,6 +210,15 @@ public class InsertBenchmark
             _tdengineClient!.ExecuteAsync(
                 $"CREATE DATABASE IF NOT EXISTS {_tDengineSchemalessDb} PRECISION 'ms'").GetAwaiter().GetResult();
         }
+
+        // IoTDB
+        if (_iotdbAvailable)
+            _iotdbClient!.PrepareSeriesAsync(_iotdbDatabase, _iotdbDevice).GetAwaiter().GetResult();
+
+        // TimescaleDB
+        if (_timescaleAvailable)
+            TimescaleDbBenchmark.PrepareSensorTableAsync(_timescaleConnectionString, _timescaleTable)
+                .GetAwaiter().GetResult();
 
         // SonnetDB：关闭旧实例、清空目录、重新打开
         _sonnetDbDb?.Dispose();
@@ -309,6 +353,35 @@ public class InsertBenchmark
         }
     }
 
+    /// <summary>Apache IoTDB 写入 100 万条（REST v2 insertTablet，10k 行/批）。</summary>
+    [Benchmark(Description = "IoTDB 写入 100万条")]
+    public async Task IoTDB_Insert_1M()
+    {
+        if (!_iotdbAvailable)
+        {
+            Console.Error.WriteLine("[SKIP] IoTDB 不可用");
+            return;
+        }
+
+        await _iotdbClient!.InsertTabletAsync(_iotdbDevice, _dataPoints).ConfigureAwait(false);
+    }
+
+    /// <summary>PostgreSQL/TimescaleDB 写入 100 万条（binary COPY 到 hypertable）。</summary>
+    [Benchmark(Description = "TimescaleDB 写入 100万条")]
+    public async Task TimescaleDB_Insert_1M()
+    {
+        if (!_timescaleAvailable)
+        {
+            Console.Error.WriteLine("[SKIP] TimescaleDB 不可用");
+            return;
+        }
+
+        await TimescaleDbBenchmark.BulkCopyAsync(
+            _timescaleConnectionString,
+            _timescaleTable,
+            _dataPoints).ConfigureAwait(false);
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // GlobalCleanup
     // ─────────────────────────────────────────────────────────────────────
@@ -352,6 +425,20 @@ public class InsertBenchmark
             catch { /* 清理失败不影响结果 */ }
 
             _tdengineClient!.Dispose();
+        }
+
+        // IoTDB
+        if (_iotdbAvailable)
+        {
+            await _iotdbClient!.DropDatabaseIfExistsAsync(_iotdbDatabase).ConfigureAwait(false);
+            _iotdbClient!.Dispose();
+        }
+
+        // TimescaleDB
+        if (_timescaleAvailable)
+        {
+            await TimescaleDbBenchmark.DropSensorTableAsync(_timescaleConnectionString, _timescaleTable)
+                .ConfigureAwait(false);
         }
 
         // SonnetDB

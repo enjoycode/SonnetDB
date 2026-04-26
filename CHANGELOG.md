@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Added
+- **Apache IoTDB / PostgreSQL TimescaleDB 服务端基准**：`tests/SonnetDB.Benchmarks` 新增 IoTDB REST v2 `insertTablet` / SQL 查询 / `GROUP BY` 时间窗口基准，以及 TimescaleDB hypertable + binary COPY / range query / `time_bucket` 基准；Docker benchmark 环境、启动脚本、README 与 `docs/blogs/111-113` 对比通稿同步补齐实测数据，并统一 benchmark 文档中的时间单位为 ms、数据大小单位为 MB。
 - **LiteDB 嵌入式基准**：`tests/SonnetDB.Benchmarks` 新增 LiteDB 5.0.21 对照，覆盖 100 万点 `InsertBulk` 写入、`Ts` 索引范围查询与 1 分钟桶文档顺扫聚合，并在 benchmark 文档与对比通稿中补充实测数据。
 - **Benchmark 服务端端口可配置**：`tests/SonnetDB.Benchmarks/docker/docker-compose.yml` 新增 `SONNETDB_BENCH_PORT` 宿主机端口覆盖，`ServerBenchmark` 新增 `SONNETDB_BENCH_URL` 覆盖，并修复 SonnetDB / TDengine compose 健康检查，方便在本机已有 SonnetDB 开发容器占用 `5080` 时隔离运行基准。
 - **PID 控制函数基准**：新增 `PidBenchmark`，覆盖 50k 阶跃响应数据上的 `pid_series`、`pid(...) GROUP BY time(1m)`、`pid_estimate(..., 'zn', ...)` 与 `pid_estimate(..., 'imc', ...)`，用于回归工业控制函数端到端 SQL 性能。

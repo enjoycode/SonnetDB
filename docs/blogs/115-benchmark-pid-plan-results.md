@@ -13,10 +13,10 @@ PID 函数是 SonnetDB 的内置能力。SQLite、InfluxDB、TDengine、IoTDB、
 | 项 | 方案 |
 | --- | --- |
 | 数据模型 | `reactor(device TAG, temperature FIELD FLOAT)` |
-| 数据规模 | 50,000 点，每秒 1 点 |
+| 数据规模 | 50,000 点，每 1,000 ms 1 点 |
 | 数据形态 | 稳态 baseline + 一阶惯性阶跃响应 + 微小扰动 |
 | 控制律 | `pid_series(temperature, 75.0, 0.6, 0.1, 0.05)` |
-| 时间桶 | `pid(temperature, 75.0, 0.6, 0.1, 0.05) GROUP BY time(1m)` |
+| 时间桶 | `pid(temperature, 75.0, 0.6, 0.1, 0.05) GROUP BY time(60000ms)` |
 | 自动整定 | `pid_estimate(temperature, 'zn'/'imc', 1.0, 0.1, 0.1, ...)` |
 
 运行命令：
@@ -30,7 +30,7 @@ dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *Pid*
 | 方法 | 平均耗时 | 分配 | 输出 | 备注 |
 | --- | ---: | ---: | ---: | --- |
 | SonnetDB `pid_series(50k)` | 25.27 ms | 26.16 MB | 50k 行 | 逐点控制输出 |
-| SonnetDB `pid(50k, 1m buckets)` | 10.72 ms | 11.35 MB | ~834 桶 | 桶内最后控制量 |
+| SonnetDB `pid(50k, 60000ms buckets)` | 10.72 ms | 11.35 MB | ~834 桶 | 桶内最后控制量 |
 | SonnetDB `pid_estimate ZN(50k)` | 11.03 ms | 13.06 MB | 1 行 JSON | Ziegler-Nichols |
 | SonnetDB `pid_estimate IMC(50k)` | 11.01 ms | 13.06 MB | 1 行 JSON | IMC/SIMC |
 

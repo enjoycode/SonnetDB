@@ -48,7 +48,7 @@ dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *Geo*
 | SonnetDB `geo_within` | 100k | 29.49 ms | 24.05 MB | 圆形围栏 |
 | SonnetDB `geo_bbox + count` | 100k | 24.59 ms | 26.96 MB | 矩形范围 + 聚合 |
 | SonnetDB `trajectory_length` | 100k | 1.12 ms | 1.39 MB | 单设备轨迹聚合 |
-| SonnetDB GEOPOINT range scan | 100k | 464.7 us | 392.54 KB | 底层扫描参考 |
+| SonnetDB GEOPOINT range scan | 100k | 0.465 ms | 0.38 MB | 底层扫描参考 |
 
 ### 结论口径
 

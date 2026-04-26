@@ -32,12 +32,12 @@ dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *Vector*
 
 | 方法 | 数据规模 | 平均耗时 | 分配 | Recall@10 | 备注 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| Brute-force Top10 | 10k | 6.183 ms | 0 B | 1.000 | 精确基线 |
-| HNSW Top10 | 10k | 2.592 ms | 35,176 B | 0.820 | ANN 查询，Recall 由同批 query probe |
-| HNSW Recall@10 | 10k | 2.607 ms | 35,176 B | 0.820 | 方法耗时，返回值另由 probe 读取 |
-| Brute-force Top10 | 100k | 60.799 ms | 17 B | 1.000 | 精确基线 |
-| HNSW Top10 | 100k | 3.480 ms | 136,662 B | 0.340 | ANN 查询，默认参数召回偏低 |
-| HNSW Recall@10 | 100k | 3.598 ms | 136,662 B | 0.340 | 方法耗时，返回值另由 probe 读取 |
+| Brute-force Top10 | 10k | 6.183 ms | 0 MB | 1.000 | 精确基线 |
+| HNSW Top10 | 10k | 2.592 ms | 0.03 MB | 0.820 | ANN 查询，Recall 由同批 query probe |
+| HNSW Recall@10 | 10k | 2.607 ms | 0.03 MB | 0.820 | 方法耗时，返回值另由 probe 读取 |
+| Brute-force Top10 | 100k | 60.799 ms | <0.01 MB | 1.000 | 精确基线 |
+| HNSW Top10 | 100k | 3.480 ms | 0.13 MB | 0.340 | ANN 查询，默认参数召回偏低 |
+| HNSW Recall@10 | 100k | 3.598 ms | 0.13 MB | 0.340 | 方法耗时，返回值另由 probe 读取 |
 
 ### 结论口径
 

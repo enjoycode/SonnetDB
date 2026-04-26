@@ -8,7 +8,9 @@ static class BenchmarkEnvironmentScript
     [
         "sndb-bench-server",
         "sndb-bench-influxdb",
-        "sndb-bench-tdengine"
+        "sndb-bench-tdengine",
+        "sndb-bench-iotdb",
+        "sndb-bench-timescaledb"
     ];
 
     public static async Task<int> RunAsync(string[] args)

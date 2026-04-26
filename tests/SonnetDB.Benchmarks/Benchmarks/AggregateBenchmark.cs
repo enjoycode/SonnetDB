@@ -14,7 +14,7 @@ using SonnetDB.Query;
 namespace SonnetDB.Benchmarks.Benchmarks;
 
 /// <summary>
-/// 聚合查询性能对比：SonnetDB、SQLite、LiteDB、InfluxDB、TDengine。
+/// 聚合查询性能对比：SonnetDB、SQLite、LiteDB、InfluxDB、TDengine、IoTDB、TimescaleDB。
 /// 预先写入 1,000,000 条数据，然后反复执行按 1 分钟桶的 AVG/MIN/MAX/COUNT 聚合。
 /// </summary>
 [MemoryDiagnoser]
@@ -31,6 +31,11 @@ public class AggregateBenchmark
     private const string _tDengineDb = "bench_aggregate";
     private const string _tDengineTable = "sd_server001";
     private const string _tDengineSubTable = _tDengineDb + "." + _tDengineTable;
+    private const string _iotdbUrl = "http://localhost:18080";
+    private const string _iotdbDatabase = "root.bench_aggregate";
+    private const string _iotdbDevice = _iotdbDatabase + ".server001";
+    private const string _timescaleTable = "sensor_data_aggregate";
+    private static readonly string _timescaleConnectionString = TimescaleDbBenchmark.DefaultConnectionString;
 
     // ── 共享数据 ──────────────────────────────────────────────────────────
     private BenchmarkDataPoint[] _dataPoints = [];
@@ -48,6 +53,13 @@ public class AggregateBenchmark
     // ── TDengine ──────────────────────────────────────────────────────────
     private TDengineRestClient? _tdengineClient;
     private bool _tdengineAvailable;
+
+    // ── IoTDB ─────────────────────────────────────────────────────────────
+    private IoTDBRestClient? _iotdbClient;
+    private bool _iotdbAvailable;
+
+    // ── TimescaleDB ───────────────────────────────────────────────────────
+    private bool _timescaleAvailable;
 
     // ── SonnetDB ─────────────────────────────────────────────────────────────
     private string _sonnetDbRootDir = string.Empty;
@@ -153,6 +165,38 @@ public class AggregateBenchmark
             Console.Error.WriteLine(
                 "[SKIP] TDengine 不可用。请先执行: docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d tdengine");
         }
+
+        // ── IoTDB ───────────────────────────────────────────────────────
+        try
+        {
+            _iotdbClient = new IoTDBRestClient(_iotdbUrl);
+            await _iotdbClient.QueryAsync("SHOW VERSION").ConfigureAwait(false);
+            await _iotdbClient.PrepareSeriesAsync(_iotdbDatabase, _iotdbDevice).ConfigureAwait(false);
+            await _iotdbClient.InsertTabletAsync(_iotdbDevice, _dataPoints).ConfigureAwait(false);
+            _iotdbAvailable = true;
+        }
+        catch
+        {
+            _iotdbAvailable = false;
+            Console.Error.WriteLine(
+                "[SKIP] IoTDB 不可用。请先执行: docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d iotdb");
+        }
+
+        // ── TimescaleDB ─────────────────────────────────────────────────
+        _timescaleAvailable = await TimescaleDbBenchmark.IsAvailableAsync(_timescaleConnectionString)
+            .ConfigureAwait(false);
+        if (_timescaleAvailable)
+        {
+            await TimescaleDbBenchmark.PrepareSensorTableAsync(_timescaleConnectionString, _timescaleTable)
+                .ConfigureAwait(false);
+            await TimescaleDbBenchmark.BulkCopyAsync(_timescaleConnectionString, _timescaleTable, _dataPoints)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            Console.Error.WriteLine(
+                "[SKIP] TimescaleDB 不可用。请先执行: docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d timescaledb");
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -253,6 +297,41 @@ public class AggregateBenchmark
             $"FROM {_tDengineSubTable} INTERVAL(1m)").ConfigureAwait(false);
     }
 
+    /// <summary>Apache IoTDB 1 分钟桶聚合（GROUP BY 时间窗口，全量 100 万条）。</summary>
+    [Benchmark(Description = "IoTDB 1分钟聚合")]
+    public async Task<string> IoTDB_Aggregate_1Min()
+    {
+        if (!_iotdbAvailable)
+        {
+            Console.Error.WriteLine("[SKIP] IoTDB 不可用");
+            return string.Empty;
+        }
+
+        long start = DataGenerator.StartTimestampMs;
+        long end = DataGenerator.QueryToMs(_dataPointCount);
+        return await _iotdbClient!.QueryAsync(
+            $"SELECT AVG(value), MIN_VALUE(value), MAX_VALUE(value), COUNT(value) " +
+            $"FROM {_iotdbDevice} GROUP BY ([{start},{end}), 60000ms)")
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>PostgreSQL/TimescaleDB 1 分钟桶聚合（time_bucket，全量 100 万条）。</summary>
+    [Benchmark(Description = "TimescaleDB 1分钟聚合")]
+    public async Task<int> TimescaleDB_Aggregate_1Min()
+    {
+        if (!_timescaleAvailable)
+        {
+            Console.Error.WriteLine("[SKIP] TimescaleDB 不可用");
+            return -1;
+        }
+
+        return await TimescaleDbBenchmark.Aggregate1MinAsync(
+            _timescaleConnectionString,
+            _timescaleTable,
+            DataGenerator.StartTimestampMs,
+            DataGenerator.QueryToMs(_dataPointCount)).ConfigureAwait(false);
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // GlobalCleanup
     // ─────────────────────────────────────────────────────────────────────
@@ -290,6 +369,18 @@ public class AggregateBenchmark
             catch { /* 清理失败不影响结果 */ }
 
             _tdengineClient!.Dispose();
+        }
+
+        if (_iotdbAvailable)
+        {
+            await _iotdbClient!.DropDatabaseIfExistsAsync(_iotdbDatabase).ConfigureAwait(false);
+            _iotdbClient!.Dispose();
+        }
+
+        if (_timescaleAvailable)
+        {
+            await TimescaleDbBenchmark.DropSensorTableAsync(_timescaleConnectionString, _timescaleTable)
+                .ConfigureAwait(false);
         }
 
         // SonnetDB

@@ -18,13 +18,13 @@ SonnetDB 的写入基准分为两组：进程内嵌入式基准与服务端 HTTP
 | 服务端 | SonnetDB Server | 已实现，`ServerInsertBenchmark` |
 | 服务端 | InfluxDB 2.7 | 已实现，Line Protocol 写入 |
 | 服务端 | TDengine 3.3.4.3 | 已实现，REST INSERT 与 schemaless LP |
-| 服务端 | Apache IoTDB | 待补，需新增 Docker service 与 Session/REST 写入路径 |
-| 服务端 | PostgreSQL/TimescaleDB | 待补，需新增 TimescaleDB hypertable 与 COPY/INSERT 基准 |
+| 服务端 | Apache IoTDB | 已实现，REST v2 `insertTablet`，10,000 行/批 |
+| 服务端 | PostgreSQL/TimescaleDB | 已实现，hypertable + binary COPY |
 
 统一数据集：
 
 - 数据量：1,000,000 点
-- 时间间隔：1 秒 1 点
+- 时间间隔：1,000 ms 1 点
 - measurement：`sensor_data`
 - tag：`host=server001`
 - field：`value FLOAT`
@@ -37,6 +37,8 @@ $env:SONNETDB_BENCH_PORT="5081"
 $env:SONNETDB_BENCH_URL="http://localhost:5081"
 dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *Insert*
 dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *ServerInsert*
+dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *IoTDB_Insert_1M*
+dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *TimescaleDB_Insert_1M*
 ```
 
 ### 对比结果
@@ -55,15 +57,17 @@ dotnet run -c Release --project tests/SonnetDB.Benchmarks -- --filter *ServerIns
 | --- | ---: | ---: | ---: | --- |
 | SonnetDB Core 写入 1M | 704.8 ms | 693.29 MB | 141.9 万点/秒 | 嵌入式基线 |
 | SQLite 写入 1M | 1,183.2 ms | 465.40 MB | 84.5 万点/秒 | 嵌入式关系库对照 |
-| LiteDB 写入 1M | 10.96 s | 14.95 GB | 9.1 万点/秒 | 嵌入式文档库，`InsertBulk` |
+| LiteDB 写入 1M | 10,960 ms | 15,308.80 MB | 9.1 万点/秒 | 嵌入式文档库，`InsertBulk` |
 | InfluxDB 写入 1M | 7,392.0 ms | 1,458.95 MB | 13.5 万点/秒 | 服务端 TSDB 对照 |
 | TDengine REST INSERT 写入 1M | 16,421.5 ms | 169.33 MB | 6.1 万点/秒 | SQL REST 路径 |
 | TDengine schemaless LP 写入 1M | 2,097.0 ms | 61.35 MB | 47.7 万点/秒 | 快速写入路径 |
-| SonnetDB Server SQL Batch 写入 1M | 13.469 s | 676.03 MB | 7.4 万点/秒 | HTTP + SQL parser |
-| SonnetDB Server LP 写入 1M | 1.651 s | 52.41 MB | 60.6 万点/秒 | HTTP Line Protocol 快路径 |
-| SonnetDB Server JSON 写入 1M | 2.309 s | 71.46 MB | 43.3 万点/秒 | HTTP JSON 批量路径 |
-| SonnetDB Server Bulk VALUES 写入 1M | 1.691 s | 34.27 MB | 59.1 万点/秒 | HTTP Bulk VALUES 快路径 |
+| Apache IoTDB 写入 1M | 7,036 ms | 148.87 MB | 14.2 万点/秒 | REST v2 `insertTablet`，本轮波动较大 |
+| PostgreSQL/TimescaleDB 写入 1M | 5,285 ms | 0.09 MB | 18.9 万点/秒 | binary COPY 到 hypertable；分配为客户端托管分配 |
+| SonnetDB Server SQL Batch 写入 1M | 13,469 ms | 676.03 MB | 7.4 万点/秒 | HTTP + SQL parser |
+| SonnetDB Server LP 写入 1M | 1,651 ms | 52.41 MB | 60.6 万点/秒 | HTTP Line Protocol 快路径 |
+| SonnetDB Server JSON 写入 1M | 2,309 ms | 71.46 MB | 43.3 万点/秒 | HTTP JSON 批量路径 |
+| SonnetDB Server Bulk VALUES 写入 1M | 1,691 ms | 34.27 MB | 59.1 万点/秒 | HTTP Bulk VALUES 快路径 |
 
 ### 结论口径
 
-发布时只使用本轮 CSV/Markdown 报告中的实测值。IoTDB、TimescaleDB 尚未纳入可执行基准前，不在结论里给出性能断言。
+发布时只使用本轮 CSV/Markdown 报告中的实测值。IoTDB 与 TimescaleDB 已纳入可执行基准，但其数值代表同机 Docker + 本地客户端路径；TimescaleDB 的 `Allocated` 仅表示 BenchmarkDotNet 观察到的 .NET 客户端托管分配，不包含服务端进程内存。
