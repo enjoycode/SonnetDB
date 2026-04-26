@@ -40,7 +40,7 @@ function Pack-NuGetPackages
     Write-Section "Packing NuGet packages"
     Reset-Directory $NuGetOutput
 
-    Invoke-DotNetPack 'src/SonnetDB/SonnetDB.csproj' $NuGetOutput
+    Invoke-DotNetPack 'src/SonnetDB.Core/SonnetDB.Core.csproj' $NuGetOutput
     Invoke-DotNetPack 'src/SonnetDB.Data/SonnetDB.Data.csproj' $NuGetOutput
     Invoke-DotNetPack 'src/SonnetDB.Cli/SonnetDB.Cli.csproj' $NuGetOutput
 }
@@ -210,6 +210,7 @@ function Invoke-DotNetPack
     & dotnet pack (Join-Path $RepoRoot $ProjectRelativePath) `
         -c $Configuration `
         -o $PackageOutput `
+        /p:PackageVersion=$Version `
         /p:Version=$Version
     Assert-LastExitCode "dotnet pack $ProjectRelativePath"
 }
@@ -253,14 +254,34 @@ function Update-ServerBundleAppSettings
     }
 
     $json = Get-Content -LiteralPath $AppSettingsPath -Raw | ConvertFrom-Json
-    $json.SonnetDBServer.DataRoot = './sonnetdb-data'
-    $json.SonnetDBServer.AutoLoadExistingDatabases = $true
-    $json.SonnetDBServer.AllowAnonymousProbes = $true
-    $json.SonnetDBServer.Tokens = [ordered]@{
+    Set-JsonProperty $json.SonnetDBServer 'DataRoot' './sonnetdb-data'
+    Set-JsonProperty $json.SonnetDBServer 'AutoLoadExistingDatabases' $true
+    Set-JsonProperty $json.SonnetDBServer 'AllowAnonymousProbes' $true
+    Set-JsonProperty $json.SonnetDBServer 'Tokens' ([ordered]@{
         'sonnetdb-admin-token' = 'admin'
-    }
+    })
 
     $json | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $AppSettingsPath -Encoding utf8
+}
+
+function Set-JsonProperty
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$Object,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [object]$Value
+    )
+
+    if ($null -eq $Object.PSObject.Properties[$Name])
+    {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+        return
+    }
+
+    $Object.$Name = $Value
 }
 
 function New-BootstrapAuthFiles
@@ -389,8 +410,8 @@ function Write-SdkBundleReadme
 
 该目录包含：
 
+- `packages/SonnetDB.Core.__VERSION__.nupkg`
 - `packages/SonnetDB.__VERSION__.nupkg`
-- `packages/SonnetDB.Data.__VERSION__.nupkg`
 - `packages/SonnetDB.Cli.__VERSION__.nupkg`
 - `cli/` 原生命令行工具
 - `docs/` 发布与使用说明

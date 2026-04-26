@@ -30,6 +30,16 @@ http://127.0.0.1:5080
 - `/healthz`
 - `/metrics`
 
+## 本地 Windows 打包
+
+在 Windows 开发机上可使用一键脚本同时生成 NuGet 包与 `win-x64` ZIP Bundle：
+
+```powershell
+.\eng\build-windows.ps1 -Version 1.0.0
+```
+
+默认产物输出到 `artifacts/windows/`。如只验证 .NET 发布链路、不重建管理后台前端，可追加 `-SkipAdminUi`；如需 MSI，可追加 `-Installer`（需本机已安装 WiX CLI）。
+
 ## 推荐阅读顺序
 
 1. [SDK Bundle]({{ site.docs_baseurl | default: '/help' }}/releases/sdk-bundle/)

@@ -59,6 +59,7 @@
   <PropertyGroup>
     <AdminUiSourceDir>$(MSBuildThisFileDirectory)..\..\web</AdminUiSourceDir>
     <AdminUiDistDir>$(AdminUiSourceDir)\dist</AdminUiDistDir>
+    <BuildAdminUi Condition="'$(BuildAdminUi)' == ''">false</BuildAdminUi>
     <UserSecretsId>d2b80c70-bf72-4ca5-8406-75a635424f9f</UserSecretsId>
     <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
     <DockerfileContext>..\..</DockerfileContext>
@@ -73,7 +74,7 @@
     </Content>
   </ItemGroup>
 
-  <Target Name="BuildAdminUiForPublish" AfterTargets="ComputeFilesToPublish" Condition="'$(PublishDir)' != '' AND Exists('$(AdminUiSourceDir)\package-lock.json')">
+  <Target Name="BuildAdminUiForPublish" AfterTargets="ComputeFilesToPublish" Condition="'$(BuildAdminUi)' == 'true' AND '$(PublishDir)' != '' AND Exists('$(AdminUiSourceDir)\package-lock.json')">
     <Exec Command="npm ci --no-audit --no-fund" WorkingDirectory="$(AdminUiSourceDir)" />
     <Exec Command="npm run build" WorkingDirectory="$(AdminUiSourceDir)" />
 

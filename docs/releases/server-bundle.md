@@ -11,7 +11,7 @@ Server Bundle 面向“下载即启动”的部署场景，默认包含：
 - 管理后台前端
 - `/help` 帮助文档静态站点
 - `SonnetDB.Cli`
-- `SonnetDB` / `SonnetDB.Data` / `SonnetDB.Cli` NuGet 包
+- `SonnetDB.Core` / `SonnetDB` / `SonnetDB.Cli` NuGet 包
 - 启动脚本与说明文档
 
 ## 启动方式

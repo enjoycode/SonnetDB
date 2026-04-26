@@ -1,11 +1,11 @@
-﻿# SonnetDB
+﻿# SonnetDB.Core
 
-`SonnetDB` 是 SonnetDB 的核心引擎包，适合嵌入式本地时序存储场景。
+`SonnetDB.Core` 是 SonnetDB 的核心引擎包，适合嵌入式本地时序存储场景。
 
 ## 安装
 
 ```bash
-dotnet add package SonnetDB --version 0.1.0
+dotnet add package SonnetDB.Core --version 0.1.0
 ```
 
 ## 最小示例

@@ -9,8 +9,8 @@ SDK Bundle 面向开发者，目标是“一次下载，直接拥有完整开发
 
 ## 包含内容
 
+- `packages/SonnetDB.Core.<version>.nupkg`
 - `packages/SonnetDB.<version>.nupkg`
-- `packages/SonnetDB.Data.<version>.nupkg`
 - `packages/SonnetDB.Cli.<version>.nupkg`
 - `cli/` 本地命令行工具
 - `docs/` 使用说明
@@ -18,8 +18,8 @@ SDK Bundle 面向开发者，目标是“一次下载，直接拥有完整开发
 ## 常见使用方式
 
 ```bash
+dotnet add package SonnetDB.Core --version <version>
 dotnet add package SonnetDB --version <version>
-dotnet add package SonnetDB.Data --version <version>
 dotnet tool install --global SonnetDB.Cli --version <version>
 ```
 
