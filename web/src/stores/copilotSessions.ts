@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, watch } from 'vue';
 import type { CopilotMessage } from '@/api/copilot';
+import { CONTROL_PLANE_KEY } from '@/stores/sqlConsole';
 
 /**
  * 单条 Copilot 会话。`messages` 仅保留 user/assistant 文本回合（不含 tool 中间事件）。
@@ -115,6 +116,14 @@ export const useCopilotSessionsStore = defineStore('copilotSessions', () => {
     currentId.value = null;
   }
 
+  function hideControlPlaneForRegularUser(): void {
+    for (const session of sessions.value) {
+      if (session.db === CONTROL_PLANE_KEY) {
+        session.db = '';
+      }
+    }
+  }
+
   /**
    * 把一轮对话（user + assistant 各一条）追加到指定会话；首次写入时自动从首条 user 消息派生标题。
    * 如果 id 不存在，则新建一个会话。
@@ -182,6 +191,7 @@ export const useCopilotSessionsStore = defineStore('copilotSessions', () => {
     rename,
     remove,
     clearAll,
+    hideControlPlaneForRegularUser,
     appendTurn,
     appendMessage,
     setMessages,

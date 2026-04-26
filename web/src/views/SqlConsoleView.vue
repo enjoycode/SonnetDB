@@ -26,7 +26,7 @@
                 placeholder="选择数据库"
               />
               <n-text depth="3" style="font-size: 12px">
-                <template v-if="targetDb === CONTROL_PLANE_KEY">
+                <template v-if="auth.isSuperuser && targetDb === CONTROL_PLANE_KEY">
                   <n-tag size="tiny" type="warning" style="margin-right: 4px">system</n-tag>
                   系统数据库（执行 CREATE USER / GRANT / SHOW USERS / CREATE DATABASE 等控制面 SQL）
                 </template>
@@ -110,6 +110,9 @@ import {
 
 const auth = useAuthStore();
 const sqlConsole = useSqlConsoleStore();
+if (!auth.isSuperuser) {
+  sqlConsole.hideControlPlaneForRegularUser();
+}
 
 const databases = ref<string[]>([]);
 const runningTabId = ref<string | null>(null);
@@ -161,13 +164,15 @@ function tabTitleFromSql(text: string, fallback = '查询'): string {
 }
 
 function defaultDbForNewTab(): string {
-  if (activeTab.value?.db) return activeTab.value.db;
+  if (activeTab.value?.db && (auth.isSuperuser || activeTab.value.db !== CONTROL_PLANE_KEY)) {
+    return activeTab.value.db;
+  }
   if (auth.isSuperuser) return CONTROL_PLANE_KEY;
   return databases.value[0] ?? '';
 }
 
 function defaultSqlForDb(db: string): string {
-  return db === CONTROL_PLANE_KEY ? 'SHOW DATABASES' : 'SHOW MEASUREMENTS';
+  return db === CONTROL_PLANE_KEY && auth.isSuperuser ? 'SHOW DATABASES' : 'SHOW MEASUREMENTS';
 }
 
 function createTab(): void {
@@ -192,6 +197,9 @@ async function reloadDbs(): Promise<void> {
     return;
   }
   databases.value = result.databases;
+  if (!auth.isSuperuser) {
+    sqlConsole.hideControlPlaneForRegularUser(databases.value[0] ?? '');
+  }
   normalizeTarget();
 }
 
@@ -199,6 +207,9 @@ function normalizeTarget(): void {
   if (auth.isSuperuser) {
     if (!targetDb.value) targetDb.value = CONTROL_PLANE_KEY;
     return;
+  }
+  if (targetDb.value === CONTROL_PLANE_KEY) {
+    sqlConsole.hideControlPlaneForRegularUser(databases.value[0] ?? '');
   }
   if (targetDb.value === CONTROL_PLANE_KEY || !databases.value.includes(targetDb.value)) {
     targetDb.value = databases.value[0] ?? '';
@@ -234,6 +245,11 @@ async function run(): Promise<void> {
   });
 
   if (!sql.value.trim()) return;
+  if (targetDb.value === CONTROL_PLANE_KEY && !auth.isSuperuser) {
+    sqlConsole.hideControlPlaneForRegularUser(databases.value[0] ?? '');
+    sqlConsole.patchTab(tabId, { errorMsg: '普通用户不能访问系统数据库。' });
+    return;
+  }
   if (!targetDb.value) {
     sqlConsole.patchTab(tabId, { errorMsg: '当前没有可执行的数据面数据库。' });
     return;
@@ -338,9 +354,18 @@ async function applyPendingExecution(): Promise<void> {
   if (pending.tabId) {
     sqlConsole.activateTab(pending.tabId);
   }
-  targetDb.value = pending.db;
+  if (pending.db === CONTROL_PLANE_KEY && !auth.isSuperuser) {
+    const fallbackDb = databases.value[0] ?? '';
+    targetDb.value = fallbackDb;
+    sql.value = defaultSqlForDb(fallbackDb);
+    await loadSchema(fallbackDb);
+    return;
+  }
+
+  const pendingDb = pending.db;
+  targetDb.value = pendingDb;
   sql.value = pending.sql;
-  await loadSchema(pending.db);
+  await loadSchema(pendingDb);
   await nextTick();
 
   if (pending.runImmediately) {

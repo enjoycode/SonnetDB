@@ -54,7 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue';
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   NButton,
@@ -70,12 +70,16 @@ import {
 import BrandLogo from '@/components/BrandLogo.vue';
 import CopilotDock from '@/components/CopilotDock.vue';
 import { useAuthStore } from '@/stores/auth';
+import { useCopilotSessionsStore } from '@/stores/copilotSessions';
 import { useEventsStore } from '@/stores/events';
 import { useSetupStore } from '@/stores/setup';
+import { useSqlConsoleStore } from '@/stores/sqlConsole';
 
 const auth = useAuthStore();
+const copilotSessions = useCopilotSessionsStore();
 const events = useEventsStore();
 const setup = useSetupStore();
+const sqlConsole = useSqlConsoleStore();
 const router = useRouter();
 const route = useRoute();
 
@@ -155,6 +159,14 @@ function onLogout(): void {
   auth.logout();
   router.replace({ name: 'login' });
 }
+
+function hideControlPlaneForRegularUser(): void {
+  if (!auth.isAuthenticated || auth.isSuperuser) return;
+  sqlConsole.hideControlPlaneForRegularUser();
+  copilotSessions.hideControlPlaneForRegularUser();
+}
+
+watch(() => [auth.isAuthenticated, auth.isSuperuser] as const, hideControlPlaneForRegularUser, { immediate: true });
 
 onMounted(async () => {
   await setup.ensureLoaded();

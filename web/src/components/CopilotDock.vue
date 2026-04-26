@@ -305,7 +305,7 @@ import {
 } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
 import { useCopilotSessionsStore, type CopilotSession } from '@/stores/copilotSessions';
-import { useSqlConsoleStore } from '@/stores/sqlConsole';
+import { CONTROL_PLANE_KEY, useSqlConsoleStore } from '@/stores/sqlConsole';
 import { buildClientResultSet } from '@/api/sqlMeta';
 import type { SqlResultSet } from '@/api/sql';
 import { listDatabases } from '@/api/server';
@@ -325,6 +325,9 @@ import { pickStarters, type CopilotStarter } from '@/copilot/starters';
 const auth = useAuthStore();
 const sessions = useCopilotSessionsStore();
 const sqlConsole = useSqlConsoleStore();
+if (!auth.isSuperuser) {
+  sessions.hideControlPlaneForRegularUser();
+}
 const route = useRoute();
 const message = useMessage();
 const dialog = useDialog();
@@ -842,6 +845,9 @@ async function reloadDbs(): Promise<void> {
   try {
     const result = await listDatabases(auth.api);
     dbs.value = result.databases.filter((db: string) => !isSystemDatabase(db));
+    if (!auth.isSuperuser && selectedDb.value === CONTROL_PLANE_KEY) {
+      selectedDb.value = '';
+    }
     if (!selectedDb.value && dbs.value.length > 0) {
       selectedDb.value = dbs.value[0];
     }
@@ -1351,6 +1357,10 @@ function onSwitchSession(id: string): void {
   streamCitations.value = [];
   errorMsg.value = '';
   if (sessions.current?.db) {
+    if (sessions.current.db === CONTROL_PLANE_KEY && !auth.isSuperuser) {
+      sessions.current.db = '';
+      return;
+    }
     selectedDb.value = sessions.current.db;
   }
 }

@@ -67,6 +67,10 @@ function defaultTab(): SqlConsoleTab {
   };
 }
 
+function defaultDataPlaneSql(db: string): string {
+  return db ? 'SHOW MEASUREMENTS' : '';
+}
+
 function deriveTitle(sql: string, fallback: string): string {
   const text = sql.replace(/\s+/g, ' ').trim();
   if (!text) return fallback;
@@ -249,6 +253,29 @@ export const useSqlConsoleStore = defineStore('sqlConsole', () => {
     });
   }
 
+  function hideControlPlaneForRegularUser(fallbackDb = ''): void {
+    const safeFallbackDb = fallbackDb === CONTROL_PLANE_KEY ? '' : fallbackDb;
+    for (let i = 0; i < tabs.value.length; i++) {
+      const tab = tabs.value[i];
+      if (tab.db !== CONTROL_PLANE_KEY) continue;
+
+      Object.assign(tab, {
+        title: `查询 ${i + 1}`,
+        db: safeFallbackDb,
+        sql: defaultDataPlaneSql(safeFallbackDb),
+        results: [],
+        summary: '',
+        errorMsg: '',
+        ranOnce: false,
+        updatedAt: now(),
+      });
+    }
+
+    if (pendingExecution.value?.db === CONTROL_PLANE_KEY) {
+      pendingExecution.value = null;
+    }
+  }
+
   function queueExecution(execution: PendingSqlExecution): void {
     const tab = createTab({
       title: execution.title ?? deriveTitle(execution.sql, `查询 ${tabs.value.length + 1}`),
@@ -287,6 +314,7 @@ export const useSqlConsoleStore = defineStore('sqlConsole', () => {
     setTabResults,
     appendResult,
     clearActiveTab,
+    hideControlPlaneForRegularUser,
     queueExecution,
     consumeExecution,
   };
