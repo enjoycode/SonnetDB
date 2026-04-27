@@ -312,11 +312,12 @@ public static class SqlExecutor
     /// 执行 <c>INSERT INTO measurement (col, ...) VALUES (...) [, (...)]*</c> 语句。
     /// 校验规则：
     /// <list type="bullet">
-    ///   <item>目标 measurement 必须已通过 CREATE MEASUREMENT 注册。</item>
-    ///   <item>列列表中的每个名字必须是 schema 中已声明的列，或为保留伪列 <c>time</c>（时间戳，不区分大小写）。</item>
+    ///   <item>目标 measurement 可不存在；写入时会按数据自动创建或扩展 schema。</item>
+    ///   <item>列列表中的每个名字可以是 schema 中已声明的列、新列，或保留伪列 <c>time</c>（时间戳，不区分大小写）。</item>
     ///   <item>同一 INSERT 列列表中不允许重复列名。</item>
     ///   <item>Tag 列必须传入字符串字面量；不允许 NULL；不允许保留字符。</item>
-    ///   <item>Field 列值必须与列声明类型匹配（INT 字面量可隐式转换为 FLOAT）。</item>
+    ///   <item>Field 列值必须与列声明类型兼容；INT 字面量可隐式转换为 FLOAT，INT 列遇到 FLOAT 会提升为 FLOAT。</item>
+    ///   <item>未知 SQL 字符串列会按 TAG 推断，未知非字符串列会按 FIELD 推断。</item>
     ///   <item>每行至少需要包含一个 Field 列值（与 <see cref="Point"/> 的约束一致）。</item>
     ///   <item><c>time</c> 列必须为非负整数字面量；缺省时使用当前 UTC 毫秒。</item>
     ///   <item>VALUES 字面量当前仅支持 NULL / Boolean / Integer / Float / String，不支持运算表达式。</item>
@@ -326,15 +327,13 @@ public static class SqlExecutor
     /// <param name="statement">已解析的 INSERT 语句。</param>
     /// <returns>包含写入行数的 <see cref="InsertExecutionResult"/>。</returns>
     /// <exception cref="ArgumentNullException">任何参数为 null。</exception>
-    /// <exception cref="InvalidOperationException">measurement 不存在 / 未提供任何 Field / 类型不匹配等校验失败时抛出。</exception>
+    /// <exception cref="InvalidOperationException">未提供任何 Field / 类型不兼容等校验失败时抛出。</exception>
     public static InsertExecutionResult ExecuteInsert(Tsdb tsdb, InsertStatement statement)
     {
         ArgumentNullException.ThrowIfNull(tsdb);
         ArgumentNullException.ThrowIfNull(statement);
 
-        var schema = tsdb.Measurements.TryGet(statement.Measurement)
-            ?? throw new InvalidOperationException(
-                $"Measurement '{statement.Measurement}' 不存在；请先执行 CREATE MEASUREMENT。");
+        var schema = tsdb.Measurements.TryGet(statement.Measurement);
 
         // 解析列绑定：(timeColumnIndex, columnBindings[])
         int timeColumnIndex = -1;
@@ -356,10 +355,10 @@ public static class SqlExecutor
             if (!seen.Add(name))
                 throw new InvalidOperationException($"INSERT 列列表中列 '{name}' 重复。");
 
-            var col = schema.TryGetColumn(name)
-                ?? throw new InvalidOperationException(
-                    $"Measurement '{schema.Name}' 没有列 '{name}'。");
-            bindings[i] = ColumnBinding.Schema(col);
+            var col = schema?.TryGetColumn(name);
+            bindings[i] = col is null
+                ? ColumnBinding.Inferred(name, InferUnknownColumnRole(statement.Rows, i, name))
+                : ColumnBinding.Schema(col);
         }
 
         int written = 0;
@@ -380,61 +379,59 @@ public static class SqlExecutor
 
                 var binding = bindings[i];
 
-                if (binding.Column!.Role == MeasurementColumnRole.Tag)
+                if (binding.Role == MeasurementColumnRole.Tag)
                 {
-                    var literal = AsLiteral(row[i], binding.Column.Name);
+                    var literal = AsLiteral(row[i], binding.Name);
                     if (literal.Kind == SqlLiteralKind.Null)
                         throw new InvalidOperationException(
-                            $"Tag 列 '{binding.Column.Name}' 不允许为 NULL。");
+                            $"Tag 列 '{binding.Name}' 不允许为 NULL。");
                     if (literal.Kind != SqlLiteralKind.String)
                         throw new InvalidOperationException(
-                            $"Tag 列 '{binding.Column.Name}' 必须是字符串字面量，实际为 {literal.Kind}。");
+                            $"Tag 列 '{binding.Name}' 必须是字符串字面量，实际为 {literal.Kind}。");
                     tags ??= new Dictionary<string, string>(StringComparer.Ordinal);
-                    tags[binding.Column.Name] = literal.StringValue!;
+                    tags[binding.Name] = literal.StringValue!;
                 }
                 else
                 {
-                    if (binding.Column.DataType == FieldType.Vector)
+                    if (binding.Column?.DataType == FieldType.Vector)
                     {
                         if (row[i] is not VectorLiteralExpression vecExpr)
                             throw new InvalidOperationException(
-                                $"Field 列 '{binding.Column.Name}' 期望 VECTOR 字面量 [..]，实际为 {row[i].GetType().Name}。");
+                                $"Field 列 '{binding.Name}' 期望 VECTOR 字面量 [..]，实际为 {row[i].GetType().Name}。");
                         var value = ConvertVectorField(vecExpr, binding.Column);
                         fields ??= new Dictionary<string, FieldValue>(StringComparer.Ordinal);
-                        fields[binding.Column.Name] = value;
+                        fields[binding.Name] = value;
                         continue;
                     }
 
-                    if (binding.Column.DataType == FieldType.GeoPoint)
+                    if (binding.Column?.DataType == FieldType.GeoPoint)
                     {
                         if (row[i] is not GeoPointLiteralExpression geoExpr)
                             throw new InvalidOperationException(
-                                $"Field 列 '{binding.Column.Name}' 期望 POINT(lat, lon) 字面量，实际为 {row[i].GetType().Name}。");
+                                $"Field 列 '{binding.Name}' 期望 POINT(lat, lon) 字面量，实际为 {row[i].GetType().Name}。");
                         fields ??= new Dictionary<string, FieldValue>(StringComparer.Ordinal);
-                        fields[binding.Column.Name] = FieldValue.FromGeoPoint(geoExpr.Lat, geoExpr.Lon);
+                        fields[binding.Name] = FieldValue.FromGeoPoint(geoExpr.Lat, geoExpr.Lon);
                         continue;
                     }
 
-                    var literal = AsLiteral(row[i], binding.Column.Name);
-                    if (literal.Kind == SqlLiteralKind.Null)
-                        throw new InvalidOperationException(
-                            $"Field 列 '{binding.Column.Name}' 不允许为 NULL。");
-                    var fv = ConvertField(literal, binding.Column);
+                    var fv = binding.Column is null
+                        ? ConvertInferredField(row[i], binding.Name)
+                        : ConvertDeclaredField(row[i], binding.Column);
                     fields ??= new Dictionary<string, FieldValue>(StringComparer.Ordinal);
-                    fields[binding.Column.Name] = fv;
+                    fields[binding.Name] = fv;
                 }
             }
 
             if (fields is null || fields.Count == 0)
                 throw new InvalidOperationException(
-                    $"INSERT 行至少需要包含一个 FIELD 列值（measurement '{schema.Name}'）。");
+                    $"INSERT 行至少需要包含一个 FIELD 列值（measurement '{statement.Measurement}'）。");
 
-            var point = Point.Create(schema.Name, timestamp, tags, fields);
+            var point = Point.Create(statement.Measurement, timestamp, tags, fields);
             tsdb.Write(point);
             written++;
         }
 
-        return new InsertExecutionResult(schema.Name, written);
+        return new InsertExecutionResult(statement.Measurement, written);
     }
 
     /// <summary>
@@ -491,6 +488,53 @@ public static class SqlExecutor
         return lit.IntegerValue;
     }
 
+    private static FieldValue ConvertDeclaredField(SqlExpression expression, MeasurementColumn column)
+    {
+        if (expression is VectorLiteralExpression vecExpr)
+        {
+            if (column.DataType != FieldType.Vector)
+                throw new InvalidOperationException(
+                    $"Field 列 '{column.Name}' 不是 VECTOR 列，不允许传入向量字面量。");
+            return ConvertVectorField(vecExpr, column);
+        }
+
+        if (expression is GeoPointLiteralExpression geoExpr)
+        {
+            if (column.DataType != FieldType.GeoPoint)
+                throw new InvalidOperationException(
+                    $"Field 列 '{column.Name}' 不是 GEOPOINT 列，不允许传入 POINT(lat, lon) 字面量。");
+            return FieldValue.FromGeoPoint(geoExpr.Lat, geoExpr.Lon);
+        }
+
+        var literal = AsLiteral(expression, column.Name);
+        if (literal.Kind == SqlLiteralKind.Null)
+            throw new InvalidOperationException(
+                $"Field 列 '{column.Name}' 不允许为 NULL。");
+        return ConvertField(literal, column);
+    }
+
+    private static FieldValue ConvertInferredField(SqlExpression expression, string columnName)
+    {
+        if (expression is VectorLiteralExpression vecExpr)
+            return ConvertVectorLiteral(vecExpr);
+        if (expression is GeoPointLiteralExpression geoExpr)
+            return FieldValue.FromGeoPoint(geoExpr.Lat, geoExpr.Lon);
+
+        var literal = AsLiteral(expression, columnName);
+        if (literal.Kind == SqlLiteralKind.Null)
+            throw new InvalidOperationException(
+                $"Field 列 '{columnName}' 不允许为 NULL。");
+
+        return literal.Kind switch
+        {
+            SqlLiteralKind.Float => FieldValue.FromDouble(literal.FloatValue),
+            SqlLiteralKind.Integer => FieldValue.FromLong(literal.IntegerValue),
+            SqlLiteralKind.Boolean => FieldValue.FromBool(literal.BooleanValue),
+            SqlLiteralKind.String => FieldValue.FromString(literal.StringValue!),
+            _ => throw new InvalidOperationException($"不支持的 FIELD 字面量类型 {literal.Kind}。"),
+        };
+    }
+
     private static FieldValue ConvertField(LiteralExpression literal, MeasurementColumn column)
     {
         switch (column.DataType)
@@ -503,9 +547,12 @@ public static class SqlExecutor
                     _ => throw TypeMismatch(column, literal.Kind),
                 };
             case FieldType.Int64:
-                if (literal.Kind != SqlLiteralKind.Integer)
-                    throw TypeMismatch(column, literal.Kind);
-                return FieldValue.FromLong(literal.IntegerValue);
+                return literal.Kind switch
+                {
+                    SqlLiteralKind.Integer => FieldValue.FromLong(literal.IntegerValue),
+                    SqlLiteralKind.Float => FieldValue.FromDouble(literal.FloatValue),
+                    _ => throw TypeMismatch(column, literal.Kind),
+                };
             case FieldType.Boolean:
                 if (literal.Kind != SqlLiteralKind.Boolean)
                     throw TypeMismatch(column, literal.Kind);
@@ -523,6 +570,33 @@ public static class SqlExecutor
             default:
                 throw new NotSupportedException($"不支持的列类型 {column.DataType}。");
         }
+    }
+
+    private static MeasurementColumnRole InferUnknownColumnRole(
+        IReadOnlyList<IReadOnlyList<SqlExpression>> rows,
+        int columnIndex,
+        string columnName)
+    {
+        var sawValue = false;
+        foreach (var row in rows)
+        {
+            var expr = row[columnIndex];
+            if (expr is VectorLiteralExpression or GeoPointLiteralExpression)
+                return MeasurementColumnRole.Field;
+
+            var literal = AsLiteral(expr, columnName);
+            if (literal.Kind == SqlLiteralKind.Null)
+                continue;
+
+            sawValue = true;
+            if (literal.Kind != SqlLiteralKind.String)
+                return MeasurementColumnRole.Field;
+        }
+
+        if (!sawValue)
+            throw new InvalidOperationException(
+                $"无法从全 NULL 列 '{columnName}' 推断 TAG / FIELD。");
+        return MeasurementColumnRole.Tag;
     }
 
     /// <summary>
@@ -543,6 +617,14 @@ public static class SqlExecutor
         return FieldValue.FromVector(arr);
     }
 
+    private static FieldValue ConvertVectorLiteral(VectorLiteralExpression literal)
+    {
+        var arr = new float[literal.Components.Count];
+        for (int i = 0; i < arr.Length; i++)
+            arr[i] = (float)literal.Components[i];
+        return FieldValue.FromVector(arr);
+    }
+
     private static InvalidOperationException TypeMismatch(MeasurementColumn column, SqlLiteralKind actual)
         => new($"Field 列 '{column.Name}' 期望 {column.DataType}，实际字面量类别为 {actual}。");
 
@@ -550,11 +632,20 @@ public static class SqlExecutor
     private readonly struct ColumnBinding
     {
         public MeasurementColumn? Column { get; }
-        public bool IsTime => Column is null;
+        public string Name { get; }
+        public MeasurementColumnRole Role { get; }
+        public bool IsTime { get; }
 
-        private ColumnBinding(MeasurementColumn? column) { Column = column; }
+        private ColumnBinding(MeasurementColumn? column, string name, MeasurementColumnRole role, bool isTime = false)
+        {
+            Column = column;
+            Name = name;
+            Role = role;
+            IsTime = isTime;
+        }
 
-        public static ColumnBinding Time { get; } = new(null);
-        public static ColumnBinding Schema(MeasurementColumn column) => new(column);
+        public static ColumnBinding Time { get; } = new(null, "time", MeasurementColumnRole.Field, isTime: true);
+        public static ColumnBinding Schema(MeasurementColumn column) => new(column, column.Name, column.Role);
+        public static ColumnBinding Inferred(string name, MeasurementColumnRole role) => new(null, name, role);
     }
 }

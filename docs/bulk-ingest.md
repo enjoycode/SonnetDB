@@ -232,8 +232,10 @@ curl -X POST "http://127.0.0.1:5080/v1/db/metrics/measurements/cpu/bulk?onerror=
 
 ## 注意事项
 
-- 目标 measurement 必须已经通过 `CREATE MEASUREMENT` 定义。
-- `Bulk VALUES` 会按 measurement schema 校验列角色和类型。
+- 目标 measurement 可以预先通过 `CREATE MEASUREMENT` 定义，也可以由首次写入自动推断创建。
+- Line Protocol / JSON points 会根据 payload 中的 `tags` / `fields` 自动补齐缺失列。
+- `Bulk VALUES` 会按已有 measurement schema 校验列角色和类型；未知字符串列会按 `TAG` 推断，未知非字符串列会按 `FIELD` 推断。
+- 已有 `INT` 字段遇到 `FLOAT` 写入会提升为 `FLOAT`；已有 `FLOAT` 字段接收整数时会转换为浮点保存；其它类型漂移会失败或在 `onerror=skip` 下跳过。
 - 远程 `TableDirect` 的 Line Protocol 推荐显式给出 measurement 前缀或参数。
 - 写入权限至少需要 `readwrite` 角色。
 

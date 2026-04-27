@@ -56,7 +56,7 @@ var written = command.ExecuteNonQuery();
 
 ### 自动 Schema 推断
 
-行协议的一大优势是 Schema-less 写入。当 SonnetDB 接收到行协议数据时，如果对应的 Measurement 尚不存在，会自动推断并创建 Schema —— Tag 列自动识别为字符串标签，Field 列根据数值类型推断为 `FLOAT` 或 `INT`：
+行协议的一大优势是 Schema-less 写入。当 SonnetDB 接收到行协议数据时，如果对应的 Measurement 尚不存在，会自动推断并创建 Schema；如果 Measurement 已存在但缺少新的 tag / field，也会在写入前自动补齐。Tag 列自动识别为字符串标签，Field 列根据写入值推断为 `FLOAT`、`INT`、`BOOL` 或 `STRING`；已有 `INT` 字段遇到 `FLOAT` 值时会提升为 `FLOAT`：
 
 ```text
 # 首次写入自动建表

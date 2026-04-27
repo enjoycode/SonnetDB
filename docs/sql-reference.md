@@ -47,6 +47,9 @@ VALUES
 - 每一行至少需要提供一个 `FIELD` 列值。
 - `TAG` 列必须是字符串字面量。
 - `FIELD FLOAT` 可以接受整数或浮点字面量。
+- 目标 measurement 不存在时，`INSERT` 会按列值自动创建 schema；已有 measurement 缺失列时也会自动补齐。
+- SQL `INSERT` 的未知字符串列会推断为 `TAG`，未知非字符串列会推断为 `FIELD`。
+- 已有 `INT` 字段遇到浮点值时会提升为 `FLOAT`；已有 `FLOAT` 字段接收整数时会转换为浮点保存，不会降级为 `INT`。
 - `NULL` 不能用于当前 `INSERT`。
 
 ### 原始查询 `SELECT`

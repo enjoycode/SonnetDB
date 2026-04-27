@@ -17,7 +17,7 @@ public static class SchemaBoundBulkValuesReader
     /// <param name="sql">完整 <c>INSERT INTO ... VALUES (...)</c> 文本。</param>
     /// <param name="measurementOverride">可选的 measurement 覆盖名；非 <c>null</c> 时忽略 SQL 中的 measurement。</param>
     /// <returns>已完成 header 解析、ready-to-stream 的 reader。</returns>
-    /// <exception cref="BulkIngestException">measurement 不存在或列名未在 schema 中定义时抛出。</exception>
+    /// <exception cref="BulkIngestException">SQL 头部无效时抛出。</exception>
     public static BulkValuesReader Create(Tsdb tsdb, string sql, string? measurementOverride = null)
     {
         ArgumentNullException.ThrowIfNull(tsdb);
@@ -34,12 +34,14 @@ public static class SchemaBoundBulkValuesReader
             if (cachedSchema is null)
             {
                 var name = measurementOverride ?? PeekMeasurementName(sql);
-                cachedSchema = tsdb.Measurements.TryGet(name)
-                    ?? throw new BulkIngestException($"Bulk INSERT: measurement '{name}' 不存在；请先 CREATE MEASUREMENT。");
+                cachedSchema = tsdb.Measurements.TryGet(name);
+                if (cachedSchema is null)
+                    return BulkValuesColumnRole.Auto;
             }
 
-            var column = cachedSchema.TryGetColumn(col)
-                ?? throw new BulkIngestException($"Bulk INSERT: measurement '{cachedSchema.Name}' 没有列 '{col}'。");
+            var column = cachedSchema.TryGetColumn(col);
+            if (column is null)
+                return BulkValuesColumnRole.Auto;
             return column.Role == MeasurementColumnRole.Tag
                 ? BulkValuesColumnRole.Tag
                 : BulkValuesColumnRole.Field;

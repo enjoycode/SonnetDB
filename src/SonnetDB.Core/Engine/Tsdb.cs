@@ -223,19 +223,8 @@ public sealed class Tsdb : IDisposable
         lock (_writeSync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-
-            var entry = Catalog.GetOrAdd(point);
-
-            // 若是本进程首次写入该 series，向 WAL 追加 CreateSeries 记录
-            if (_seriesWithWalRecord.Add(entry.Id))
-                _walSet!.AppendCreateSeries(entry.Id, entry.Measurement, entry.Tags);
-
-            // 每个字段写入 WAL 和 MemTable
-            foreach (var (fieldName, value) in point.Fields)
-            {
-                long lsn = _walSet!.AppendWritePoint(entry.Id, point.Timestamp, fieldName, value);
-                MemTable.Append(entry.Id, point.Timestamp, fieldName, value, lsn);
-            }
+            var normalized = EnsureMeasurementSchemaLocked(point);
+            WritePointLocked(normalized);
 
             if (_options.SyncWalOnEveryWrite)
                 _walSet!.Sync();
@@ -308,17 +297,8 @@ public sealed class Tsdb : IDisposable
                 if (point is null)
                     continue;
 
-                var entry = Catalog.GetOrAdd(point);
-
-                if (_seriesWithWalRecord.Add(entry.Id))
-                    _walSet!.AppendCreateSeries(entry.Id, entry.Measurement, entry.Tags);
-
-                foreach (var (fieldName, value) in point.Fields)
-                {
-                    long lsn = _walSet!.AppendWritePoint(entry.Id, point.Timestamp, fieldName, value);
-                    MemTable.Append(entry.Id, point.Timestamp, fieldName, value, lsn);
-                }
-
+                var normalized = EnsureMeasurementSchemaLocked(point);
+                WritePointLocked(normalized);
                 written++;
             }
 
@@ -605,6 +585,164 @@ public sealed class Tsdb : IDisposable
             FlushNowLocked();
         }
     }
+
+    private void WritePointLocked(Point point)
+    {
+        var entry = Catalog.GetOrAdd(point);
+
+        // 若是本进程首次写入该 series，向 WAL 追加 CreateSeries 记录
+        if (_seriesWithWalRecord.Add(entry.Id))
+            _walSet!.AppendCreateSeries(entry.Id, entry.Measurement, entry.Tags);
+
+        // 每个字段写入 WAL 和 MemTable
+        foreach (var (fieldName, value) in point.Fields)
+        {
+            long lsn = _walSet!.AppendWritePoint(entry.Id, point.Timestamp, fieldName, value);
+            MemTable.Append(entry.Id, point.Timestamp, fieldName, value, lsn);
+        }
+    }
+
+    private Point EnsureMeasurementSchemaLocked(Point point)
+    {
+        var schema = Measurements.TryGet(point.Measurement);
+        if (schema is null)
+        {
+            var created = CreateSchemaFromPoint(point);
+            Measurements.Add(created);
+            PersistMeasurementSchemasLocked();
+            return point;
+        }
+
+        var columns = new List<MeasurementColumn>(schema.Columns);
+        var changed = false;
+        var promotedIntToFloat = false;
+        Dictionary<string, FieldValue>? normalizedFields = null;
+
+        foreach (var (tagName, _) in point.Tags)
+        {
+            var column = schema.TryGetColumn(tagName);
+            if (column is null)
+            {
+                columns.Add(new MeasurementColumn(tagName, MeasurementColumnRole.Tag, Storage.Format.FieldType.String));
+                changed = true;
+                continue;
+            }
+
+            if (column.Role != MeasurementColumnRole.Tag)
+                throw new InvalidOperationException(
+                    $"Measurement '{schema.Name}' 的列 '{tagName}' 已声明为 FIELD，不能作为 TAG 写入。");
+        }
+
+        foreach (var (fieldName, value) in point.Fields)
+        {
+            var column = schema.TryGetColumn(fieldName);
+            if (column is null)
+            {
+                columns.Add(CreateFieldColumn(fieldName, value));
+                changed = true;
+                continue;
+            }
+
+            if (column.Role != MeasurementColumnRole.Field)
+                throw new InvalidOperationException(
+                    $"Measurement '{schema.Name}' 的列 '{fieldName}' 已声明为 TAG，不能作为 FIELD 写入。");
+
+            var normalized = NormalizeFieldValue(schema.Name, column, value, out var promoted);
+            if (promoted)
+            {
+                ReplaceColumn(columns, fieldName, column with { DataType = Storage.Format.FieldType.Float64 });
+                changed = true;
+                promotedIntToFloat = true;
+            }
+
+            if (!normalized.Equals(value))
+            {
+                normalizedFields ??= new Dictionary<string, FieldValue>(point.Fields, StringComparer.Ordinal);
+                normalizedFields[fieldName] = normalized;
+            }
+        }
+
+        if (changed)
+        {
+            if (promotedIntToFloat && MemTable.PointCount > 0)
+                FlushNowLocked();
+
+            var updated = MeasurementSchema.Create(schema.Name, columns, schema.CreatedAtUtcTicks);
+            Measurements.LoadOrReplace(updated);
+            PersistMeasurementSchemasLocked();
+        }
+
+        if (normalizedFields is null)
+            return point;
+
+        return Point.Create(point.Measurement, point.Timestamp, point.Tags, normalizedFields);
+    }
+
+    private static MeasurementSchema CreateSchemaFromPoint(Point point)
+    {
+        var columns = new List<MeasurementColumn>(point.Tags.Count + point.Fields.Count);
+        foreach (var (tagName, _) in point.Tags)
+            columns.Add(new MeasurementColumn(tagName, MeasurementColumnRole.Tag, Storage.Format.FieldType.String));
+        foreach (var (fieldName, value) in point.Fields)
+            columns.Add(CreateFieldColumn(fieldName, value));
+        return MeasurementSchema.Create(point.Measurement, columns);
+    }
+
+    private static MeasurementColumn CreateFieldColumn(string fieldName, FieldValue value)
+        => value.Type == Storage.Format.FieldType.Vector
+            ? new MeasurementColumn(fieldName, MeasurementColumnRole.Field, value.Type, value.VectorDimension)
+            : new MeasurementColumn(fieldName, MeasurementColumnRole.Field, value.Type);
+
+    private static FieldValue NormalizeFieldValue(
+        string measurement,
+        MeasurementColumn column,
+        FieldValue value,
+        out bool promotedIntToFloat)
+    {
+        promotedIntToFloat = false;
+        if (column.DataType == Storage.Format.FieldType.Float64 && value.Type == Storage.Format.FieldType.Int64)
+            return FieldValue.FromDouble(value.AsLong());
+
+        if (column.DataType == Storage.Format.FieldType.Int64 && value.Type == Storage.Format.FieldType.Float64)
+        {
+            promotedIntToFloat = true;
+            return value;
+        }
+
+        if (column.DataType == Storage.Format.FieldType.Vector && value.Type == Storage.Format.FieldType.Vector)
+        {
+            var expectedDim = column.VectorDimension
+                ?? throw new InvalidOperationException(
+                    $"Measurement '{measurement}' 的 VECTOR 列 '{column.Name}' 缺少维度声明。");
+            if (value.VectorDimension != expectedDim)
+                throw new InvalidOperationException(
+                    $"Measurement '{measurement}' 的 VECTOR 列 '{column.Name}' 维度不匹配：声明 {expectedDim}，实际 {value.VectorDimension}。");
+            return value;
+        }
+
+        if (column.DataType != value.Type)
+            throw new InvalidOperationException(
+                $"Measurement '{measurement}' 的 FIELD 列 '{column.Name}' 期望 {column.DataType}，实际写入 {value.Type}。");
+
+        return value;
+    }
+
+    private static void ReplaceColumn(List<MeasurementColumn> columns, string name, MeasurementColumn replacement)
+    {
+        for (int i = 0; i < columns.Count; i++)
+        {
+            if (string.Equals(columns[i].Name, name, StringComparison.Ordinal))
+            {
+                columns[i] = replacement;
+                return;
+            }
+        }
+    }
+
+    private void PersistMeasurementSchemasLocked()
+        => MeasurementSchemaCodec.Save(
+            TsdbPaths.MeasurementSchemaPath(RootDirectory),
+            Measurements.Snapshot());
 
     /// <summary>
     /// （仅测试用）模拟进程崩溃：直接关闭 WAL，不保存 catalog，不 Flush MemTable。

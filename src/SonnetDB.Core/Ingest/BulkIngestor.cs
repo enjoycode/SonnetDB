@@ -130,7 +130,16 @@ public static class BulkIngestor
     private static int FlushBatch(Tsdb tsdb, Point[] buffer, int count, BulkErrorPolicy policy, ref int skipped)
     {
         if (policy == BulkErrorPolicy.FailFast)
-            return tsdb.WriteMany(buffer.AsSpan(0, count));
+        {
+            try
+            {
+                return tsdb.WriteMany(buffer.AsSpan(0, count));
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+            {
+                throw new BulkIngestException(ex.Message, ex);
+            }
+        }
 
         // Skip：逐点写，捕获写入侧异常
         int written = 0;

@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Added
+- **写入路径支持受控 schema-on-write**：`Tsdb.Write/WriteMany` 现在会在写 WAL / MemTable 前自动创建或扩展 measurement schema，并先持久化 `measurements.tslschema`，覆盖 SQL `INSERT`、Line Protocol、JSON points 与 Bulk VALUES；缺失 TAG / FIELD 自动补齐，已有 `INT` 字段遇到 `FLOAT` 值会提升为 `FLOAT`，已有 `FLOAT` 字段接收整数时会转换为浮点保存，其它类型漂移仍拒绝。
 - 新增 `eng/build-windows.ps1`，一键完成 Windows `win-x64` Release 构建、NuGet 打包、ZIP Bundle 与 MSI 输出，并把最终可发布文件汇总到 `artifacts/windows/final/` 后清理中间产物；同步修正发布脚本 NuGet 清单为 `SonnetDB.Core` / `SonnetDB` / `SonnetDB.Cli`，让服务端 publish 正确尊重 `BuildAdminUi` 开关，并让 Windows MSI 安装 `SonnetDB` 服务、通过 `DATAROOT` 指定数据目录、把 `sndb` 加入系统 `PATH`。
 - **Apache IoTDB / PostgreSQL TimescaleDB 服务端基准**：`tests/SonnetDB.Benchmarks` 新增 IoTDB REST v2 `insertTablet` / SQL 查询 / `GROUP BY` 时间窗口基准，以及 TimescaleDB hypertable + binary COPY / range query / `time_bucket` 基准；Docker benchmark 环境、启动脚本、README 与 `docs/blogs/111-113` 对比通稿同步补齐实测数据，并统一 benchmark 文档中的时间单位为 ms、数据大小单位为 MB。
 - **LiteDB 嵌入式基准**：`tests/SonnetDB.Benchmarks` 新增 LiteDB 5.0.21 对照，覆盖 100 万点 `InsertBulk` 写入、`Ts` 索引范围查询与 1 分钟桶文档顺扫聚合，并在 benchmark 文档与对比通稿中补充实测数据。
@@ -22,6 +23,7 @@
 - **PR #77 — 地理空间基准 + 文档完善**：新增 `GeoQueryBenchmark`，覆盖 `100k` 默认轨迹点和可选 `1M` 档位下的 `geo_within`、`geo_bbox`、`trajectory_length` 与 `GEOPOINT` range scan；README 与 `docs/geo-spatial.md` 补齐地理空间功能矩阵、Web Admin / SQL Console 地图用法、基准运行方式和车辆追踪 / 户外运动 / IoT 地理围栏端到端示例。
 
 ### Docs
+- 新增 `docs/blogs/117-schema-on-write.md`，介绍受控 schema-on-write 的使用场景、SQL / LP / JSON / Bulk VALUES 自动补列规则、`INT -> FLOAT` 类型提升与 schema 先持久化再写 WAL 的崩溃安全语义。
 - 新增 `docs/sql-cookbook.md`，把 `demo.sql` 中高频、当前真实支持的 `CREATE MEASUREMENT`、`INSERT`、`SELECT`、`GROUP BY time(...)`、窗口函数、PID、预测、向量检索、元数据与 `DELETE` 场景整理成可直接复制的 cookbook，并在 `docs/index.md` 与 `docs/sql-reference.md` 中加入入口。
 
 ### Fixed

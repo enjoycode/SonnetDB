@@ -46,7 +46,7 @@ CREATE MEASUREMENT cpu (
 
 说明：
 
-- measurement 有显式 schema。
+- measurement 有 schema；可以通过 `CREATE MEASUREMENT` 显式定义，也可以在首次写入时自动推断创建。
 - schema 中必须至少包含一个 `FIELD` 列。
 - `TAG` 列只能是字符串类型。
 - `time` 不是 schema 里声明的普通列，而是保留时间列。
@@ -89,7 +89,7 @@ field 是真正随时间变化的观测值。当前支持：
 - `BOOL`
 - `STRING`
 
-同一个 measurement 中，field 的名称和类型应该保持稳定。SQL 查询和 ADO.NET 读取会依赖这一点推断结果列类型。
+同一个 measurement 中，field 的名称和类型应该尽量保持稳定。写入路径支持受控的 schema 演进：缺失的 tag / field 会自动追加，`INT` 字段后续遇到 `FLOAT` 值时会提升为 `FLOAT`；已经是 `FLOAT` 的字段再写入整数会在入库前转成浮点保存。其它类型漂移仍会被拒绝。
 
 ## time
 
@@ -169,10 +169,22 @@ VALUES (1000, 'server-01', 0.71, 63.5)
 - `wal/`
 - `segments/`
 
+## 自动 schema 演进
+
+Line Protocol、JSON points、Bulk VALUES 和普通 SQL `INSERT` 都支持写入时补齐缺失列：
+
+- LP / JSON 天然区分 `tags` 与 `fields`，缺失 tag 会追加为 `TAG STRING`，缺失 field 会按写入值类型追加为 `FIELD`。
+- SQL `INSERT` 中已存在列按 schema 解释；未知字符串列会推断为 `TAG`，未知非字符串列会推断为 `FIELD`。
+- 已有 `FLOAT` 字段接收整数时仍保持 `FLOAT`，写入前转换为浮点。
+- 已有 `INT` 字段接收浮点时提升为 `FLOAT`。
+- `FLOAT` 不会降级为 `INT`，`BOOL` / `STRING` / `VECTOR` / `GEOPOINT` 等类型之间不会自动互转。
+
+Schema 变更会先持久化到 `measurements.tslschema`，随后才写入 WAL 与数据，避免崩溃恢复后出现“数据存在但 schema 不可见”的状态。
+
 ## 建模建议
 
 - 用 measurement 表示业务对象类型，不要一个 measurement 混太多无关概念。
 - 用 tag 表示筛选和身份维度。
 - 用 field 表示采样值和状态值。
 - 统一时间精度，当前默认以 Unix 毫秒表达。
-- 保持 schema 稳定，减少同名 field 的类型漂移。
+- 保持 schema 稳定，减少同名 field 的类型漂移；自动演进适合接入侧快速落地，不建议把同一 measurement 当成完全无约束的宽表。

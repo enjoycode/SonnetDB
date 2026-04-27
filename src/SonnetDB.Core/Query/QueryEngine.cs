@@ -88,11 +88,7 @@ public sealed class QueryEngine
                 continue;
             }
 
-            // FieldType 校验
-            if (memFieldType.HasValue && memFieldType.Value != blockRef.FieldType)
-                throw new InvalidOperationException(
-                    $"FieldType mismatch across MemTable and Segment for series {query.SeriesId:X16}/{query.FieldName}: " +
-                    $"MemTable={memFieldType.Value}, Segment(id={blockRef.SegmentId})={blockRef.FieldType}。");
+            ThrowIfFieldTypeMismatch(memFieldType, blockRef);
 
             if (!readers.TryGetValue(blockRef.SegmentId, out var reader))
             {
@@ -878,13 +874,19 @@ public sealed class QueryEngine
 
     private static void ThrowIfFieldTypeMismatch(FieldType? memFieldType, SegmentBlockRef blockRef)
     {
-        if (memFieldType.HasValue && memFieldType.Value != blockRef.FieldType)
+        if (memFieldType.HasValue
+            && memFieldType.Value != blockRef.FieldType
+            && !IsIntFloatCompatible(memFieldType.Value, blockRef.FieldType))
         {
             throw new InvalidOperationException(
                 $"FieldType mismatch across MemTable and Segment for series {blockRef.SeriesId:X16}/{blockRef.FieldName}: " +
                 $"MemTable={memFieldType.Value}, Segment(id={blockRef.SegmentId})={blockRef.FieldType}。");
         }
     }
+
+    private static bool IsIntFloatCompatible(FieldType left, FieldType right)
+        => (left == FieldType.Int64 && right == FieldType.Float64)
+            || (left == FieldType.Float64 && right == FieldType.Int64);
 
     private struct AggregateState
     {

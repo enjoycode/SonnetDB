@@ -8,6 +8,9 @@ namespace SonnetDB.Ingest;
 /// </summary>
 public enum BulkValuesColumnRole
 {
+    /// <summary>自动推断列角色：字符串字面量按 tag 写入，其它非 NULL 字面量按 field 写入。</summary>
+    Auto,
+
     /// <summary>tag 列：必须为字符串字面量。</summary>
     Tag,
 
@@ -113,6 +116,23 @@ public sealed class BulkValuesReader : IPointReader
 
             switch (_columnRoles[i])
             {
+                case BulkValuesColumnRole.Auto:
+                    if (literal.Kind == LiteralKind.String)
+                    {
+                        tags ??= new Dictionary<string, string>(StringComparer.Ordinal);
+                        tags[_columnNames[i]] = literal.StringValue!;
+                    }
+                    else if (literal.Kind == LiteralKind.Null)
+                    {
+                        throw new BulkIngestException(
+                            $"Bulk INSERT: 自动推断列 '{_columnNames[i]}' 不允许 NULL。");
+                    }
+                    else
+                    {
+                        fields ??= new Dictionary<string, FieldValue>(StringComparer.Ordinal);
+                        fields[_columnNames[i]] = LiteralToFieldValue(literal, _columnNames[i]);
+                    }
+                    break;
                 case BulkValuesColumnRole.Time:
                     if (literal.Kind != LiteralKind.Integer)
                         throw new BulkIngestException(
@@ -128,15 +148,7 @@ public sealed class BulkValuesReader : IPointReader
                     break;
                 case BulkValuesColumnRole.Field:
                     fields ??= new Dictionary<string, FieldValue>(StringComparer.Ordinal);
-                    fields[_columnNames[i]] = literal.Kind switch
-                    {
-                        LiteralKind.Integer => FieldValue.FromLong(literal.IntValue),
-                        LiteralKind.Double => FieldValue.FromDouble(literal.DoubleValue),
-                        LiteralKind.Bool => FieldValue.FromBool(literal.IntValue != 0),
-                        LiteralKind.String => FieldValue.FromString(literal.StringValue!),
-                        _ => throw new BulkIngestException(
-                            $"Bulk INSERT: field 列 '{_columnNames[i]}' 不允许 NULL。"),
-                    };
+                    fields[_columnNames[i]] = LiteralToFieldValue(literal, _columnNames[i]);
                     break;
             }
 
@@ -364,4 +376,15 @@ public sealed class BulkValuesReader : IPointReader
         _cursor += kw.Length;
         return true;
     }
+
+    private static FieldValue LiteralToFieldValue(Literal literal, string columnName)
+        => literal.Kind switch
+        {
+            LiteralKind.Integer => FieldValue.FromLong(literal.IntValue),
+            LiteralKind.Double => FieldValue.FromDouble(literal.DoubleValue),
+            LiteralKind.Bool => FieldValue.FromBool(literal.IntValue != 0),
+            LiteralKind.String => FieldValue.FromString(literal.StringValue!),
+            _ => throw new BulkIngestException(
+                $"Bulk INSERT: field 列 '{columnName}' 不允许 NULL。"),
+        };
 }

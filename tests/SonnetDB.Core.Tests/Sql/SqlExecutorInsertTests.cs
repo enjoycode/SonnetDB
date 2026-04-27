@@ -1,4 +1,5 @@
 ﻿using SonnetDB.Engine;
+using SonnetDB.Catalog;
 using SonnetDB.Model;
 using SonnetDB.Query;
 using SonnetDB.Sql;
@@ -136,22 +137,33 @@ public class SqlExecutorInsertTests : IDisposable
     }
 
     [Fact]
-    public void Insert_MeasurementMissing_Throws()
+    public void Insert_MeasurementMissing_AutoCreatesSchema()
     {
         using var db = Tsdb.Open(Options());
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            SqlExecutor.Execute(db, "INSERT INTO ghost (a) VALUES (1)"));
-        Assert.Contains("ghost", ex.Message);
+        var result = Assert.IsType<InsertExecutionResult>(SqlExecutor.Execute(db,
+            "INSERT INTO ghost (time, host, usage) VALUES (1, 'h1', 1.5)"));
+
+        Assert.Equal(1, result.RowsInserted);
+        var schema = db.Measurements.TryGet("ghost");
+        Assert.NotNull(schema);
+        Assert.Equal(MeasurementColumnRole.Tag, schema!.TryGetColumn("host")!.Role);
+        Assert.Equal(MeasurementColumnRole.Field, schema.TryGetColumn("usage")!.Role);
+        Assert.Equal(FieldType.Float64, schema.TryGetColumn("usage")!.DataType);
     }
 
     [Fact]
-    public void Insert_UnknownColumn_Throws()
+    public void Insert_UnknownColumns_AutoExtendsSchema()
     {
         using var db = OpenWithSchema(Options());
 
-        Assert.Throws<InvalidOperationException>(() =>
-            SqlExecutor.Execute(db, "INSERT INTO cpu (time, host, nonexistent) VALUES (1, 'h1', 1.0)"));
+        SqlExecutor.Execute(db,
+            "INSERT INTO cpu (time, host, rack, temperature) VALUES (1, 'h1', 'r1', 42.5)");
+
+        var schema = db.Measurements.TryGet("cpu")!;
+        Assert.Equal(MeasurementColumnRole.Tag, schema.TryGetColumn("rack")!.Role);
+        Assert.Equal(MeasurementColumnRole.Field, schema.TryGetColumn("temperature")!.Role);
+        Assert.Equal(FieldType.Float64, schema.TryGetColumn("temperature")!.DataType);
     }
 
     [Fact]
@@ -183,6 +195,54 @@ public class SqlExecutorInsertTests : IDisposable
         // usage 是 FLOAT，但传入字符串（int → float 允许，string → float 不允许）
         Assert.Throws<InvalidOperationException>(() =>
             SqlExecutor.Execute(db, "INSERT INTO cpu (time, host, usage) VALUES (1, 'h1', 'oops')"));
+    }
+
+    [Fact]
+    public void Insert_IntFieldWithFloatValue_PromotesSchemaToFloat()
+    {
+        using var db = OpenWithSchema(Options());
+
+        SqlExecutor.Execute(db, "INSERT INTO cpu (time, host, count) VALUES (1, 'h1', 1)");
+        SqlExecutor.Execute(db, "INSERT INTO cpu (time, host, count) VALUES (2, 'h1', 1.5)");
+
+        var schema = db.Measurements.TryGet("cpu")!;
+        Assert.Equal(FieldType.Float64, schema.TryGetColumn("count")!.DataType);
+
+        var seriesId = SeriesId.Compute(new SeriesKey("cpu", new Dictionary<string, string>
+        {
+            ["host"] = "h1",
+        }));
+        var points = db.Query.Execute(new PointQuery(seriesId, "count",
+            new TimeRange(0, long.MaxValue))).ToList();
+        Assert.Equal(2, points.Count);
+        Assert.Equal(FieldType.Int64, points[0].Value.Type);
+        Assert.Equal(FieldType.Float64, points[1].Value.Type);
+
+        var selected = Assert.IsType<SelectExecutionResult>(SqlExecutor.Execute(db,
+            "SELECT count FROM cpu WHERE host = 'h1'"));
+        Assert.Equal(2, selected.Rows.Count);
+        Assert.IsType<double>(selected.Rows[0][0]);
+        Assert.IsType<double>(selected.Rows[1][0]);
+    }
+
+    [Fact]
+    public void Insert_FloatFieldWithIntegerValue_KeepsFloatSchemaAndStoresFloat()
+    {
+        using var db = OpenWithSchema(Options());
+
+        SqlExecutor.Execute(db, "INSERT INTO cpu (time, host, usage) VALUES (1, 'h1', 7)");
+
+        var schema = db.Measurements.TryGet("cpu")!;
+        Assert.Equal(FieldType.Float64, schema.TryGetColumn("usage")!.DataType);
+
+        var seriesId = SeriesId.Compute(new SeriesKey("cpu", new Dictionary<string, string>
+        {
+            ["host"] = "h1",
+        }));
+        var point = db.Query.Execute(new PointQuery(seriesId, "usage",
+            new TimeRange(0, long.MaxValue))).Single();
+        Assert.Equal(FieldType.Float64, point.Value.Type);
+        Assert.Equal(7.0, point.Value.AsDouble());
     }
 
     [Fact]

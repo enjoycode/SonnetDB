@@ -1,6 +1,8 @@
 ﻿using SonnetDB.Engine;
+using SonnetDB.Catalog;
 using SonnetDB.Ingest;
 using SonnetDB.Memory;
+using SonnetDB.Storage.Format;
 using SonnetDB.Storage.Segments;
 using Xunit;
 
@@ -36,6 +38,31 @@ public sealed class BulkIngestorTests : IDisposable
         Assert.Equal(0, result.Skipped);
         Assert.Equal(3L, db.MemTable.PointCount);
         Assert.Equal(2, db.Catalog.Count);
+        var schema = db.Measurements.TryGet("cpu");
+        Assert.NotNull(schema);
+        Assert.Equal(MeasurementColumnRole.Tag, schema!.TryGetColumn("h")!.Role);
+        Assert.Equal(MeasurementColumnRole.Field, schema.TryGetColumn("v")!.Role);
+        Assert.Equal(FieldType.Float64, schema.TryGetColumn("v")!.DataType);
+    }
+
+    [Fact]
+    public void Ingest_Json_AutoCreatesSchema()
+    {
+        using var db = Tsdb.Open(Opts());
+        const string json = """
+        {"m":"sensor","points":[
+          {"t":1,"tags":{"host":"a"},"fields":{"value":1.5,"ok":true}}
+        ]}
+        """;
+        using var reader = new JsonPointsReader(json.AsMemory());
+        var result = BulkIngestor.Ingest(db, reader);
+
+        Assert.Equal(1, result.Written);
+        var schema = db.Measurements.TryGet("sensor");
+        Assert.NotNull(schema);
+        Assert.Equal(MeasurementColumnRole.Tag, schema!.TryGetColumn("host")!.Role);
+        Assert.Equal(FieldType.Float64, schema.TryGetColumn("value")!.DataType);
+        Assert.Equal(FieldType.Boolean, schema.TryGetColumn("ok")!.DataType);
     }
 
     [Fact]

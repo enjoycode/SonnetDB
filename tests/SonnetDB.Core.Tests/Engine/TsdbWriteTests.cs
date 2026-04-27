@@ -1,6 +1,9 @@
 ﻿using SonnetDB.Engine;
+using SonnetDB.Catalog;
 using SonnetDB.Memory;
 using SonnetDB.Model;
+using SonnetDB.Query;
+using SonnetDB.Storage.Format;
 using SonnetDB.Storage.Segments;
 using SonnetDB.Wal;
 using Xunit;
@@ -64,6 +67,68 @@ public sealed class TsdbWriteTests : IDisposable
         // 新模型：WAL 以 segment 文件存在
         var walSegments = WalSegmentLayout.Enumerate(TsdbPaths.WalDir(_tempDir));
         Assert.NotEmpty(walSegments);
+    }
+
+    [Fact]
+    public void Write_SinglePoint_AutoCreatesAndPersistsMeasurementSchema()
+    {
+        using var db = Tsdb.Open(MakeOptions());
+
+        var point = Point.Create("cpu", 1000L,
+            new Dictionary<string, string> { ["host"] = "srv1" },
+            new Dictionary<string, FieldValue> { ["usage"] = FieldValue.FromDouble(75.0) });
+
+        db.Write(point);
+
+        var schema = db.Measurements.TryGet("cpu");
+        Assert.NotNull(schema);
+        Assert.Equal(MeasurementColumnRole.Tag, schema!.TryGetColumn("host")!.Role);
+        Assert.Equal(MeasurementColumnRole.Field, schema.TryGetColumn("usage")!.Role);
+        Assert.True(File.Exists(TsdbPaths.MeasurementSchemaPath(_tempDir)));
+    }
+
+    [Fact]
+    public void Write_CrashAfterAutoSchema_WalReplayKeepsSchemaVisible()
+    {
+        var point = Point.Create("cpu", 1000L,
+            new Dictionary<string, string> { ["host"] = "srv1" },
+            new Dictionary<string, FieldValue> { ["usage"] = FieldValue.FromDouble(75.0) });
+
+        var db = Tsdb.Open(MakeOptions());
+        db.Write(point);
+        db.CrashSimulationCloseWal();
+
+        using var reopened = Tsdb.Open(MakeOptions());
+        var schema = reopened.Measurements.TryGet("cpu");
+        Assert.NotNull(schema);
+        Assert.NotNull(schema!.TryGetColumn("host"));
+        Assert.NotNull(schema.TryGetColumn("usage"));
+    }
+
+    [Fact]
+    public void Write_IntFieldThenFloatValue_PromotesSchemaAndKeepsQueryReadable()
+    {
+        using var db = Tsdb.Open(MakeOptions());
+
+        db.Write(Point.Create("cpu", 1,
+            new Dictionary<string, string> { ["host"] = "srv1" },
+            new Dictionary<string, FieldValue> { ["usage"] = FieldValue.FromLong(1) }));
+        db.Write(Point.Create("cpu", 2,
+            new Dictionary<string, string> { ["host"] = "srv1" },
+            new Dictionary<string, FieldValue> { ["usage"] = FieldValue.FromDouble(1.5) }));
+
+        var schema = db.Measurements.TryGet("cpu")!;
+        Assert.Equal(FieldType.Float64, schema.TryGetColumn("usage")!.DataType);
+
+        var seriesId = SeriesId.Compute(new SeriesKey("cpu", new Dictionary<string, string>
+        {
+            ["host"] = "srv1",
+        }));
+        var points = db.Query.Execute(new PointQuery(seriesId, "usage",
+            new TimeRange(0, long.MaxValue))).ToList();
+        Assert.Equal(2, points.Count);
+        Assert.Equal(FieldType.Int64, points[0].Value.Type);
+        Assert.Equal(FieldType.Float64, points[1].Value.Type);
     }
 
     [Fact]

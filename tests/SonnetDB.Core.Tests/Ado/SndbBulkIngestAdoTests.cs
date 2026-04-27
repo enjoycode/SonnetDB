@@ -108,7 +108,7 @@ public sealed class TsdbBulkIngestAdoTests : IDisposable
     }
 
     [Fact]
-    public void TableDirect_BulkInsertValues_UnknownColumn_Throws()
+    public void TableDirect_BulkInsertValues_UnknownColumn_AutoExtendsSchema()
     {
         using var c = OpenConn();
         EnsureCpuSchema(c);
@@ -116,7 +116,7 @@ public sealed class TsdbBulkIngestAdoTests : IDisposable
         using var cmd = c.CreateCommand();
         cmd.CommandType = CommandType.TableDirect;
         cmd.CommandText = "INSERT INTO cpu(host, nope, time) VALUES ('a', 1, 1)";
-        Assert.Throws<SonnetDB.Ingest.BulkIngestException>(() => cmd.ExecuteNonQuery());
+        Assert.Equal(1, cmd.ExecuteNonQuery());
     }
 
     [Fact]

@@ -127,7 +127,7 @@ Data Source=sonnetdb+http://127.0.0.1:5080/metrics;Token=...
 ## 当前设计取向
 
 - 嵌入式优先，而不是只做远程服务
-- 强调 schema-first，而不是完全 schema-less
+- 强调受控 schema-on-write，而不是完全 schema-less：写入可自动补 tag/field，但已有列仍做类型兼容校验
 - 强调当前真实实现，而不是未来规划接口
 - 数据库目录持久化优先于单文件目标
 - 把帮助文档作为产品的一部分，而不是仓库外部说明

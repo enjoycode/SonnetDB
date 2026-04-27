@@ -276,7 +276,7 @@ internal static class SelectExecutor
                         ProjectionKind.Time => ts,
                         ProjectionKind.Tag => series.Tags.TryGetValue(p.Column!.Name, out var tagVal) ? tagVal : null,
                         ProjectionKind.Field => fieldLookups[p.Column!.Name].TryGetValue(ts, out var v)
-                            ? UnboxFieldValue(v)
+                            ? UnboxFieldValue(p.Column, v)
                             : null,
                         ProjectionKind.Scalar => EvaluateScalarProjection(p, ts, series, fieldLookups),
                         ProjectionKind.Window => windowOutputs[i]![rowIdx],
@@ -547,6 +547,13 @@ internal static class SelectExecutor
         FieldType.GeoPoint => v.AsGeoPoint(),
         _ => throw new InvalidOperationException($"不支持的 FieldType {v.Type}。"),
     };
+
+    private static object UnboxFieldValue(MeasurementColumn column, FieldValue value)
+    {
+        if (column.DataType == FieldType.Float64 && value.Type == FieldType.Int64)
+            return (double)value.AsLong();
+        return UnboxFieldValue(value);
+    }
 
     // ── 聚合模式 ───────────────────────────────────────────────────────────
 
