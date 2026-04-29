@@ -81,6 +81,9 @@ public sealed class FlushCoordinatorTests : IDisposable
         // MemTable 应已清空
         Assert.Equal(0, (int)memTable.PointCount);
         Assert.Equal(0, memTable.SeriesCount);
+        Assert.Equal(0L, memTable.EstimatedBytes);
+        Assert.Equal(long.MaxValue, memTable.MinTimestamp);
+        Assert.Equal(long.MinValue, memTable.MaxTimestamp);
     }
 
     [Fact]

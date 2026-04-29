@@ -7,14 +7,19 @@ namespace SonnetDB.Memory;
 
 /// <summary>
 /// 写入路径的内存层：以 <see cref="SeriesFieldKey"/> 为主键聚合 <see cref="MemTableSeries"/>。
-/// 单写多读：写入路径串行（由上层调用方保证），读取（Snapshot/Find）线程安全。
+/// <see cref="Append"/> 可并发调用；<see cref="Reset"/> 与追加互斥，读取（Snapshot/Find）线程安全。
 /// </summary>
 public sealed class MemTable
 {
     private readonly ConcurrentDictionary<SeriesFieldKey, MemTableSeries> _series = new();
+    private readonly ReaderWriterLockSlim _lifecycleLock = new();
     private long _pointCount;
+    private long _estimatedBytes;
+    private long _minTimestamp = long.MaxValue;
+    private long _maxTimestamp = long.MinValue;
     private long _firstLsn = long.MinValue;
     private long _lastLsn = long.MinValue;
+    private long _createdAtUtcTicks = DateTime.UtcNow.Ticks;
 
     /// <summary>当前 MemTable 包含的不同 (SeriesId, FieldName) 桶数量。</summary>
     public int SeriesCount => _series.Count;
@@ -23,48 +28,13 @@ public sealed class MemTable
     public long PointCount => Interlocked.Read(ref _pointCount);
 
     /// <summary>所有桶的估算总内存占用（字节）。</summary>
-    public long EstimatedBytes
-    {
-        get
-        {
-            long total = 0;
-            foreach (var s in _series.Values)
-                total += s.EstimatedBytes;
-            return total;
-        }
-    }
+    public long EstimatedBytes => Interlocked.Read(ref _estimatedBytes);
 
     /// <summary>所有桶中最小时间戳；MemTable 为空时返回 <see cref="long.MaxValue"/>。</summary>
-    public long MinTimestamp
-    {
-        get
-        {
-            long min = long.MaxValue;
-            foreach (var s in _series.Values)
-            {
-                long sMin = s.MinTimestamp;
-                if (sMin < min)
-                    min = sMin;
-            }
-            return min;
-        }
-    }
+    public long MinTimestamp => Interlocked.Read(ref _minTimestamp);
 
     /// <summary>所有桶中最大时间戳；MemTable 为空时返回 <see cref="long.MinValue"/>。</summary>
-    public long MaxTimestamp
-    {
-        get
-        {
-            long max = long.MinValue;
-            foreach (var s in _series.Values)
-            {
-                long sMax = s.MaxTimestamp;
-                if (sMax > max)
-                    max = sMax;
-            }
-            return max;
-        }
-    }
+    public long MaxTimestamp => Interlocked.Read(ref _maxTimestamp);
 
     /// <summary>自上次 Flush 后接收的第一条 WAL LSN；未写入任何记录时为 <see cref="long.MinValue"/>。</summary>
     public long FirstLsn => Interlocked.Read(ref _firstLsn);
@@ -73,7 +43,7 @@ public sealed class MemTable
     public long LastLsn => Interlocked.Read(ref _lastLsn);
 
     /// <summary>MemTable 创建（或上次 Reset）的 UTC 时间，用于 MaxAge 阈值判断。</summary>
-    public DateTime CreatedAtUtc { get; private set; } = DateTime.UtcNow;
+    public DateTime CreatedAtUtc => new(Interlocked.Read(ref _createdAtUtcTicks), DateTimeKind.Utc);
 
     /// <summary>
     /// 追加一条写入点（来自上层调用或 WAL Replay）。
@@ -89,22 +59,33 @@ public sealed class MemTable
     {
         ArgumentNullException.ThrowIfNull(fieldName);
 
-        var key = new SeriesFieldKey(seriesId, fieldName);
-        var fieldType = value.Type;
+        _lifecycleLock.EnterReadLock();
+        try
+        {
+            var key = new SeriesFieldKey(seriesId, fieldName);
+            var fieldType = value.Type;
 
-        var bucket = _series.GetOrAdd(key, static (k, ft) => new MemTableSeries(k, ft), fieldType);
+            var bucket = _series.GetOrAdd(key, static (k, ft) => new MemTableSeries(k, ft), fieldType);
 
-        if (bucket.FieldType != fieldType)
-            throw new InvalidOperationException(
-                $"FieldType mismatch for key '{key}': existing={bucket.FieldType}, new={fieldType}.");
+            if (bucket.FieldType != fieldType)
+                throw new InvalidOperationException(
+                    $"FieldType mismatch for key '{key}': existing={bucket.FieldType}, new={fieldType}.");
 
-        bucket.Append(pointTimestamp, value);
-        Interlocked.Increment(ref _pointCount);
+            long addedBytes = bucket.AppendAndEstimateBytes(pointTimestamp, value);
+            Interlocked.Add(ref _estimatedBytes, addedBytes);
+            UpdateMin(ref _minTimestamp, pointTimestamp);
+            UpdateMax(ref _maxTimestamp, pointTimestamp);
+            Interlocked.Increment(ref _pointCount);
 
-        // FirstLsn: 仅首次 Append 时设置
-        Interlocked.CompareExchange(ref _firstLsn, lsn, long.MinValue);
-        // LastLsn: 单调推进
-        Interlocked.Exchange(ref _lastLsn, lsn);
+            // FirstLsn: 仅首次 Append 时设置
+            Interlocked.CompareExchange(ref _firstLsn, lsn, long.MinValue);
+            // LastLsn: 单调推进
+            Interlocked.Exchange(ref _lastLsn, lsn);
+        }
+        finally
+        {
+            _lifecycleLock.ExitReadLock();
+        }
     }
 
     /// <summary>
@@ -164,11 +145,22 @@ public sealed class MemTable
     /// </summary>
     public void Reset()
     {
-        _series.Clear();
-        Interlocked.Exchange(ref _pointCount, 0L);
-        Interlocked.Exchange(ref _firstLsn, long.MinValue);
-        Interlocked.Exchange(ref _lastLsn, long.MinValue);
-        CreatedAtUtc = DateTime.UtcNow;
+        _lifecycleLock.EnterWriteLock();
+        try
+        {
+            _series.Clear();
+            Interlocked.Exchange(ref _pointCount, 0L);
+            Interlocked.Exchange(ref _estimatedBytes, 0L);
+            Interlocked.Exchange(ref _minTimestamp, long.MaxValue);
+            Interlocked.Exchange(ref _maxTimestamp, long.MinValue);
+            Interlocked.Exchange(ref _firstLsn, long.MinValue);
+            Interlocked.Exchange(ref _lastLsn, long.MinValue);
+            Interlocked.Exchange(ref _createdAtUtcTicks, DateTime.UtcNow.Ticks);
+        }
+        finally
+        {
+            _lifecycleLock.ExitWriteLock();
+        }
     }
 
     /// <summary>
@@ -194,5 +186,29 @@ public sealed class MemTable
         if (DateTime.UtcNow - CreatedAtUtc >= policy.MaxAge)
             return true;
         return false;
+    }
+
+    private static void UpdateMin(ref long target, long value)
+    {
+        while (true)
+        {
+            long current = Interlocked.Read(ref target);
+            if (value >= current)
+                return;
+            if (Interlocked.CompareExchange(ref target, value, current) == current)
+                return;
+        }
+    }
+
+    private static void UpdateMax(ref long target, long value)
+    {
+        while (true)
+        {
+            long current = Interlocked.Read(ref target);
+            if (value <= current)
+                return;
+            if (Interlocked.CompareExchange(ref target, value, current) == current)
+                return;
+        }
     }
 }

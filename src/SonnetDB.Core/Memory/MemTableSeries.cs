@@ -16,6 +16,7 @@ public sealed class MemTableSeries
     private long _lastTimestamp = long.MinValue;
     private long _minTimestamp = long.MaxValue;
     private long _maxTimestamp = long.MinValue;
+    private long _estimatedBytes;
     // 数值字段的运行期增量聚合（Float64/Int64/Boolean），用于范围全覆盖时的查询快路径。
     // 非数值字段始终保持 _hasNumericAggregates = false。
     private bool _hasNumericAggregates;
@@ -71,7 +72,7 @@ public sealed class MemTableSeries
         get
         {
             lock (_sync)
-                return ComputeEstimatedBytes();
+                return _estimatedBytes;
         }
     }
 
@@ -152,6 +153,9 @@ public sealed class MemTableSeries
     /// <paramref name="value"/> 的类型与桶的 <see cref="FieldType"/> 不匹配时抛出。
     /// </exception>
     public void Append(long timestamp, FieldValue value)
+        => _ = AppendAndEstimateBytes(timestamp, value);
+
+    internal long AppendAndEstimateBytes(long timestamp, FieldValue value)
     {
         if (value.Type != FieldType)
             throw new ArgumentException(
@@ -159,6 +163,8 @@ public sealed class MemTableSeries
 
         lock (_sync)
         {
+            long addedBytes = EstimatePointBytes(FieldType, value);
+
             if (timestamp < _lastTimestamp)
                 _isSorted = false;
 
@@ -168,6 +174,8 @@ public sealed class MemTableSeries
                 _minTimestamp = timestamp;
             if (timestamp > _maxTimestamp)
                 _maxTimestamp = timestamp;
+
+            _estimatedBytes += addedBytes;
 
             if (_hasNumericAggregates)
             {
@@ -184,8 +192,25 @@ public sealed class MemTableSeries
             }
 
             _points.Add(new DataPoint(timestamp, value));
+            return addedBytes;
         }
     }
+
+    /// <summary>
+    /// 估算单个数据点追加到当前桶后新增的内存占用。
+    /// </summary>
+    /// <param name="fieldType">字段类型。</param>
+    /// <param name="value">字段值。</param>
+    /// <returns>估算新增字节数。</returns>
+    internal static long EstimatePointBytes(FieldType fieldType, in FieldValue value)
+        => fieldType switch
+        {
+            FieldType.Boolean => 9L,
+            FieldType.String => 16L + System.Text.Encoding.UTF8.GetByteCount(value.AsString()),
+            FieldType.Vector => 16L + value.VectorDimension * 4L,
+            FieldType.GeoPoint => 24L,
+            _ => 16L, // Float64 / Int64
+        };
 
     /// <summary>
     /// 返回排序后的只读快照（按时间戳升序；同 timestamp 保留写入顺序，稳定排序）。
@@ -246,40 +271,6 @@ public sealed class MemTableSeries
     }
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
-
-    private long ComputeEstimatedBytes()
-    {
-        int count = _points.Count;
-        return FieldType switch
-        {
-            FieldType.Boolean => count * 9L,
-            FieldType.String => ComputeStringBytes(),
-            FieldType.Vector => ComputeVectorBytes(),
-            FieldType.GeoPoint => count * 24L,
-            _ => count * 16L, // Float64 / Int64
-        };
-    }
-
-    private long ComputeStringBytes()
-    {
-        long total = 0;
-        foreach (var dp in _points)
-        {
-            total += 8 + System.Text.Encoding.UTF8.GetByteCount(dp.Value.AsString()) + 8;
-        }
-        return total;
-    }
-
-    private long ComputeVectorBytes()
-    {
-        // 8(timestamp) + 8(ROM<float> overhead) + dim*4
-        long total = 0;
-        foreach (var dp in _points)
-        {
-            total += 16 + dp.Value.VectorDimension * 4L;
-        }
-        return total;
-    }
 
     private DataPoint[] StableSorted()
     {

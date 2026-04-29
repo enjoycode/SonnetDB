@@ -99,6 +99,28 @@ public sealed class MemTableTests
     }
 
     [Fact]
+    public void ReplayFrom_UpdatesIncrementalStatistics()
+    {
+        var records = new[]
+        {
+            new SonnetDB.Wal.WritePointRecord(10L, 0L, 1UL, 5000L, "cpu", FieldValue.FromDouble(10.0)),
+            new SonnetDB.Wal.WritePointRecord(11L, 0L, 2UL, -100L, "ok", FieldValue.FromBool(true)),
+            new SonnetDB.Wal.WritePointRecord(12L, 0L, 3UL, 8000L, "label", FieldValue.FromString("abc")),
+            new SonnetDB.Wal.WritePointRecord(13L, 0L, 4UL, 3000L, "embedding", FieldValue.FromVector(new[] { 1.0f, 2.0f, 3.0f })),
+        };
+
+        var table = new MemTable();
+        int replayed = table.ReplayFrom(records);
+
+        Assert.Equal(4, replayed);
+        Assert.Equal(4L, table.PointCount);
+        Assert.Equal(4, table.SeriesCount);
+        Assert.Equal(72L, table.EstimatedBytes);
+        Assert.Equal(-100L, table.MinTimestamp);
+        Assert.Equal(8000L, table.MaxTimestamp);
+    }
+
+    [Fact]
     public void ReplayFrom_EmptyInput_ReturnsZero()
     {
         var table = new MemTable();
@@ -120,6 +142,9 @@ public sealed class MemTableTests
 
         Assert.Equal(0, table.SeriesCount);
         Assert.Equal(0L, table.PointCount);
+        Assert.Equal(0L, table.EstimatedBytes);
+        Assert.Equal(long.MaxValue, table.MinTimestamp);
+        Assert.Equal(long.MinValue, table.MaxTimestamp);
         Assert.Equal(long.MinValue, table.FirstLsn);
         Assert.Equal(long.MinValue, table.LastLsn);
     }
@@ -159,6 +184,40 @@ public sealed class MemTableTests
 
         Assert.Equal(100L, table.FirstLsn);
         Assert.Equal(300L, table.LastLsn);
+    }
+
+    [Fact]
+    public async Task Append_ConcurrentAppend_MaintainsIncrementalStatistics()
+    {
+        var table = new MemTable();
+        const int tasks = 8;
+        const int pointsPerTask = 500;
+        const long firstTimestamp = -1_000_000L;
+
+        var appendTasks = Enumerable.Range(0, tasks)
+            .Select(taskIndex => Task.Run(() =>
+            {
+                for (int i = 0; i < pointsPerTask; i++)
+                {
+                    long offset = taskIndex * pointsPerTask + i;
+                    table.Append(
+                        (ulong)(taskIndex + 1),
+                        firstTimestamp + offset,
+                        "v",
+                        FieldValue.FromDouble(offset),
+                        offset + 1);
+                }
+            }))
+            .ToArray();
+
+        await Task.WhenAll(appendTasks);
+
+        long expectedCount = tasks * pointsPerTask;
+        Assert.Equal(expectedCount, table.PointCount);
+        Assert.Equal(tasks, table.SeriesCount);
+        Assert.Equal(expectedCount * 16L, table.EstimatedBytes);
+        Assert.Equal(firstTimestamp, table.MinTimestamp);
+        Assert.Equal(firstTimestamp + expectedCount - 1, table.MaxTimestamp);
     }
 
     [Fact]
