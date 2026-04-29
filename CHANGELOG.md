@@ -6,6 +6,10 @@
 ## [Unreleased]
 
 ### Added
+- **WAL LastLsn footer 元数据**：新 WAL segment 会在记录区后追加 32 字节 LastLsn footer，`WalWriter.Open` 优先通过 footer 快速恢复 `NextLsn`，旧 WAL、损坏 footer 与截断尾部会自动回退到顺序扫描并重写 footer；`WalRecordHeader` 与既有 WAL 记录格式保持不变，旧 WAL 继续可读。
+- **WAL group-commit**：`SyncWalOnEveryWrite=true` 时新增可配置的 `WalGroupCommitOptions`（默认 2 ms 窗口），多个并发 `Write` / `WriteMany` / `Delete` 请求会在写入 WAL 后共享一次 `Flush(true)`，写请求仍会等待该批 fsync 完成后返回；WAL record/header 二进制格式不变，旧 WAL 继续可读。新增 WAL group-commit 崩溃恢复、`WriteMany` 批量写入、并发写入测试与 `WalGroupCommitBenchmark` 基准。
+- **WAL 小记录写入优化**：`WalWriter.AppendRecord` 现在会将 `WalRecordHeader` 与 payload 合并到同一块 `stackalloc` / `ArrayPool` 缓冲后尽量单次 `Stream.Write`，保留原有 CRC32 payload 校验与 WAL 二进制布局不变；补充小/大 payload round-trip、CRC 损坏和截断容忍回归测试。
+- **WAL 写缓冲策略评估**：新增 `WalBufferingBenchmark` 对比 `BufferedStream(FileStream)` 与 `FileStream + self buffer`；本机 microbenchmark 显示 BCL `BufferedStream` 在 200 万条 WAL-like 小记录写入中吞吐更优（约 91.15 ms vs 96.94 ms），因此生产路径继续保留 `BufferedStream`，`Sync()` 的 `Flush(true)` 持久化语义不变。
 - 新增独立 `OPTIMIZATION_ROADMAP.md`，用于跟踪 `src/SonnetDB.Core` 核心库性能与可靠性优化路线，覆盖写入吞吐、MemTable 热路径、查询索引与缓存、窗口函数、崩溃恢复和现代 C# / Analyzer 六个阶段，并为每项任务提供状态标记、执行顺序、验收标准与可复用提示词。
 - **Copilot Agent 提示词增强**：参考 VS Code Copilot 的行动型助手原则，强化 SonnetDB Copilot 的身份边界、工具优先、上下文事实校验、安全/版权边界、模型回答规则与 SQL 方言纠错约束，避免冒充外部产品或编造数据库结构。
 - **SQL DDL 兼容修饰符（PR 4）**：lexer 新增 `DEFAULT` 关键字；`CREATE MEASUREMENT` parser 接受列级 `NULL` / `NOT NULL` 与 `DEFAULT <expr>` 并在 AST 中保留；执行层对 `DEFAULT` 返回明确 unsupported，`NULL` / `NOT NULL` 保持兼容性 no-op，并在 SQL 文档中说明 SonnetDB 的稀疏字段语义。
@@ -29,6 +33,10 @@
 - **PR #75 — SQL 控制台地图渲染集成**：查询结果自动检测 GeoJSON Point / GeoPoint 列并显示地图视图，SqlResultPanel 支持文本 / 表格 / 图表 / 地图切换；ResultMapPreview.vue 支持散点、按时间排序轨迹连线与低基数列分组，多点结果可直接在 SQL Console 预览。
 - **PR #76 — 地理空间索引（Geohash 段内过滤）**：Segment 格式升级到 v5，`BlockHeader` 新增 `GeoHashMin` / `GeoHashMax` 32-bit geohash 前缀；`SegmentWriter` 为 GEOPOINT Block 写入空间范围，`QueryEngine` 在 `geo_within` / `geo_bbox` WHERE 谓词下对落盘 block 做 geohash 剪枝，同时保留 v4 段文件只读兼容。
 - **PR #77 — 地理空间基准 + 文档完善**：新增 `GeoQueryBenchmark`，覆盖 `100k` 默认轨迹点和可选 `1M` 档位下的 `geo_within`、`geo_bbox`、`trajectory_length` 与 `GEOPOINT` range scan；README 与 `docs/geo-spatial.md` 补齐地理空间功能矩阵、Web Admin / SQL Console 地图用法、基准运行方式和车辆追踪 / 户外运动 / IoT 地理围栏端到端示例。
+
+### Changed
+- **Measurement schema-on-write 批量持久化**：`Tsdb.WriteMany(ReadOnlySpan<Point>)` 现在会先合并整批新增 TAG/FIELD 与 INT→FLOAT 类型提升，单次原子写入 `measurements.tslschema` 后再写 WAL/MemTable，保持“schema 先于数据可恢复”的崩溃安全语义，同时避免同一批导入中每个新增列都触发一次 schema fsync。
+- **WAL catalog checkpoint**：`Tsdb.FlushNowLocked` 不再在每次 Flush 后向新 WAL 重写全量 `CreateSeries` snapshot；当 catalog 出现新增 series 时，Flush 会先原子持久化 `catalog.SDBCAT`，再写 Segment / WAL Checkpoint / 回收旧 WAL segment。崩溃恢复现在由「已 checkpoint 的 series 来自 catalog 文件，checkpoint 之后的新 series 继续来自 WAL `CreateSeries`」共同保证，避免 catalog 大时每次 Flush 产生 O(series_count) WAL 放大。
 
 ### Docs
 - 新增 `docs/blogs/117-schema-on-write.md`，介绍受控 schema-on-write 的使用场景、SQL / LP / JSON / Bulk VALUES 自动补列规则、`INT -> FLOAT` 类型提升与 schema 先持久化再写 WAL 的崩溃安全语义。

@@ -15,10 +15,13 @@ namespace SonnetDB.Wal;
 /// </remarks>
 public sealed class WalWriter : IDisposable
 {
+    private const int MaxStackRecordSize = 1024;
+
     private FileStream? _fileStream;
     private BufferedStream? _stream;
     private long _nextLsn;
     private long _bytesWritten;
+    private bool _footerDirty;
     private bool _disposed;
 
     /// <summary>WAL 文件的完整路径。</summary>
@@ -27,19 +30,30 @@ public sealed class WalWriter : IDisposable
     /// <summary>下一个将分配的 LSN（日志序列号）。</summary>
     public long NextLsn => _nextLsn;
 
-    /// <summary>累计写入的字节数（包括文件头和所有记录）。</summary>
+    /// <summary>累计写入的字节数（包括文件头和所有记录，不包括可选 LastLsn footer）。</summary>
     public long BytesWritten => _bytesWritten;
 
     /// <summary>写入器是否处于打开状态。</summary>
     public bool IsOpen => !_disposed;
 
-    private WalWriter(string path, FileStream fileStream, BufferedStream stream, long nextLsn, long bytesWritten)
+    internal bool OpenedUsingLastLsnFooter { get; }
+
+    private WalWriter(
+        string path,
+        FileStream fileStream,
+        BufferedStream stream,
+        long nextLsn,
+        long bytesWritten,
+        bool footerDirty,
+        bool openedUsingLastLsnFooter)
     {
         Path = path;
         _fileStream = fileStream;
         _stream = stream;
         _nextLsn = nextLsn;
         _bytesWritten = bytesWritten;
+        _footerDirty = footerDirty;
+        OpenedUsingLastLsnFooter = openedUsingLastLsnFooter;
     }
 
     /// <summary>
@@ -54,10 +68,13 @@ public sealed class WalWriter : IDisposable
     public static WalWriter Open(string path, long startLsn = 1, int bufferSize = 64 * 1024)
     {
         ArgumentNullException.ThrowIfNull(path);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bufferSize);
 
         bool fileExists = File.Exists(path) && new FileInfo(path).Length > 0;
         long nextLsn = startLsn;
         long bytesWritten = 0L;
+        bool footerDirty = false;
+        bool openedUsingLastLsnFooter = false;
 
         var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
         try
@@ -76,11 +93,24 @@ public sealed class WalWriter : IDisposable
                     if (!fileHeader.IsValid())
                         throw new InvalidDataException("WAL file header is invalid: magic or version mismatch.");
 
-                    // Scan existing records to determine next LSN
-                    fs.Position = FormatSizes.WalFileHeaderSize;
-                    bytesWritten = FormatSizes.WalFileHeaderSize;
-                    long lastLsn = ScanForLastLsn(fs, fileHeader.FirstLsn - 1, ref bytesWritten);
-                    nextLsn = lastLsn + 1;
+                    if (TryReadLastLsnFooter(fs, fileHeader, out var footer))
+                    {
+                        bytesWritten = footer.RecordsEndOffset;
+                        nextLsn = footer.LastLsn + 1;
+                        openedUsingLastLsnFooter = true;
+                    }
+                    else
+                    {
+                        // 旧 WAL 或坏 footer：扫描现有记录来确定下一个 LSN。
+                        fs.Position = FormatSizes.WalFileHeaderSize;
+                        bytesWritten = FormatSizes.WalFileHeaderSize;
+                        long lastLsn = ScanForLastLsn(fs, fileHeader.FirstLsn - 1, ref bytesWritten);
+                        nextLsn = lastLsn + 1;
+                    }
+
+                    // Open 进入 append 模式前移除旧 footer/坏尾部；关闭或 Sync 时会写入新的 footer。
+                    fs.SetLength(bytesWritten);
+                    footerDirty = true;
                 }
                 finally
                 {
@@ -94,16 +124,17 @@ public sealed class WalWriter : IDisposable
                 WriteFileHeader(fs, startLsn);
                 bytesWritten = FormatSizes.WalFileHeaderSize;
                 nextLsn = startLsn;
+                footerDirty = true;
             }
             else
             {
                 throw new InvalidDataException("WAL file is truncated: header is incomplete.");
             }
 
-            // Seek to end for appending
-            fs.Position = fs.Length;
+            // Seek to records end for appending. The optional footer is rewritten on Flush/Sync/Dispose.
+            fs.Position = bytesWritten;
             var bs = new BufferedStream(fs, bufferSize);
-            return new WalWriter(path, fs, bs, nextLsn, bytesWritten);
+            return new WalWriter(path, fs, bs, nextLsn, bytesWritten, footerDirty, openedUsingLastLsnFooter);
         }
         catch
         {
@@ -190,7 +221,7 @@ public sealed class WalWriter : IDisposable
     public void Flush()
     {
         ThrowIfDisposed();
-        _stream!.Flush();
+        FlushCore(flushToDisk: false);
     }
 
     /// <summary>
@@ -200,8 +231,7 @@ public sealed class WalWriter : IDisposable
     public void Sync()
     {
         ThrowIfDisposed();
-        _stream!.Flush();
-        _fileStream!.Flush(true);
+        FlushCore(flushToDisk: true);
     }
 
     /// <summary>
@@ -211,14 +241,13 @@ public sealed class WalWriter : IDisposable
     {
         if (_disposed)
             return;
-        _disposed = true;
         try
         {
-            _stream?.Flush();
-            _fileStream?.Flush(true);
+            FlushCore(flushToDisk: true);
         }
         finally
         {
+            _disposed = true;
             _stream?.Dispose();
             _fileStream?.Dispose();
             _stream = null;
@@ -234,35 +263,85 @@ public sealed class WalWriter : IDisposable
     {
         long lsn = _nextLsn;
         long now = DateTime.UtcNow.Ticks;
+        int recordSize = FormatSizes.WalRecordHeaderSize + payloadSize;
 
-        byte[] payloadBuf = ArrayPool<byte>.Shared.Rent(Math.Max(payloadSize, 1)); // Defensive: Rent(0) is valid, but avoids zero-length array edge cases
-        try
+        if (recordSize <= MaxStackRecordSize)
         {
-            // Write payload
-            var payloadWriter = new SpanWriter(payloadBuf.AsSpan(0, payloadSize));
-            writePayload(ref payloadWriter);
-
-            // Calculate CRC32
-            uint crc32 = Crc32.HashToUInt32(payloadBuf.AsSpan(0, payloadSize));
-
-            // Build and write header
-            Span<byte> headerBuf = stackalloc byte[FormatSizes.WalRecordHeaderSize];
-            var headerWriter = new SpanWriter(headerBuf);
-            var header = WalRecordHeader.CreateNew(recordType, payloadSize, crc32, now, lsn);
-            headerWriter.WriteStruct(in header);
-
-            _stream!.Write(headerBuf);
-            _stream.Write(payloadBuf, 0, payloadSize);
-
-            int recordSize = FormatSizes.WalRecordHeaderSize + payloadSize;
-            _bytesWritten += recordSize;
-            _nextLsn++;
-            return lsn;
+            Span<byte> recordBuffer = stackalloc byte[recordSize];
+            WriteRecordToBuffer(recordBuffer, recordType, payloadSize, now, lsn, writePayload);
+            _stream!.Write(recordBuffer);
         }
-        finally
+        else
         {
-            ArrayPool<byte>.Shared.Return(payloadBuf);
+            byte[] recordBuffer = ArrayPool<byte>.Shared.Rent(recordSize);
+            try
+            {
+                Span<byte> recordSpan = recordBuffer.AsSpan(0, recordSize);
+                WriteRecordToBuffer(recordSpan, recordType, payloadSize, now, lsn, writePayload);
+                _stream!.Write(recordSpan);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(recordBuffer);
+            }
         }
+
+        _bytesWritten += recordSize;
+        _nextLsn++;
+        _footerDirty = true;
+        return lsn;
+    }
+
+    private static void WriteRecordToBuffer(
+        Span<byte> recordBuffer,
+        WalRecordType recordType,
+        int payloadSize,
+        long timestamp,
+        long lsn,
+        PayloadWriter writePayload)
+    {
+        Span<byte> payloadBuffer = recordBuffer.Slice(FormatSizes.WalRecordHeaderSize, payloadSize);
+        var payloadWriter = new SpanWriter(payloadBuffer);
+        writePayload(ref payloadWriter);
+
+        uint crc32 = Crc32.HashToUInt32(payloadBuffer);
+
+        var headerWriter = new SpanWriter(recordBuffer[..FormatSizes.WalRecordHeaderSize]);
+        var header = WalRecordHeader.CreateNew(recordType, payloadSize, crc32, timestamp, lsn);
+        headerWriter.WriteStruct(in header);
+    }
+
+    private void FlushCore(bool flushToDisk)
+    {
+        _stream!.Flush();
+        WriteLastLsnFooterIfDirty();
+
+        if (flushToDisk)
+            _fileStream!.Flush(true);
+    }
+
+    private void WriteLastLsnFooterIfDirty()
+    {
+        if (!_footerDirty)
+            return;
+
+        Span<byte> footerBuffer = stackalloc byte[FormatSizes.WalLastLsnFooterSize];
+        var footer = WalLastLsnFooter.CreateNew(_nextLsn - 1, _bytesWritten);
+        var writer = new SpanWriter(footerBuffer);
+        writer.WriteStruct(in footer);
+
+        footer.Crc32 = Crc32.HashToUInt32(footerBuffer[..WalLastLsnFooter.CrcCoveredLength]);
+        writer = new SpanWriter(footerBuffer);
+        writer.WriteStruct(in footer);
+
+        FileStream fs = _fileStream!;
+        fs.Position = _bytesWritten;
+        fs.SetLength(_bytesWritten);
+        fs.Write(footerBuffer);
+        fs.SetLength(_bytesWritten + FormatSizes.WalLastLsnFooterSize);
+        fs.Position = _bytesWritten;
+
+        _footerDirty = false;
     }
 
     private static void WriteFileHeader(Stream stream, long firstLsn)
@@ -279,6 +358,46 @@ public sealed class WalWriter : IDisposable
         {
             ArrayPool<byte>.Shared.Return(buf);
         }
+    }
+
+    private static bool TryReadLastLsnFooter(
+        FileStream fs,
+        WalFileHeader fileHeader,
+        out WalLastLsnFooter footer)
+    {
+        footer = default;
+
+        if (fs.Length < FormatSizes.WalFileHeaderSize + FormatSizes.WalLastLsnFooterSize)
+            return false;
+
+        long footerOffset = fs.Length - FormatSizes.WalLastLsnFooterSize;
+        Span<byte> footerBuffer = stackalloc byte[FormatSizes.WalLastLsnFooterSize];
+
+        fs.Position = footerOffset;
+        int read = ReadExact(fs, footerBuffer);
+        if (read < FormatSizes.WalLastLsnFooterSize)
+            return false;
+
+        var reader = new SpanReader(footerBuffer);
+        footer = reader.ReadStruct<WalLastLsnFooter>();
+
+        if (!footer.IsShapeValid())
+            return false;
+
+        if (footer.RecordsEndOffset != footerOffset)
+            return false;
+
+        if (footer.RecordsEndOffset < FormatSizes.WalFileHeaderSize)
+            return false;
+
+        if (footer.LastLsn < fileHeader.FirstLsn - 1)
+            return false;
+
+        if (footer.LastLsn == long.MaxValue)
+            return false;
+
+        uint expectedCrc = Crc32.HashToUInt32(footerBuffer[..WalLastLsnFooter.CrcCoveredLength]);
+        return footer.Crc32 == expectedCrc;
     }
 
     private static long ScanForLastLsn(FileStream fs, long initialLastLsn, ref long bytesWritten)
@@ -345,6 +464,19 @@ public sealed class WalWriter : IDisposable
         while (total < count)
         {
             int read = stream.Read(buffer, offset + total, count - total);
+            if (read == 0)
+                break;
+            total += read;
+        }
+        return total;
+    }
+
+    private static int ReadExact(Stream stream, Span<byte> buffer)
+    {
+        int total = 0;
+        while (total < buffer.Length)
+        {
+            int read = stream.Read(buffer[total..]);
             if (read == 0)
                 break;
             total += read;

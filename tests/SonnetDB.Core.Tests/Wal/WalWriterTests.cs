@@ -25,6 +25,27 @@ public sealed class WalWriterTests : IDisposable
 
     private string TempFile() => System.IO.Path.Combine(_tempDir, System.IO.Path.GetRandomFileName() + ".SDBWAL");
 
+    private static void RemoveLastLsnFooter(string path)
+    {
+        using var fs = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.ReadWrite);
+        fs.SetLength(fs.Length - FormatSizes.WalLastLsnFooterSize);
+    }
+
+    private static void CorruptLastLsnFooter(string path)
+    {
+        using var fs = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.ReadWrite);
+        fs.Position = fs.Length - 1;
+        int b = fs.ReadByte();
+        fs.Position = fs.Length - 1;
+        fs.WriteByte((byte)(b ^ 0xFF));
+    }
+
+    private static void TruncateLastLsnFooterTail(string path)
+    {
+        using var fs = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.ReadWrite);
+        fs.SetLength(fs.Length - 5);
+    }
+
     [Fact]
     public void NewFile_HasFileHeader_ThenRecords()
     {
@@ -37,7 +58,7 @@ public sealed class WalWriterTests : IDisposable
 
         long fileSize = new System.IO.FileInfo(path).Length;
         Assert.True(fileSize >= FormatSizes.WalFileHeaderSize);
-        Assert.Equal(writer.BytesWritten, fileSize);
+        Assert.Equal(writer.BytesWritten + FormatSizes.WalLastLsnFooterSize, fileSize);
     }
 
     [Fact]
@@ -82,7 +103,7 @@ public sealed class WalWriterTests : IDisposable
     }
 
     [Fact]
-    public void OpenExistingFile_ContinuesFromLastLsn()
+    public void OpenExistingFile_NewWalWithFooter_UsesFastPathAndContinuesFromLastLsn()
     {
         string path = TempFile();
 
@@ -97,10 +118,89 @@ public sealed class WalWriterTests : IDisposable
         // Reopen and continue
         using (var writer = WalWriter.Open(path))
         {
+            Assert.True(writer.OpenedUsingLastLsnFooter);
             Assert.Equal(3L, writer.NextLsn); // continues from 3
             long lsn = writer.AppendWritePoint(1UL, 3000L, "temp", FieldValue.FromDouble(3.0));
             Assert.Equal(3L, lsn);
         }
+    }
+
+    [Fact]
+    public void OpenExistingFile_OldWalWithoutFooter_ScansAndContinuesFromLastLsn()
+    {
+        string path = TempFile();
+
+        using (var writer = WalWriter.Open(path, startLsn: 1))
+        {
+            writer.AppendWritePoint(1UL, 1000L, "temp", FieldValue.FromDouble(1.0));
+            writer.AppendWritePoint(1UL, 2000L, "temp", FieldValue.FromDouble(2.0));
+            writer.Sync();
+        }
+
+        RemoveLastLsnFooter(path);
+
+        using (var writer = WalWriter.Open(path))
+        {
+            Assert.False(writer.OpenedUsingLastLsnFooter);
+            Assert.Equal(3L, writer.NextLsn);
+            Assert.Equal(3L, writer.AppendWritePoint(1UL, 3000L, "temp", FieldValue.FromDouble(3.0)));
+            writer.Sync();
+        }
+
+        using var reader = WalReader.Open(path);
+        Assert.Equal(new[] { 1L, 2L, 3L }, reader.Replay().Select(static r => r.Lsn).ToArray());
+    }
+
+    [Fact]
+    public void OpenExistingFile_DamagedFooter_FallsBackToScanAndContinuesFromLastLsn()
+    {
+        string path = TempFile();
+
+        using (var writer = WalWriter.Open(path, startLsn: 1))
+        {
+            writer.AppendWritePoint(1UL, 1000L, "temp", FieldValue.FromDouble(1.0));
+            writer.AppendWritePoint(1UL, 2000L, "temp", FieldValue.FromDouble(2.0));
+            writer.Sync();
+        }
+
+        CorruptLastLsnFooter(path);
+
+        using (var writer = WalWriter.Open(path))
+        {
+            Assert.False(writer.OpenedUsingLastLsnFooter);
+            Assert.Equal(3L, writer.NextLsn);
+            Assert.Equal(3L, writer.AppendWritePoint(1UL, 3000L, "temp", FieldValue.FromDouble(3.0)));
+            writer.Sync();
+        }
+
+        using var reader = WalReader.Open(path);
+        Assert.Equal(new[] { 1L, 2L, 3L }, reader.Replay().Select(static r => r.Lsn).ToArray());
+    }
+
+    [Fact]
+    public void OpenExistingFile_TruncatedFooterTail_FallsBackToScanAndContinuesFromLastLsn()
+    {
+        string path = TempFile();
+
+        using (var writer = WalWriter.Open(path, startLsn: 1))
+        {
+            writer.AppendWritePoint(1UL, 1000L, "temp", FieldValue.FromDouble(1.0));
+            writer.AppendWritePoint(1UL, 2000L, "temp", FieldValue.FromDouble(2.0));
+            writer.Sync();
+        }
+
+        TruncateLastLsnFooterTail(path);
+
+        using (var writer = WalWriter.Open(path))
+        {
+            Assert.False(writer.OpenedUsingLastLsnFooter);
+            Assert.Equal(3L, writer.NextLsn);
+            Assert.Equal(3L, writer.AppendWritePoint(1UL, 3000L, "temp", FieldValue.FromDouble(3.0)));
+            writer.Sync();
+        }
+
+        using var reader = WalReader.Open(path);
+        Assert.Equal(new[] { 1L, 2L, 3L }, reader.Replay().Select(static r => r.Lsn).ToArray());
     }
 
     [Fact]
@@ -122,6 +222,48 @@ public sealed class WalWriterTests : IDisposable
         var wp0 = Assert.IsType<WritePointRecord>(records[0]);
         Assert.Equal(1UL, wp0.SeriesId);
         Assert.Equal(1000L, wp0.PointTimestamp);
+    }
+
+    [Fact]
+    public void Flush_WritesBufferedRecordsToReadableWal()
+    {
+        string path = TempFile();
+        using var writer = WalWriter.Open(path, bufferSize: 4 * 1024);
+
+        writer.AppendWritePoint(1UL, 1000L, "temp", FieldValue.FromDouble(10.0));
+        writer.Flush();
+
+        using var reader = WalReader.Open(path);
+        var record = Assert.IsType<WritePointRecord>(Assert.Single(reader.Replay()));
+        Assert.Equal(1UL, record.SeriesId);
+        Assert.Equal(1000L, record.PointTimestamp);
+        Assert.Equal("temp", record.FieldName);
+    }
+
+    [Fact]
+    public void AppendRecord_SmallAndLargePayload_RoundTrips()
+    {
+        string path = TempFile();
+        string largeValue = new('x', 4096);
+
+        using (var writer = WalWriter.Open(path))
+        {
+            writer.AppendCheckpoint(123L);
+            writer.AppendWritePoint(9UL, 456L, "large_text", FieldValue.FromString(largeValue));
+            writer.Sync();
+        }
+
+        using var reader = WalReader.Open(path);
+        var records = reader.Replay().ToList();
+
+        var checkpoint = Assert.IsType<CheckpointRecord>(records[0]);
+        Assert.Equal(123L, checkpoint.CheckpointLsn);
+
+        var writePoint = Assert.IsType<WritePointRecord>(records[1]);
+        Assert.Equal(9UL, writePoint.SeriesId);
+        Assert.Equal(456L, writePoint.PointTimestamp);
+        Assert.Equal("large_text", writePoint.FieldName);
+        Assert.Equal(largeValue, writePoint.Value.AsString());
     }
 
     [Fact]

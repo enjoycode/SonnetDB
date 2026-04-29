@@ -1,6 +1,8 @@
 ﻿using SonnetDB.Engine;
+using SonnetDB.Catalog;
 using SonnetDB.Memory;
 using SonnetDB.Model;
+using SonnetDB.Query;
 using SonnetDB.Storage.Segments;
 using SonnetDB.Wal;
 using Xunit;
@@ -46,6 +48,34 @@ public sealed class TsdbCrashRecoveryTests : IDisposable
             },
             SegmentWriterOptions = segOpts ?? new SegmentWriterOptions { FsyncOnCommit = false },
         };
+
+    private static Point MakePoint(string measurement, long timestamp, string host, double value) =>
+        Point.Create(measurement, timestamp,
+            new Dictionary<string, string> { ["host"] = host },
+            new Dictionary<string, FieldValue> { ["v"] = FieldValue.FromDouble(value) });
+
+    private static IReadOnlyList<WalRecord> ReadAllWalRecords(string rootDirectory)
+    {
+        var records = new List<WalRecord>();
+        foreach (var segment in WalSegmentLayout.Enumerate(TsdbPaths.WalDir(rootDirectory)))
+        {
+            if (!File.Exists(segment.Path))
+                continue;
+
+            using var reader = WalReader.Open(segment.Path);
+            records.AddRange(reader.Replay());
+        }
+
+        return records;
+    }
+
+    private static int QueryPointCount(Tsdb db, string measurement, string host)
+    {
+        var entry = Assert.Single(db.Catalog.Find(
+            measurement,
+            new Dictionary<string, string> { ["host"] = host }));
+        return db.Query.Execute(new PointQuery(entry.Id, "v", TimeRange.All)).Count();
+    }
 
     /// <summary>
     /// 场景 A：写入 10 个点后崩溃（不 Flush，不 Dispose）。
@@ -122,7 +152,7 @@ public sealed class TsdbCrashRecoveryTests : IDisposable
         var segs = db2.ListSegments();
         Assert.Single(segs);
 
-        // catalog 通过 WAL replay 重建
+        // catalog 由 Flush 前持久化的 checkpoint snapshot 恢复
         Assert.Equal(1, db2.Catalog.Count);
 
         // MemTable 应包含 Flush 之后写入的 10 个点
@@ -224,5 +254,89 @@ public sealed class TsdbCrashRecoveryTests : IDisposable
         using var db2 = Tsdb.Open(MakeOptions());
         Assert.Equal(2, db2.Catalog.Count);
         Assert.Equal(2L, db2.MemTable.PointCount);
+    }
+
+    [Fact]
+    public void FlushNow_DoesNotRewriteFullCatalogSnapshotIntoWal()
+    {
+        var db = Tsdb.Open(MakeOptions());
+        const int seriesCount = 64;
+
+        for (int i = 0; i < seriesCount; i++)
+            db.Write(MakePoint("metric", 1000L + i, $"h{i}", i));
+
+        db.FlushNow();
+
+        var walRecords = ReadAllWalRecords(_tempDir);
+        Assert.Empty(walRecords.OfType<CreateSeriesRecord>());
+        Assert.Empty(walRecords.OfType<WritePointRecord>());
+        Assert.Equal(seriesCount, CatalogFileCodec.Load(TsdbPaths.CatalogPath(_tempDir)).Count);
+
+        db.CrashSimulationCloseWal();
+    }
+
+    [Fact]
+    public void CrashRecovery_AfterFlushWithoutWalCreateSeries_UsesCatalogCheckpoint()
+    {
+        var db = Tsdb.Open(MakeOptions());
+        const int seriesCount = 12;
+
+        for (int i = 0; i < seriesCount; i++)
+            db.Write(MakePoint("sensor", 1000L + i, $"s{i}", i));
+
+        db.FlushNow();
+        Assert.Empty(ReadAllWalRecords(_tempDir).OfType<CreateSeriesRecord>());
+        db.CrashSimulationCloseWal();
+
+        using var db2 = Tsdb.Open(MakeOptions());
+        Assert.Equal(seriesCount, db2.Catalog.Count);
+        Assert.Equal(0L, db2.MemTable.PointCount);
+        Assert.Equal(1, QueryPointCount(db2, "sensor", "s5"));
+    }
+
+    [Fact]
+    public void CrashRecovery_CatalogCheckpointPlusWalDelta_RebuildsConsistentState()
+    {
+        var db = Tsdb.Open(MakeOptions());
+
+        for (int i = 0; i < 5; i++)
+            db.Write(MakePoint("cpu", 1000L + i, "flushed", i));
+
+        db.FlushNow();
+
+        db.Write(MakePoint("cpu", 2000L, "wal-delta", 100.0));
+
+        Assert.Equal(1, CatalogFileCodec.Load(TsdbPaths.CatalogPath(_tempDir)).Count);
+        db.CrashSimulationCloseWal();
+
+        using var db2 = Tsdb.Open(MakeOptions());
+        Assert.Equal(2, db2.Catalog.Count);
+        Assert.Equal(1L, db2.MemTable.PointCount);
+        Assert.Equal(5, QueryPointCount(db2, "cpu", "flushed"));
+        Assert.Equal(1, QueryPointCount(db2, "cpu", "wal-delta"));
+    }
+
+    [Fact]
+    public void CrashRecovery_AfterBatchedSchemaOnWrite_ReplaysDataWithPersistedSchema()
+    {
+        var db = Tsdb.Open(MakeOptions());
+        Point[] points =
+        [
+            MakePoint("batch_metric", 1000L, "h1", 1.0),
+            Point.Create("batch_metric", 1001L,
+                new Dictionary<string, string> { ["host"] = "h1", ["rack"] = "r1" },
+                new Dictionary<string, FieldValue> { ["v"] = FieldValue.FromDouble(2.0), ["extra"] = FieldValue.FromLong(7L) }),
+        ];
+
+        Assert.Equal(2, db.WriteMany(points));
+        Assert.Equal(1L, db.MeasurementSchemaPersistCount);
+        db.CrashSimulationCloseWal();
+
+        using var reopened = Tsdb.Open(MakeOptions());
+        var schema = reopened.Measurements.TryGet("batch_metric");
+        Assert.NotNull(schema);
+        Assert.NotNull(schema!.TryGetColumn("rack"));
+        Assert.NotNull(schema.TryGetColumn("extra"));
+        Assert.Equal(3L, reopened.MemTable.PointCount);
     }
 }

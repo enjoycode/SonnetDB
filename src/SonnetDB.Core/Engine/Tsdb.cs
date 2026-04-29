@@ -23,11 +23,15 @@ public sealed class Tsdb : IDisposable
 {
     private readonly TsdbOptions _options;
     private readonly FlushCoordinator _flushCoordinator;
+    private readonly WalGroupCommitCoordinator _walGroupCommit;
     private readonly object _writeSync = new();
     private readonly HashSet<ulong> _seriesWithWalRecord;
 
     private WalSegmentSet? _walSet;
     private long _nextSegmentId;
+    private bool _catalogDirty;
+    private bool _measurementSchemaDirty;
+    private long _measurementSchemaPersistCount;
     private bool _disposed;
     private BackgroundFlushWorker? _flushWorker;
     private CompactionWorker? _compactionWorker;
@@ -104,6 +108,24 @@ public sealed class Tsdb : IDisposable
             return _nextSegmentId++;
     }
 
+    internal long WalSyncCount
+    {
+        get
+        {
+            lock (_writeSync)
+                return _walSet?.SyncCount ?? 0L;
+        }
+    }
+
+    internal long MeasurementSchemaPersistCount
+    {
+        get
+        {
+            lock (_writeSync)
+                return _measurementSchemaPersistCount;
+        }
+    }
+
     private Tsdb(
         TsdbOptions options,
         SeriesCatalog catalog,
@@ -113,7 +135,8 @@ public sealed class Tsdb : IDisposable
         long nextSegmentId,
         HashSet<ulong> seriesWithWalRecord,
         SegmentManager segmentManager,
-        long checkpointLsn)
+        long checkpointLsn,
+        bool catalogDirty)
     {
         _options = options;
         Catalog = catalog;
@@ -122,8 +145,10 @@ public sealed class Tsdb : IDisposable
         _walSet = walSet;
         _nextSegmentId = nextSegmentId;
         _seriesWithWalRecord = seriesWithWalRecord;
+        _catalogDirty = catalogDirty;
         Segments = segmentManager;
         _flushCoordinator = new FlushCoordinator(options);
+        _walGroupCommit = new WalGroupCommitCoordinator(options.WalGroupCommit);
         Query = new QueryEngine(memTable, segmentManager, catalog, Tombstones);
         Functions = new UserFunctionRegistry(options.AllowUserFunctions);
         _checkpointLsn = checkpointLsn;
@@ -165,15 +190,17 @@ public sealed class Tsdb : IDisposable
 
         // 回放全部 WAL segment，使用 Checkpoint LSN 跳过已落盘记录
         var memTable = new MemTable();
+        int catalogCountBeforeReplay = catalog.Count;
         var result = walSet.ReplayWithCheckpoint(catalog);
         memTable.ReplayFrom(result.WritePoints);
         long checkpointLsn = result.CheckpointLsn;
+        bool catalogDirty = catalog.Count != catalogCountBeforeReplay;
 
         var seriesWithWalRecord = catalog.Snapshot().Select(e => e.Id).ToHashSet();
 
         var segmentManager = SegmentManager.Open(root, options.SegmentReaderOptions);
 
-        var tsdb = new Tsdb(options, catalog, measurements, memTable, walSet, nextSegmentId, seriesWithWalRecord, segmentManager, checkpointLsn);
+        var tsdb = new Tsdb(options, catalog, measurements, memTable, walSet, nextSegmentId, seriesWithWalRecord, segmentManager, checkpointLsn, catalogDirty);
 
         // 加载墓碑清单（文件不存在时返回空集合）
         tsdb.Tombstones.LoadFrom(TombstoneManifestCodec.Load(TsdbPaths.TombstoneManifestPath(root)));
@@ -220,15 +247,18 @@ public sealed class Tsdb : IDisposable
     {
         ArgumentNullException.ThrowIfNull(point);
 
+        WalGroupCommitTicket walSync = default;
         lock (_writeSync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var normalized = EnsureMeasurementSchemaLocked(point);
+            var normalized = EnsureMeasurementSchemaLocked(point, persistImmediately: true);
             WritePointLocked(normalized);
 
             if (_options.SyncWalOnEveryWrite)
-                _walSet!.Sync();
+                walSync = _walGroupCommit.Prepare(_walSet!);
         }
+
+        walSync.Wait();
 
         // 锁外向后台线程发送非阻塞信号
         _flushWorker?.Signal();
@@ -287,9 +317,12 @@ public sealed class Tsdb : IDisposable
             return 0;
 
         int written = 0;
+        WalGroupCommitTicket walSync = default;
         lock (_writeSync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+
+            var normalizedPoints = new Point?[points.Length];
 
             for (int i = 0; i < points.Length; i++)
             {
@@ -297,14 +330,27 @@ public sealed class Tsdb : IDisposable
                 if (point is null)
                     continue;
 
-                var normalized = EnsureMeasurementSchemaLocked(point);
-                WritePointLocked(normalized);
+                normalizedPoints[i] = EnsureMeasurementSchemaLocked(point, persistImmediately: false);
                 written++;
             }
 
+            if (written > 0)
+            {
+                PersistMeasurementSchemasLocked();
+
+                for (int i = 0; i < normalizedPoints.Length; i++)
+                {
+                    var normalized = normalizedPoints[i];
+                    if (normalized is not null)
+                        WritePointLocked(NormalizePointAgainstCurrentSchemaLocked(normalized));
+                }
+            }
+
             if (_options.SyncWalOnEveryWrite && written > 0)
-                _walSet!.Sync();
+                walSync = _walGroupCommit.Prepare(_walSet!);
         }
+
+        walSync.Wait();
 
         if (written > 0)
             _flushWorker?.Signal();
@@ -334,6 +380,7 @@ public sealed class Tsdb : IDisposable
             throw new ArgumentOutOfRangeException(nameof(fromTimestamp),
                 $"fromTimestamp ({fromTimestamp}) 不能大于 toTimestamp ({toTimestamp})。");
 
+        WalGroupCommitTicket walSync = default;
         lock (_writeSync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -343,8 +390,10 @@ public sealed class Tsdb : IDisposable
             Tombstones.Add(tomb);
 
             if (_options.SyncWalOnEveryWrite)
-                _walSet!.Sync();
+                walSync = _walGroupCommit.Prepare(_walSet!);
         }
+
+        walSync.Wait();
 
         // 锁外向后台线程发送非阻塞信号
         _flushWorker?.Signal();
@@ -394,9 +443,8 @@ public sealed class Tsdb : IDisposable
             Measurements.Add(schema);
 
             // 立即把全量 schema 集合原子写入磁盘，确保 CREATE 语义具备崩溃安全性
-            MeasurementSchemaCodec.Save(
-                TsdbPaths.MeasurementSchemaPath(RootDirectory),
-                Measurements.Snapshot());
+            MarkMeasurementSchemasDirty();
+            PersistMeasurementSchemasLocked();
         }
 
         return schema;
@@ -476,11 +524,15 @@ public sealed class Tsdb : IDisposable
             {
                 if (walSetToDispose != null)
                 {
+                    _walGroupCommit.FlushPending(walSetToDispose);
+
                     // 尝试 Flush 剩余数据（Flush 内部会保存 manifest）
                     if (MemTable.PointCount > 0)
                     {
                         try
                         {
+                            PersistMeasurementSchemasLocked();
+                            PersistCatalogCheckpointLocked();
                             var result = _flushCoordinator.Flush(
                                 MemTable,
                                 walSetToDispose,
@@ -521,13 +573,16 @@ public sealed class Tsdb : IDisposable
                         }
                     }
 
-                    // 保存 catalog
+                    // 保存 schema/catalog
+                    PersistMeasurementSchemasLocked();
                     CatalogFileCodec.Save(Catalog, TsdbPaths.CatalogPath(RootDirectory));
+                    _catalogDirty = false;
                 }
             }
             finally
             {
                 walSetToDispose?.Dispose();
+                _walGroupCommit.Dispose();
                 Segments.Dispose();
             }
         }
@@ -543,6 +598,19 @@ public sealed class Tsdb : IDisposable
         if (_walSet == null)
             return null;
 
+        _walGroupCommit.FlushPending(_walSet);
+        PersistMeasurementSchemasLocked();
+
+        if (MemTable.PointCount == 0)
+        {
+            PersistCatalogCheckpointLocked();
+            return null;
+        }
+
+        // WAL 回收前必须先持久化完整 catalog snapshot。
+        // 这样旧 WAL segment 中的 CreateSeries 被回收后，segment 中的 SeriesId 仍能通过 catalog 文件解析。
+        PersistCatalogCheckpointLocked();
+
         long lsnBeforeFlush = MemTable.LastLsn;
         long segId = _nextSegmentId++;
         var result = _flushCoordinator.Flush(
@@ -553,8 +621,7 @@ public sealed class Tsdb : IDisposable
             Catalog,
             Measurements);
 
-        // Flush 成功后，向新 WAL 重写所有 catalog 条目的 CreateSeries 记录，
-        // 确保在 .SDBCAT 未落盘的情况下崩溃恢复仍能从 WAL 重建 catalog。
+        // Flush 成功后旧 WAL segment 可能已回收；完整 catalog 已在回收前持久化。
         if (result != null)
         {
             // 更新 CheckpointLsn（在锁内完成）
@@ -564,10 +631,6 @@ public sealed class Tsdb : IDisposable
             // 仅在非关闭路径（非 Dispose 内部调用）时更新索引快照
             if (!_disposed)
                 Segments.AddSegment(result.Path);
-
-            foreach (var entry in Catalog.Snapshot())
-                _walSet.AppendCreateSeries(entry.Id, entry.Measurement, entry.Tags);
-            _walSet.Sync();
         }
 
         return result;
@@ -592,7 +655,10 @@ public sealed class Tsdb : IDisposable
 
         // 若是本进程首次写入该 series，向 WAL 追加 CreateSeries 记录
         if (_seriesWithWalRecord.Add(entry.Id))
+        {
             _walSet!.AppendCreateSeries(entry.Id, entry.Measurement, entry.Tags);
+            _catalogDirty = true;
+        }
 
         // 每个字段写入 WAL 和 MemTable
         foreach (var (fieldName, value) in point.Fields)
@@ -602,14 +668,16 @@ public sealed class Tsdb : IDisposable
         }
     }
 
-    private Point EnsureMeasurementSchemaLocked(Point point)
+    private Point EnsureMeasurementSchemaLocked(Point point, bool persistImmediately)
     {
         var schema = Measurements.TryGet(point.Measurement);
         if (schema is null)
         {
             var created = CreateSchemaFromPoint(point);
             Measurements.Add(created);
-            PersistMeasurementSchemasLocked();
+            MarkMeasurementSchemasDirty();
+            if (persistImmediately)
+                PersistMeasurementSchemasLocked();
             return point;
         }
 
@@ -669,13 +737,49 @@ public sealed class Tsdb : IDisposable
 
             var updated = MeasurementSchema.Create(schema.Name, columns, schema.CreatedAtUtcTicks);
             Measurements.LoadOrReplace(updated);
-            PersistMeasurementSchemasLocked();
+            MarkMeasurementSchemasDirty();
+            if (persistImmediately)
+                PersistMeasurementSchemasLocked();
         }
 
         if (normalizedFields is null)
             return point;
 
         return Point.Create(point.Measurement, point.Timestamp, point.Tags, normalizedFields);
+    }
+
+    private Point NormalizePointAgainstCurrentSchemaLocked(Point point)
+    {
+        var schema = Measurements.TryGet(point.Measurement)
+            ?? throw new InvalidOperationException(
+                $"Measurement '{point.Measurement}' 的 schema 尚未注册，无法写入数据。");
+
+        Dictionary<string, FieldValue>? normalizedFields = null;
+        foreach (var (fieldName, value) in point.Fields)
+        {
+            var column = schema.TryGetColumn(fieldName)
+                ?? throw new InvalidOperationException(
+                    $"Measurement '{schema.Name}' 的 FIELD 列 '{fieldName}' 尚未注册，无法写入数据。");
+
+            if (column.Role != MeasurementColumnRole.Field)
+                throw new InvalidOperationException(
+                    $"Measurement '{schema.Name}' 的列 '{fieldName}' 已声明为 TAG，不能作为 FIELD 写入。");
+
+            var normalized = NormalizeFieldValue(schema.Name, column, value, out var promoted);
+            if (promoted)
+                throw new InvalidOperationException(
+                    $"Measurement '{schema.Name}' 的 FIELD 列 '{fieldName}' 在批量 schema 合并后仍需要类型提升。");
+
+            if (!normalized.Equals(value))
+            {
+                normalizedFields ??= new Dictionary<string, FieldValue>(point.Fields, StringComparer.Ordinal);
+                normalizedFields[fieldName] = normalized;
+            }
+        }
+
+        return normalizedFields is null
+            ? point
+            : Point.Create(point.Measurement, point.Timestamp, point.Tags, normalizedFields);
     }
 
     private static MeasurementSchema CreateSchemaFromPoint(Point point)
@@ -740,9 +844,28 @@ public sealed class Tsdb : IDisposable
     }
 
     private void PersistMeasurementSchemasLocked()
-        => MeasurementSchemaCodec.Save(
+    {
+        if (!_measurementSchemaDirty)
+            return;
+
+        MeasurementSchemaCodec.Save(
             TsdbPaths.MeasurementSchemaPath(RootDirectory),
             Measurements.Snapshot());
+        _measurementSchemaDirty = false;
+        _measurementSchemaPersistCount++;
+    }
+
+    private void MarkMeasurementSchemasDirty()
+        => _measurementSchemaDirty = true;
+
+    private void PersistCatalogCheckpointLocked()
+    {
+        if (!_catalogDirty)
+            return;
+
+        CatalogFileCodec.Save(Catalog, TsdbPaths.CatalogPath(RootDirectory));
+        _catalogDirty = false;
+    }
 
     /// <summary>
     /// （仅测试用）模拟进程崩溃：直接关闭 WAL，不保存 catalog，不 Flush MemTable。
@@ -754,7 +877,10 @@ public sealed class Tsdb : IDisposable
             if (_disposed)
                 return;
             _disposed = true;
+            if (_walSet is not null)
+                _walGroupCommit.FlushPending(_walSet);
             _walSet?.Dispose();
+            _walGroupCommit.Dispose();
             _walSet = null;
         }
     }

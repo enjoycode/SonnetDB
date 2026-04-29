@@ -159,4 +159,64 @@ public sealed class TsdbConcurrencyTests : IDisposable
 
         Assert.Empty(exceptions);
     }
+
+    [Fact]
+    public void ConcurrentWriteMany_WithSchemaExpansion_NoExceptionAndSchemaRecoverable()
+    {
+        const int batchCount = 8;
+        const int pointsPerBatch = 4;
+        var db = Tsdb.Open(MakeOptions());
+        var exceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+
+        Parallel.For(0, batchCount, batch =>
+        {
+            try
+            {
+                var points = new Point[pointsPerBatch];
+                for (int i = 0; i < points.Length; i++)
+                {
+                    string fieldName = $"f_{batch}_{i}";
+                    points[i] = Point.Create("concurrent_metric", 1000L + batch * 100 + i,
+                        new Dictionary<string, string>
+                        {
+                            ["host"] = $"h{batch}",
+                            [$"tag_{batch}"] = i.ToString(),
+                        },
+                        new Dictionary<string, FieldValue>
+                        {
+                            [fieldName] = FieldValue.FromDouble(i),
+                        });
+                }
+
+                db.WriteMany(points);
+            }
+            catch (Exception ex)
+            {
+                exceptions.Add(ex);
+            }
+        });
+
+        Assert.Empty(exceptions);
+
+        var schema = db.Measurements.TryGet("concurrent_metric");
+        Assert.NotNull(schema);
+        for (int batch = 0; batch < batchCount; batch++)
+        {
+            Assert.NotNull(schema!.TryGetColumn($"tag_{batch}"));
+            for (int i = 0; i < pointsPerBatch; i++)
+                Assert.NotNull(schema.TryGetColumn($"f_{batch}_{i}"));
+        }
+
+        db.CrashSimulationCloseWal();
+
+        using var reopened = Tsdb.Open(MakeOptions());
+        var recovered = reopened.Measurements.TryGet("concurrent_metric");
+        Assert.NotNull(recovered);
+        for (int batch = 0; batch < batchCount; batch++)
+        {
+            Assert.NotNull(recovered!.TryGetColumn($"tag_{batch}"));
+            for (int i = 0; i < pointsPerBatch; i++)
+                Assert.NotNull(recovered.TryGetColumn($"f_{batch}_{i}"));
+        }
+    }
 }

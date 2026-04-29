@@ -1,4 +1,5 @@
-﻿using SonnetDB.Model;
+﻿using System.Buffers.Binary;
+using SonnetDB.Model;
 using SonnetDB.Storage.Format;
 using SonnetDB.Wal;
 using Xunit;
@@ -24,6 +25,43 @@ public sealed class WalReaderTests : IDisposable
     }
 
     private string TempFile() => System.IO.Path.Combine(_tempDir, System.IO.Path.GetRandomFileName() + ".SDBWAL");
+
+    private static void RemoveLastLsnFooter(string path)
+    {
+        using var fs = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.ReadWrite);
+        fs.SetLength(fs.Length - FormatSizes.WalLastLsnFooterSize);
+    }
+
+    private static void CorruptSecondRecordCrc(string path)
+    {
+        using var fs = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.ReadWrite);
+        Span<byte> intBuf = stackalloc byte[sizeof(int)];
+
+        fs.Position = FormatSizes.WalFileHeaderSize + 8;
+        ReadExact(fs, intBuf);
+        int firstPayloadLength = BinaryPrimitives.ReadInt32LittleEndian(intBuf);
+
+        long secondCrcOffset = FormatSizes.WalFileHeaderSize
+            + FormatSizes.WalRecordHeaderSize
+            + firstPayloadLength
+            + 12;
+        fs.Position = secondCrcOffset;
+        int b = fs.ReadByte();
+        fs.Position = secondCrcOffset;
+        fs.WriteByte((byte)(b ^ 0xFF));
+    }
+
+    private static void ReadExact(System.IO.Stream stream, Span<byte> buffer)
+    {
+        int total = 0;
+        while (total < buffer.Length)
+        {
+            int read = stream.Read(buffer[total..]);
+            if (read == 0)
+                throw new EndOfStreamException();
+            total += read;
+        }
+    }
 
     private static void WriteMixedRecords(string path, int count)
     {
@@ -56,6 +94,7 @@ public sealed class WalReaderTests : IDisposable
     {
         string path = TempFile();
         WriteMixedRecords(path, 10);
+        RemoveLastLsnFooter(path);
 
         // Truncate last 5 bytes
         var fi = new System.IO.FileInfo(path);
@@ -72,7 +111,7 @@ public sealed class WalReaderTests : IDisposable
         catch (Exception e) { ex = e; }
 
         Assert.Null(ex);
-        Assert.True(records.Count <= 9); // at most 9 complete records
+        Assert.Equal(9, records.Count);
     }
 
     [Fact]
@@ -84,9 +123,9 @@ public sealed class WalReaderTests : IDisposable
         // Corrupt the last byte of the file (payload of last record)
         using (var fs = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.ReadWrite))
         {
-            fs.Position = fs.Length - 1;
+            fs.Position = fs.Length - FormatSizes.WalLastLsnFooterSize - 1;
             int b = fs.ReadByte();
-            fs.Position = fs.Length - 1;
+            fs.Position = fs.Length - FormatSizes.WalLastLsnFooterSize - 1;
             fs.WriteByte((byte)(b ^ 0xFF));
         }
 
@@ -100,7 +139,23 @@ public sealed class WalReaderTests : IDisposable
         catch (Exception e) { ex = e; }
 
         Assert.Null(ex);
-        Assert.True(records.Count <= 9);
+        Assert.Equal(9, records.Count);
+    }
+
+    [Fact]
+    public void CorruptedMiddleRecord_CrcFailure_StopsAtPreviousRecord()
+    {
+        string path = TempFile();
+        WriteMixedRecords(path, 10);
+
+        CorruptSecondRecordCrc(path);
+
+        using var reader = WalReader.Open(path);
+        var records = reader.Replay().ToList();
+
+        Assert.Single(records);
+        Assert.IsType<CreateSeriesRecord>(records[0]);
+        Assert.Equal(1L, reader.LastLsn);
     }
 
     [Fact]

@@ -28,6 +28,9 @@ public sealed class TsdbOptions
     /// </summary>
     public bool SyncWalOnEveryWrite { get; init; } = false;
 
+    /// <summary>WAL group-commit 配置，仅在 <see cref="SyncWalOnEveryWrite"/> 为 <c>true</c> 时生效。</summary>
+    public WalGroupCommitOptions WalGroupCommit { get; init; } = WalGroupCommitOptions.Default;
+
     /// <summary>段读取选项（默认两项校验均启用）。</summary>
     public SegmentReaderOptions SegmentReaderOptions { get; init; } = SegmentReaderOptions.Default;
 

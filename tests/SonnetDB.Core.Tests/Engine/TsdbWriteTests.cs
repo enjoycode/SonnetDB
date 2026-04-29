@@ -165,6 +165,71 @@ public sealed class TsdbWriteTests : IDisposable
     }
 
     [Fact]
+    public void WriteMany_WithNewFieldsAndTags_PersistsMeasurementSchemaOnce()
+    {
+        using var db = Tsdb.Open(MakeOptions());
+
+        Point[] points =
+        [
+            Point.Create("metric", 1000L,
+                new Dictionary<string, string> { ["host"] = "h1" },
+                new Dictionary<string, FieldValue> { ["f1"] = FieldValue.FromDouble(1.0) }),
+            Point.Create("metric", 1001L,
+                new Dictionary<string, string> { ["host"] = "h1", ["rack"] = "r1" },
+                new Dictionary<string, FieldValue> { ["f1"] = FieldValue.FromDouble(2.0), ["f2"] = FieldValue.FromLong(2L) }),
+            Point.Create("metric", 1002L,
+                new Dictionary<string, string> { ["host"] = "h2", ["zone"] = "z1" },
+                new Dictionary<string, FieldValue> { ["f3"] = FieldValue.FromBool(true) }),
+        ];
+
+        int written = db.WriteMany(points);
+
+        Assert.Equal(3, written);
+        Assert.Equal(1L, db.MeasurementSchemaPersistCount);
+
+        var schema = Assert.Single(MeasurementSchemaCodec.Load(TsdbPaths.MeasurementSchemaPath(_tempDir)));
+        Assert.NotNull(schema.TryGetColumn("host"));
+        Assert.NotNull(schema.TryGetColumn("rack"));
+        Assert.NotNull(schema.TryGetColumn("zone"));
+        Assert.NotNull(schema.TryGetColumn("f1"));
+        Assert.NotNull(schema.TryGetColumn("f2"));
+        Assert.NotNull(schema.TryGetColumn("f3"));
+    }
+
+    [Fact]
+    public void WriteMany_IntThenFloatInSameBatch_PromotesSchemaAndPersistsOnce()
+    {
+        using var db = Tsdb.Open(MakeOptions());
+
+        Point[] points =
+        [
+            Point.Create("cpu", 1L,
+                new Dictionary<string, string> { ["host"] = "srv1" },
+                new Dictionary<string, FieldValue> { ["usage"] = FieldValue.FromLong(1L) }),
+            Point.Create("cpu", 2L,
+                new Dictionary<string, string> { ["host"] = "srv1" },
+                new Dictionary<string, FieldValue> { ["usage"] = FieldValue.FromDouble(1.5) }),
+        ];
+
+        int written = db.WriteMany(points);
+
+        Assert.Equal(2, written);
+        Assert.Equal(1L, db.MeasurementSchemaPersistCount);
+
+        var schema = db.Measurements.TryGet("cpu")!;
+        Assert.Equal(FieldType.Float64, schema.TryGetColumn("usage")!.DataType);
+        var persisted = Assert.Single(MeasurementSchemaCodec.Load(TsdbPaths.MeasurementSchemaPath(_tempDir)));
+        Assert.Equal(FieldType.Float64, persisted.TryGetColumn("usage")!.DataType);
+
+        var seriesId = SeriesId.Compute(new SeriesKey("cpu", new Dictionary<string, string>
+        {
+            ["host"] = "srv1",
+        }));
+        var queried = db.Query.Execute(new PointQuery(seriesId, "usage", TimeRange.All)).ToList();
+        Assert.Equal(2, queried.Count);
+    }
+
+    [Fact]
     public void FlushNow_EmptyMemTable_ReturnsNull()
     {
         using var db = Tsdb.Open(MakeOptions());
@@ -198,8 +263,8 @@ public sealed class TsdbWriteTests : IDisposable
         Assert.Single(segments);
         Assert.True(File.Exists(segments[0].Path));
 
-        // catalog 未自动持久化（Dispose 时才保存）
-        Assert.False(File.Exists(TsdbPaths.CatalogPath(_tempDir)));
+        // Flush 在回收旧 WAL 前会持久化 catalog checkpoint
+        Assert.True(File.Exists(TsdbPaths.CatalogPath(_tempDir)));
     }
 
     [Fact]

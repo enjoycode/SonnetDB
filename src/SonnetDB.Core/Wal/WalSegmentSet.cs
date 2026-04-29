@@ -16,6 +16,7 @@ public sealed class WalSegmentSet : IDisposable
 
     private WalWriter? _activeWriter;
     private long _activeRecordCount;
+    private long _syncCount;
     private bool _disposed;
 
     /// <summary>WAL 子目录路径。</summary>
@@ -61,6 +62,15 @@ public sealed class WalSegmentSet : IDisposable
         {
             lock (_sync)
                 return _segments.ToList().AsReadOnly();
+        }
+    }
+
+    internal long SyncCount
+    {
+        get
+        {
+            lock (_sync)
+                return _syncCount;
         }
     }
 
@@ -217,7 +227,7 @@ public sealed class WalSegmentSet : IDisposable
         lock (_sync)
         {
             ThrowIfDisposed();
-            _activeWriter!.Sync();
+            SyncActiveWriterLocked();
         }
     }
 
@@ -402,7 +412,7 @@ public sealed class WalSegmentSet : IDisposable
             return;
 
         long newStartLsn = _activeWriter.NextLsn;
-        _activeWriter.Sync();
+        SyncActiveWriterLocked();
         _activeWriter.Dispose();
         _activeWriter = null;
 
@@ -410,6 +420,12 @@ public sealed class WalSegmentSet : IDisposable
         _activeWriter = WalWriter.Open(newPath, startLsn: newStartLsn, bufferSize: _bufferSize);
         _segments.Add(new WalSegmentInfo(newStartLsn, newPath, 0));
         _activeRecordCount = 0;
+    }
+
+    private void SyncActiveWriterLocked()
+    {
+        _activeWriter!.Sync();
+        _syncCount++;
     }
 
     private void ThrowIfDisposed()

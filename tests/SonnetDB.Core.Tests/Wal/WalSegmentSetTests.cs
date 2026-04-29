@@ -388,7 +388,7 @@ public sealed class WalSegmentSetTests : IDisposable
             set.Sync();
         }
 
-        // 截断最后 5 字节，模拟最后一条记录损坏
+        // 截断最后 5 字节，模拟 active segment 尾部 LastLsn footer 损坏
         string segPath = WalSegmentLayout.SegmentPath(_tempDir, 1L);
         long len = new FileInfo(segPath).Length;
         using (var fs = new FileStream(segPath, FileMode.Open, FileAccess.Write))
@@ -396,12 +396,12 @@ public sealed class WalSegmentSetTests : IDisposable
             fs.SetLength(len - 5);
         }
 
-        // 重新打开应优雅地处理截断，至少前 9 条记录可读
+        // 重新打开应回退扫描记录区，记录本身未损坏时全部可读
         using var set2 = WalSegmentSet.Open(_tempDir, new WalRollingPolicy { Enabled = false }, bufferSize: 4 * 1024);
         var catalog = new SeriesCatalog();
         var result = set2.ReplayWithCheckpoint(catalog);
 
-        Assert.True(result.WritePoints.Count >= 9);
+        Assert.Equal(10, result.WritePoints.Count);
     }
 
     // ── Dispose ─────────────────────────────────────────────────────────────

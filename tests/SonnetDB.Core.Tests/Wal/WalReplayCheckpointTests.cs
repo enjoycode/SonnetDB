@@ -1,5 +1,6 @@
 ﻿using SonnetDB.Catalog;
 using SonnetDB.Model;
+using SonnetDB.Storage.Format;
 using SonnetDB.Wal;
 using Xunit;
 
@@ -175,11 +176,11 @@ public sealed class WalReplayCheckpointTests : IDisposable
             writer.Sync();
         }
 
-        // 截断最后几个字节，模拟最后一条记录损坏
+        // 截断最后几个字节，模拟最后一条记录损坏（先移除可选 footer，避免只截断元数据）。
         long fileLen = new FileInfo(path).Length;
         using (var fs = new FileStream(path, FileMode.Open, FileAccess.Write))
         {
-            fs.SetLength(fileLen - 5);
+            fs.SetLength(fileLen - FormatSizes.WalLastLsnFooterSize - 5);
         }
 
         var catalog = new SeriesCatalog();
