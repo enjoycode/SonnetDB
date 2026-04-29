@@ -9,6 +9,9 @@
     <Project Path="src/SonnetDB.Data/SonnetDB.Data.csproj" />
     <Project Path="src/SonnetDB/SonnetDB.csproj" />
   </Folder>
+  <Folder Name="/connectors/">
+    <Project Path="connectors/c/native/SonnetDB.Native/SonnetDB.Native.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SonnetDB.Accuracy.Tests/SonnetDB.Accuracy.Tests.csproj" />
     <Project Path="tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj" />

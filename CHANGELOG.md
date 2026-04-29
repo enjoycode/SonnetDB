@@ -6,6 +6,8 @@
 ## [Unreleased]
 
 ### Added
+- 新增 `connectors/` 连接器目录，预留 C / Go / Rust / Java / ODBC 连接器；首个 C 连接器通过 .NET Native AOT 将 `SonnetDB.Core` 发布为原生共享库，并导出 open / close / execute / result cursor / flush / last_error 等 C ABI 函数，附带 `sonnetdb.h`、C quickstart 示例与 CMake 构建入口（Windows x64/x86/ARM64、Linux x64）。
+- 新增 Java 连接器第一版：基于 JDK Foreign Function & Memory API 直接包装 C ABI，提供 `SonnetDbConnection` / `SonnetDbResult` / `SonnetDbValueType` / `SonnetDbException`，支持打开嵌入式库、执行 SQL、读取 typed result cursor、Flush 与版本查询，并提供 CMake 构建入口和 quickstart 示例。
 - **写入路径支持受控 schema-on-write**：`Tsdb.Write/WriteMany` 现在会在写 WAL / MemTable 前自动创建或扩展 measurement schema，并先持久化 `measurements.tslschema`，覆盖 SQL `INSERT`、Line Protocol、JSON points 与 Bulk VALUES；缺失 TAG / FIELD 自动补齐，已有 `INT` 字段遇到 `FLOAT` 值会提升为 `FLOAT`，已有 `FLOAT` 字段接收整数时会转换为浮点保存，其它类型漂移仍拒绝。
 - 新增 `eng/build-windows.ps1`，一键完成 Windows `win-x64` Release 构建、NuGet 打包、ZIP Bundle 与 MSI 输出，并把最终可发布文件汇总到 `artifacts/windows/final/` 后清理中间产物；同步修正发布脚本 NuGet 清单为 `SonnetDB.Core` / `SonnetDB` / `SonnetDB.Cli`，让服务端 publish 正确尊重 `BuildAdminUi` 开关，并让 Windows MSI 安装 `SonnetDB` 服务、通过 `DATAROOT` 指定数据目录、把 `sndb` 加入系统 `PATH`。
 - **Apache IoTDB / PostgreSQL TimescaleDB 服务端基准**：`tests/SonnetDB.Benchmarks` 新增 IoTDB REST v2 `insertTablet` / SQL 查询 / `GROUP BY` 时间窗口基准，以及 TimescaleDB hypertable + binary COPY / range query / `time_bucket` 基准；Docker benchmark 环境、启动脚本、README 与 `docs/blogs/111-113` 对比通稿同步补齐实测数据，并统一 benchmark 文档中的时间单位为 ms、数据大小单位为 MB。
