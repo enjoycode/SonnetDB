@@ -220,6 +220,12 @@ Point {
 FieldValue = { Float64 | Int64 | Boolean | String | Vector | GeoPoint }
 ```
 
+### 4.5 稀疏字段语义
+
+SonnetDB 的 field 采用稀疏模型：同一个 measurement 的不同数据点可以携带不同的 field 集合。某个时间点没有写入某个 field 时，查询结果会把该列返回为 `NULL`，表示“未记录该字段”，而不是写入了一个显式空值。
+
+因此，`CREATE MEASUREMENT` 中的 `NULL` / `NOT NULL` 修饰符当前只作为 SQL 兼容信息被 parser 接受，不会持久化为 catalog 约束，也不会强制 `NOT NULL`。`DEFAULT` 子句会在执行建表时明确报不支持；如需默认值，请在写入侧提供具体值，如需缺值，请省略该 field。
+
 ---
 
 ## 5. 存储格式与文件布局
@@ -279,10 +285,10 @@ FieldValue = { Float64 | Int64 | Boolean | String | Vector | GeoPoint }
 CREATE MEASUREMENT cpu (
     host      TAG,
     region    TAG,
-    usage     FIELD FLOAT,
+    usage     FIELD FLOAT NULL,
     cores     FIELD INT,
     throttled FIELD BOOL,
-    label     FIELD STRING
+    label     FIELD STRING NOT NULL
 );
 
 -- 向量字段 + HNSW 索引
@@ -303,6 +309,8 @@ CREATE MEASUREMENT vehicle (
 - 必须至少有一个 FIELD 列
 - time 列不在 schema 中定义，是保留伪列
 - TAG 默认字符串类型，TAG 和 TAG STRING 等价
+- NULL / NOT NULL 为 DDL 兼容修饰符，当前不持久化为约束，也不改变稀疏字段语义
+- DEFAULT 子句当前执行时明确报不支持
 - VECTOR(dim) 的 dim 必须在 CREATE 时指定
 - HNSW 索引参数：m=邻居数，ef=搜索广度
 
@@ -330,7 +338,7 @@ INSERT INTO vehicle (time, device, position, speed) VALUES
 - time 为 Unix 毫秒，省略时使用当前 UTC 时间
 - TAG 列必须为字符串字面量
 - FIELD FLOAT 可接受整数或浮点
-- NULL 当前不支持下
+- NULL 当前不能作为 INSERT 的显式列值；表达缺值请省略该 field
 
 ### 6.3 SELECT 查询
 

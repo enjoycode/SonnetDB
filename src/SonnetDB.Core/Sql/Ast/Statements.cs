@@ -34,12 +34,20 @@ public sealed record HnswVectorIndexSpec(int M, int Ef) : VectorIndexSpec;
 /// <param name="VectorIndex">
 /// 向量列的可选索引声明；仅当 <see cref="DataType"/> 为 <see cref="SqlDataType.Vector"/> 时允许非 <c>null</c>。
 /// </param>
+/// <param name="Nullability">
+/// DDL 兼容用的 <c>NULL</c> / <c>NOT NULL</c> 修饰符；当前不持久化到 catalog，也不改变稀疏字段语义。
+/// </param>
+/// <param name="DefaultExpression">
+/// DDL 兼容用的 <c>DEFAULT</c> 表达式；parser 保留 AST，执行层会明确拒绝。
+/// </param>
 public sealed record ColumnDefinition(
     string Name,
     ColumnKind Kind,
     SqlDataType DataType,
     int? VectorDimension = null,
-    VectorIndexSpec? VectorIndex = null);
+    VectorIndexSpec? VectorIndex = null,
+    ColumnNullability Nullability = ColumnNullability.Unspecified,
+    SqlExpression? DefaultExpression = null);
 
 /// <summary>
 /// <c>INSERT INTO measurement (col, ...) VALUES (v, ...), (...)</c>。

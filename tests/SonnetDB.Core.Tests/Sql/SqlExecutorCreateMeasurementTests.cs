@@ -70,6 +70,34 @@ public class SqlExecutorCreateMeasurementTests : IDisposable
     }
 
     [Fact]
+    public void Execute_CreateMeasurement_WithNullabilityModifiers_RegistersInCatalog()
+    {
+        using var db = Tsdb.Open(Options());
+
+        var result = SqlExecutor.Execute(db,
+            "CREATE MEASUREMENT cpu (host TAG NOT NULL, usage FIELD FLOAT NULL)");
+
+        var schema = Assert.IsType<MeasurementSchema>(result);
+        Assert.Equal(2, schema.Columns.Count);
+        Assert.Equal("host", schema.Columns[0].Name);
+        Assert.Equal("usage", schema.Columns[1].Name);
+    }
+
+    [Fact]
+    public void Execute_CreateMeasurement_WithDefaultModifier_ThrowsUnsupported()
+    {
+        using var db = Tsdb.Open(Options());
+
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            SqlExecutor.Execute(db,
+                "CREATE MEASUREMENT cpu (host TAG, usage FIELD FLOAT DEFAULT 0.0)"));
+
+        Assert.Contains("DEFAULT", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("稀疏字段", ex.Message);
+        Assert.False(db.Measurements.Contains("cpu"));
+    }
+
+    [Fact]
     public void CreateMeasurement_DirectApi_PersistsImmediately()
     {
         var schemaFile = TsdbPaths.MeasurementSchemaPath(_root);

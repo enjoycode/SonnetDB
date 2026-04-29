@@ -267,6 +267,8 @@ public static class SqlExecutor
         ArgumentNullException.ThrowIfNull(tsdb);
         ArgumentNullException.ThrowIfNull(statement);
 
+        RejectUnsupportedDefaults(statement);
+
         var columns = new List<MeasurementColumn>(statement.Columns.Count);
         foreach (var col in statement.Columns)
         {
@@ -280,6 +282,19 @@ public static class SqlExecutor
 
         var schema = MeasurementSchema.Create(statement.Name, columns);
         return tsdb.CreateMeasurement(schema);
+    }
+
+    private static void RejectUnsupportedDefaults(CreateMeasurementStatement statement)
+    {
+        foreach (var col in statement.Columns)
+        {
+            if (col.DefaultExpression is not null)
+            {
+                throw new NotSupportedException(
+                    $"CREATE MEASUREMENT 列 '{col.Name}' 的 DEFAULT 子句暂不支持；" +
+                    "SonnetDB 使用稀疏字段语义，请在 INSERT 时显式写入该 FIELD，或省略该字段让查询结果返回 NULL。");
+            }
+        }
     }
 
     private static MeasurementColumnRole MapRole(ColumnKind kind) => kind switch

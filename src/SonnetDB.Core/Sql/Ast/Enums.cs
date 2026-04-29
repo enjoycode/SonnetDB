@@ -9,6 +9,19 @@ public enum ColumnKind
     Field,
 }
 
+/// <summary>
+/// DDL 兼容用的列空值修饰符；当前仅在 SQL AST 中保留，不改变 SonnetDB 稀疏字段写入语义。
+/// </summary>
+public enum ColumnNullability
+{
+    /// <summary>未显式声明 <c>NULL</c> 或 <c>NOT NULL</c>。</summary>
+    Unspecified,
+    /// <summary>显式声明 <c>NULL</c>。</summary>
+    Nullable,
+    /// <summary>显式声明 <c>NOT NULL</c>；当前执行层不强制该约束。</summary>
+    NotNull,
+}
+
 /// <summary>SQL 层支持的列数据类型，对应 <see cref="SonnetDB.Storage.Format.FieldType"/>。</summary>
 public enum SqlDataType
 {

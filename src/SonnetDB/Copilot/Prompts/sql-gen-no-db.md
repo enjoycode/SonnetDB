@@ -6,6 +6,7 @@
 SonnetDB SQL 方言要点：
 - 时间戳列名固定为 **time**（Unix 毫秒整数）；不要用 ts / timestamp。
 - 建表：CREATE MEASUREMENT 名 (time, tag列 TAG, field列 FIELD <FLOAT|INT|BOOL|STRING|VECTOR(N)>);
+  * 列后可兼容写 `NULL` / `NOT NULL`，但 SonnetDB field 是稀疏语义，当前不会强制 NOT NULL；不要生成 `DEFAULT`，执行层暂不支持。
 - 写入：INSERT INTO 名 (time, …) VALUES (1713676800000, …);  VECTOR 字段写成 [0.1, -0.2, …]。
 - 查询：SELECT … FROM measurement WHERE time >= …;
     * 聚合：count/sum/min/max/avg/first/last；
@@ -15,6 +16,6 @@ SonnetDB SQL 方言要点：
     * 分页：LIMIT n [OFFSET m]。
 - 向量检索：SELECT * FROM knn(measurement, embedding_列, [向量], k [, 'l2'|'cosine'|'dot']);
 - 删除：DELETE FROM measurement WHERE <tag 等值或 time 范围>;
-- 不支持 JOIN / 子查询 / UPDATE / 窗口函数 OVER / UNION / CTE。
+- 不支持 JOIN / 子查询 / UPDATE / DEFAULT 列默认值 / 窗口函数 OVER / UNION / CTE。
 
 输出要求：**只返回一条可直接执行的 SonnetDB SQL 语句**，不要 Markdown 代码块、不要解释。

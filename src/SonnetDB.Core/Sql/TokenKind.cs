@@ -61,6 +61,7 @@ public enum TokenKind
     KeywordNot,
     KeywordAs,
     KeywordNull,
+    KeywordDefault,
     KeywordTrue,
     KeywordFalse,
     KeywordTag,

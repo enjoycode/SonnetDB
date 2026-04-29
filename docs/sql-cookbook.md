@@ -54,10 +54,10 @@ SHOW TOKENS FOR writer;
 CREATE MEASUREMENT cpu (
     host      TAG,
     region    TAG,
-    usage     FIELD FLOAT,
+    usage     FIELD FLOAT NULL,
     cores     FIELD INT,
     throttled FIELD BOOL,
-    label     FIELD STRING
+    label     FIELD STRING NOT NULL
 );
 ```
 
@@ -80,6 +80,20 @@ SHOW MEASUREMENTS;
 DESCRIBE MEASUREMENT cpu;
 DESCRIBE MEASUREMENT documents;
 ```
+
+### 2.3 稀疏字段与 DDL 修饰符
+
+`NULL` / `NOT NULL` 可以写在列声明后，主要用于兼容常见 SQL 生成器；当前不会持久化为 catalog 约束，也不会改变写入行为。SonnetDB 的 field 是稀疏的：某个时间点没写入某个 field，查询时该列返回 `NULL`。
+
+```sql
+CREATE MEASUREMENT sensors (
+    device      TAG NOT NULL,
+    temperature FIELD FLOAT NULL,
+    pressure    FIELD FLOAT NOT NULL
+);
+```
+
+当前 `DEFAULT` 只作为保留语法被 parser 接受，执行 `CREATE MEASUREMENT` 会明确报不支持。需要默认值时，在应用侧或写入 SQL 中直接提供该值；需要缺值时，省略该 field。
 
 ## 3. 写入数据
 

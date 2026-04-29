@@ -17,19 +17,27 @@ permalink: /sql-reference/
 CREATE MEASUREMENT cpu (
     host TAG,
     region TAG STRING,
-    usage FIELD FLOAT,
+    usage FIELD FLOAT NULL,
     count FIELD INT,
     ok FIELD BOOL,
-    label FIELD STRING
+    label FIELD STRING NOT NULL
 )
 ```
 
 规则：
 
 - `TAG` 列默认为字符串，`TAG` 和 `TAG STRING` 等价。
-- `FIELD` 列支持 `FLOAT`、`INT`、`BOOL`、`STRING`。
+- `FIELD` 列支持 `FLOAT`、`INT`、`BOOL`、`STRING`、`VECTOR(N)`、`GEOPOINT`。
 - schema 中至少要有一个 `FIELD` 列。
 - `time` 不属于 schema 定义的一部分。
+- `NULL` / `NOT NULL` 可作为 DDL 兼容修饰符出现在列类型后；当前仅保留在 SQL AST 中，执行层不把它持久化为 catalog 约束，也不强制 `NOT NULL`。
+- `DEFAULT <expr>` 目前会被 parser 接受，但执行 `CREATE MEASUREMENT` 时会返回明确的 `DEFAULT` 暂不支持错误。
+
+稀疏字段语义：
+
+- SonnetDB 的 field 是稀疏的：同一个 measurement 的不同时间点可以携带不同 field 集合。
+- 如果某个时间点没有写入某个 field，查询该列时结果为 `NULL`；这表示“该时间点未记录该字段”，不是 schema 约束失败。
+- 写入时不要用 `DEFAULT` 或显式 `NULL` 表达缺值；请省略该 field，或在应用侧写入具体默认值。
 
 ### `INSERT INTO ... VALUES`
 
@@ -50,7 +58,7 @@ VALUES
 - 目标 measurement 不存在时，`INSERT` 会按列值自动创建 schema；已有 measurement 缺失列时也会自动补齐。
 - SQL `INSERT` 的未知字符串列会推断为 `TAG`，未知非字符串列会推断为 `FIELD`。
 - 已有 `INT` 字段遇到浮点值时会提升为 `FLOAT`；已有 `FLOAT` 字段接收整数时会转换为浮点保存，不会降级为 `INT`。
-- `NULL` 不能用于当前 `INSERT`。
+- `NULL` 不能作为当前 `INSERT` 的显式列值；要表达某个 field 在该时间点缺失，请从列列表中省略它。
 
 ### 原始查询 `SELECT`
 

@@ -36,6 +36,38 @@ public class SqlParserTests
             SqlParser.Parse("CREATE MEASUREMENT m (value FIELD)"));
     }
 
+    [Fact]
+    public void Parse_CreateMeasurement_NullabilityModifiers_ReturnsAst()
+    {
+        var stmt = (CreateMeasurementStatement)SqlParser.Parse(
+            "CREATE MEASUREMENT cpu (host TAG NULL, usage FIELD FLOAT NOT NULL, label FIELD STRING)");
+
+        Assert.Equal(ColumnNullability.Nullable, stmt.Columns[0].Nullability);
+        Assert.Equal(ColumnNullability.NotNull, stmt.Columns[1].Nullability);
+        Assert.Equal(ColumnNullability.Unspecified, stmt.Columns[2].Nullability);
+        Assert.Null(stmt.Columns[0].DefaultExpression);
+    }
+
+    [Fact]
+    public void Parse_CreateMeasurement_DefaultModifier_PreservesAst()
+    {
+        var stmt = (CreateMeasurementStatement)SqlParser.Parse(
+            "CREATE MEASUREMENT cpu (host TAG DEFAULT 'local', usage FIELD FLOAT DEFAULT 0.5)");
+
+        var hostDefault = Assert.IsType<LiteralExpression>(stmt.Columns[0].DefaultExpression);
+        Assert.Equal(LiteralExpression.String("local"), hostDefault);
+
+        var usageDefault = Assert.IsType<LiteralExpression>(stmt.Columns[1].DefaultExpression);
+        Assert.Equal(LiteralExpression.Float(0.5), usageDefault);
+    }
+
+    [Fact]
+    public void Parse_CreateMeasurement_DuplicateNullability_Throws()
+    {
+        Assert.Throws<SqlParseException>(() =>
+            SqlParser.Parse("CREATE MEASUREMENT m (value FIELD FLOAT NULL NOT NULL)"));
+    }
+
     // ── INSERT ────────────────────────────────────────────────────────────
 
     [Fact]

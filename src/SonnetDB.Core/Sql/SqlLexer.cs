@@ -28,6 +28,7 @@ public sealed class SqlLexer
         ["not"] = TokenKind.KeywordNot,
         ["as"] = TokenKind.KeywordAs,
         ["null"] = TokenKind.KeywordNull,
+        ["default"] = TokenKind.KeywordDefault,
         ["true"] = TokenKind.KeywordTrue,
         ["false"] = TokenKind.KeywordFalse,
         ["tag"] = TokenKind.KeywordTag,

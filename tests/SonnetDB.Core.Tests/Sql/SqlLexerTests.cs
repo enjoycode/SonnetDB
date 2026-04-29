@@ -236,4 +236,19 @@ public class SqlLexerTests
         Assert.Contains("ROWS", texts, StringComparer.OrdinalIgnoreCase);
         Assert.Contains("ONLY", texts, StringComparer.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void Tokenize_DdlModifierKeywords_AreRecognized()
+    {
+        var tokens = SqlLexer.Tokenize("NULL NOT DEFAULT");
+        var kinds = System.Linq.Enumerable.Select(tokens, t => t.Kind).ToArray();
+
+        Assert.Equal(new[]
+        {
+            TokenKind.KeywordNull,
+            TokenKind.KeywordNot,
+            TokenKind.KeywordDefault,
+            TokenKind.EndOfFile,
+        }, kinds);
+    }
 }

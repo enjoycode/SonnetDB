@@ -120,6 +120,8 @@ public sealed class SqlParser
         SqlDataType dataType;
         int? vectorDim = null;
         VectorIndexSpec? vectorIndex = null;
+        ColumnNullability nullability = ColumnNullability.Unspecified;
+        SqlExpression? defaultExpression = null;
         switch (Current.Kind)
         {
             case TokenKind.KeywordTag:
@@ -141,16 +143,70 @@ public sealed class SqlParser
                 Advance();
                 kind = ColumnKind.Field;
                 (dataType, vectorDim) = ParseFieldDataType();
-                if (dataType == SqlDataType.Vector)
-                    vectorIndex = ParseOptionalVectorIndex();
-                else if (Current.Kind == TokenKind.KeywordWith)
-                    throw Error("只有 VECTOR 列支持 WITH INDEX 声明");
                 break;
 
             default:
                 throw Error("期望 TAG 或 FIELD");
         }
-        return new ColumnDefinition(columnName, kind, dataType, vectorDim, vectorIndex);
+
+        ParseColumnModifiers(dataType, ref vectorIndex, ref nullability, ref defaultExpression);
+        return new ColumnDefinition(
+            columnName,
+            kind,
+            dataType,
+            vectorDim,
+            VectorIndex: vectorIndex,
+            Nullability: nullability,
+            DefaultExpression: defaultExpression);
+    }
+
+    private void ParseColumnModifiers(
+        SqlDataType dataType,
+        ref VectorIndexSpec? vectorIndex,
+        ref ColumnNullability nullability,
+        ref SqlExpression? defaultExpression)
+    {
+        while (true)
+        {
+            switch (Current.Kind)
+            {
+                case TokenKind.KeywordNull:
+                    SetNullability(ref nullability, ColumnNullability.Nullable);
+                    Advance();
+                    continue;
+
+                case TokenKind.KeywordNot:
+                    Advance();
+                    Expect(TokenKind.KeywordNull);
+                    SetNullability(ref nullability, ColumnNullability.NotNull);
+                    continue;
+
+                case TokenKind.KeywordDefault:
+                    if (defaultExpression is not null)
+                        throw Error("DEFAULT 子句重复声明");
+                    Advance();
+                    defaultExpression = ParseExpression();
+                    continue;
+
+                case TokenKind.KeywordWith:
+                    if (dataType != SqlDataType.Vector)
+                        throw Error("只有 VECTOR 列支持 WITH INDEX 声明");
+                    if (vectorIndex is not null)
+                        throw Error("WITH INDEX 子句重复声明");
+                    vectorIndex = ParseVectorIndex();
+                    continue;
+
+                default:
+                    return;
+            }
+        }
+    }
+
+    private void SetNullability(ref ColumnNullability current, ColumnNullability next)
+    {
+        if (current != ColumnNullability.Unspecified)
+            throw Error("NULL / NOT NULL 修饰符重复或冲突");
+        current = next;
     }
 
     private SqlDataType ParseDataType()
@@ -194,11 +250,8 @@ public sealed class SqlParser
                 or TokenKind.KeywordBool or TokenKind.KeywordString
                 or TokenKind.KeywordVector or TokenKind.KeywordGeoPoint;
 
-    private VectorIndexSpec? ParseOptionalVectorIndex()
+    private VectorIndexSpec ParseVectorIndex()
     {
-        if (Current.Kind != TokenKind.KeywordWith)
-            return null;
-
         Advance();
         ExpectIdentifier("index", "WITH 后面期望 INDEX");
 

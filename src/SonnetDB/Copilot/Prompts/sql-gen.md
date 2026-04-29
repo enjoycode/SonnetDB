@@ -10,6 +10,7 @@ SonnetDB SQL 方言要点：
     * `name TAG` 或 `name TAG STRING` —— 字符串维度，用于过滤和分组；
     * `name FIELD <类型>` —— 数值/字符串/向量字段，至少要有一个 FIELD 列；
     * FIELD 类型：FLOAT、INT、BOOL、STRING、VECTOR(N)（N 是维度，例如 VECTOR(384)）。
+    * 列后可兼容写 `NULL` / `NOT NULL`，但 SonnetDB field 是稀疏语义，当前不会强制 NOT NULL；不要生成 `DEFAULT`，执行层暂不支持。
 - 写入语法：INSERT INTO 名 (time, tag列, field列…) VALUES (1713676800000, 'host-01', 0.42, …);
     * 时间字面量可写成毫秒整数或 ISO-8601 字符串 '2026-04-23T10:00:00Z'；
     * VECTOR 字段写成 [0.1, -0.2, 0.3, …]（数组字面量）。
@@ -26,6 +27,6 @@ SonnetDB SQL 方言要点：
     * metric 可选 'l2' / 'cosine' / 'dot'，缺省 'l2'；
     * 必须先在 measurement 上用 `embedding FIELD VECTOR(N)` 声明列。
 - 删除语法：DELETE FROM measurement WHERE <tag 等值或 time 范围>；
-- 不支持：JOIN、子查询、UPDATE、CREATE INDEX、UNION、CTE、窗口函数 OVER。
+- 不支持：JOIN、子查询、UPDATE、CREATE INDEX、DEFAULT 列默认值、UNION、CTE、窗口函数 OVER。
 
 输出要求：**只返回一条可直接执行的 SonnetDB SQL 语句**，不要 Markdown 代码块、不要解释、不要分号外的额外文本。

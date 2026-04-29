@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Added
+- **SQL DDL 兼容修饰符（PR 4）**：lexer 新增 `DEFAULT` 关键字；`CREATE MEASUREMENT` parser 接受列级 `NULL` / `NOT NULL` 与 `DEFAULT <expr>` 并在 AST 中保留；执行层对 `DEFAULT` 返回明确 unsupported，`NULL` / `NOT NULL` 保持兼容性 no-op，并在 SQL 文档中说明 SonnetDB 的稀疏字段语义。
 - **SQL 单表别名与限定列名（PR 3）**：SQL lexer 新增 `.` token；parser 支持 `FROM measurement [AS] alias` 与 `alias.column` / `alias."Column"` 列引用；执行器在查询执行前校验限定符必须匹配当前单表别名，继续明确不支持 `JOIN`。
 - **SQL `ORDER BY time`（PR 2）**：SQL lexer 新增 `ORDER` / `ASC` 关键字识别（`DESC` 复用已有 `DESC` token），`SELECT` AST 增加 `OrderBySpec`，parser 支持 `ORDER BY time [ASC|DESC]`，执行器会在 `LIMIT/OFFSET/FETCH` 前按结果集中的 `time` 列排序，并同步修正分页文档示例。
 - **SQL 兼容性基础（PR 1）**：`SELECT` 现在支持常见探活写法 `SELECT 1 ... LIMIT 1` 的字面量投影；聚合函数 `count` 额外兼容 `count(1)`，语义等同于 `count(*)`，方便 Copilot / ORM 生成 SQL 直接执行。
@@ -955,4 +956,3 @@
 [0.1.0]: https://github.com/maikebing/SonnetDB/releases/tag/v0.1.0
 [0.2.0]: https://github.com/maikebing/SonnetDB/releases/tag/v0.2.0
 [0.3.0]: https://github.com/maikebing/SonnetDB/releases/tag/v0.3.0
-
