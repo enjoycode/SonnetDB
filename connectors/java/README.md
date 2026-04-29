@@ -83,12 +83,16 @@ cmake --build artifacts/connectors/java/windows-x64 --target run_sonnetdb_java_q
 On WSL / Linux x64:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y openjdk-21-jdk build-essential clang zlib1g-dev cmake
+
 cmake -S connectors/c -B artifacts/connectors/c/linux-x64 -DSONNETDB_C_RID=linux-x64 -DCMAKE_BUILD_TYPE=Release
 cmake --build artifacts/connectors/c/linux-x64
 
 cmake -S connectors/java --preset linux-x64
 cmake --build artifacts/connectors/java/linux-x64
 cmake --build artifacts/connectors/java/linux-x64 --target run_sonnetdb_java_quickstart
+cmake --build artifacts/connectors/java/linux-x64 --target run_sonnetdb_java_quickstart_ffm
 ```
 
 ## Manual Run
