@@ -98,22 +98,28 @@ add_custom_command(
 add_custom_target(sonnetdb_native_publish ALL
     DEPENDS "${SONNETDB_NATIVE_STAMP}")
 
-add_library(sonnetdb_c SHARED IMPORTED GLOBAL)
-add_dependencies(sonnetdb_c sonnetdb_native_publish)
-
-set_target_properties(sonnetdb_c PROPERTIES
-    IMPORTED_LOCATION "${SONNETDB_NATIVE_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${SONNETDB_C_INCLUDE_DIR}")
-
 if(WIN32)
+    add_library(sonnetdb_c SHARED IMPORTED GLOBAL)
+    add_dependencies(sonnetdb_c sonnetdb_native_publish)
     set_target_properties(sonnetdb_c PROPERTIES
+        IMPORTED_LOCATION "${SONNETDB_NATIVE_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${SONNETDB_C_INCLUDE_DIR}"
         IMPORTED_IMPLIB "${SONNETDB_NATIVE_IMPORT_LIBRARY}")
+elseif(UNIX AND NOT APPLE)
+    add_library(sonnetdb_c INTERFACE)
+    add_dependencies(sonnetdb_c sonnetdb_native_publish)
+    target_include_directories(sonnetdb_c INTERFACE "${SONNETDB_C_INCLUDE_DIR}")
+    target_link_directories(sonnetdb_c INTERFACE "${SONNETDB_NATIVE_PUBLISH_DIR}")
+    target_link_libraries(sonnetdb_c INTERFACE "-l:SonnetDB.Native.so")
 endif()
 
 if(SONNETDB_C_BUILD_EXAMPLES)
     add_executable(sonnetdb_quickstart examples/quickstart.c)
     target_compile_features(sonnetdb_quickstart PRIVATE c_std_99)
     target_link_libraries(sonnetdb_quickstart PRIVATE sonnetdb_c)
+    if(UNIX AND NOT APPLE)
+        add_dependencies(sonnetdb_quickstart sonnetdb_native_publish)
+    endif()
 
     add_custom_command(TARGET sonnetdb_quickstart POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different

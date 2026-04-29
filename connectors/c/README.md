@@ -45,6 +45,7 @@ On WSL / Linux x64:
 ```bash
 cmake -S connectors/c -B artifacts/connectors/c/linux-x64 -DSONNETDB_C_RID=linux-x64 -DCMAKE_BUILD_TYPE=Release
 cmake --build artifacts/connectors/c/linux-x64
+./artifacts/connectors/c/linux-x64/sonnetdb_quickstart
 ```
 
 The build output contains:
