@@ -35,7 +35,7 @@
 - **PR #77 — 地理空间基准 + 文档完善**：新增 `GeoQueryBenchmark`，覆盖 `100k` 默认轨迹点和可选 `1M` 档位下的 `geo_within`、`geo_bbox`、`trajectory_length` 与 `GEOPOINT` range scan；README 与 `docs/geo-spatial.md` 补齐地理空间功能矩阵、Web Admin / SQL Console 地图用法、基准运行方式和车辆追踪 / 户外运动 / IoT 地理围栏端到端示例。
 
 ### Changed
-- **MemTable Flush 热路径统计增量化**：`MemTable.EstimatedBytes` / `MinTimestamp` / `MaxTimestamp` 现在由 `Append` / WAL replay / Flush reset 生命周期维护，`ShouldFlush` 不再遍历全部 series；补充并发 append、replay 统计与 flush 后重置回归测试。
+- **MemTable Flush 热路径统计增量化**：`MemTable.EstimatedBytes` / `MinTimestamp` / `MaxTimestamp` 现在由 `Append` / WAL replay / Flush reset 生命周期维护，`ShouldFlush` 不再遍历全部 series；`MemTableSeries` 的字符串字段在 Append 时增量累加 UTF-8 byte count，并缓存无追加期间的只读 Snapshot，避免 `EstimatedBytes` 与重复查询路径反复全量遍历/分配。补充并发 append、replay、string/null/非 string 混合统计、重复 Snapshot/Range 分配与 flush 后重置回归测试。
 - **Measurement schema-on-write 批量持久化**：`Tsdb.WriteMany(ReadOnlySpan<Point>)` 现在会先合并整批新增 TAG/FIELD 与 INT→FLOAT 类型提升，单次原子写入 `measurements.tslschema` 后再写 WAL/MemTable，保持“schema 先于数据可恢复”的崩溃安全语义，同时避免同一批导入中每个新增列都触发一次 schema fsync。
 - **WAL catalog checkpoint**：`Tsdb.FlushNowLocked` 不再在每次 Flush 后向新 WAL 重写全量 `CreateSeries` snapshot；当 catalog 出现新增 series 时，Flush 会先原子持久化 `catalog.SDBCAT`，再写 Segment / WAL Checkpoint / 回收旧 WAL segment。崩溃恢复现在由「已 checkpoint 的 series 来自 catalog 文件，checkpoint 之后的新 series 继续来自 WAL `CreateSeries`」共同保证，避免 catalog 大时每次 Flush 产生 O(series_count) WAL 放大。
 

@@ -1,5 +1,6 @@
 ﻿using SonnetDB.Model;
 using SonnetDB.Storage.Format;
+using System.Buffers;
 
 namespace SonnetDB.Memory;
 
@@ -17,6 +18,8 @@ public sealed class MemTableSeries
     private long _minTimestamp = long.MaxValue;
     private long _maxTimestamp = long.MinValue;
     private long _estimatedBytes;
+    private ReadOnlyMemory<DataPoint> _snapshotCache;
+    private int _snapshotCacheCount = -1;
     // 数值字段的运行期增量聚合（Float64/Int64/Boolean），用于范围全覆盖时的查询快路径。
     // 非数值字段始终保持 _hasNumericAggregates = false。
     private bool _hasNumericAggregates;
@@ -192,6 +195,7 @@ public sealed class MemTableSeries
             }
 
             _points.Add(new DataPoint(timestamp, value));
+            InvalidateSnapshotCache();
             return addedBytes;
         }
     }
@@ -221,10 +225,14 @@ public sealed class MemTableSeries
     {
         lock (_sync)
         {
-            if (_isSorted)
-                return _points.ToArray();
+            int count = _points.Count;
+            if (_snapshotCacheCount == count)
+                return _snapshotCache;
 
-            return StableSorted();
+            if (count == 0)
+                return CacheSnapshot([]);
+
+            return CacheSnapshot(_isSorted ? _points.ToArray() : StableSorted());
         }
     }
 
@@ -272,6 +280,19 @@ public sealed class MemTableSeries
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
 
+    private ReadOnlyMemory<DataPoint> CacheSnapshot(DataPoint[] snapshot)
+    {
+        _snapshotCache = new SnapshotMemoryManager(snapshot).Memory.Slice(0, snapshot.Length);
+        _snapshotCacheCount = snapshot.Length;
+        return _snapshotCache;
+    }
+
+    private void InvalidateSnapshotCache()
+    {
+        _snapshotCache = default;
+        _snapshotCacheCount = -1;
+    }
+
     private DataPoint[] StableSorted()
     {
         // 稳定排序：通过 (index, point) 对保证同 timestamp 保留追加顺序
@@ -290,5 +311,28 @@ public sealed class MemTableSeries
             result[i] = indexed[i].Point;
 
         return result;
+    }
+
+    private sealed class SnapshotMemoryManager : MemoryManager<DataPoint>
+    {
+        private readonly DataPoint[] _items;
+
+        public SnapshotMemoryManager(DataPoint[] items)
+        {
+            _items = items;
+        }
+
+        public override Span<DataPoint> GetSpan() => _items;
+
+        public override MemoryHandle Pin(int elementIndex = 0)
+            => throw new NotSupportedException("MemTableSeries 快照不支持 pinning。");
+
+        public override void Unpin()
+        {
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+        }
     }
 }

@@ -1,6 +1,7 @@
 ﻿using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Storage.Format;
+using System.Text;
 using Xunit;
 
 namespace SonnetDB.Core.Tests.Memory;
@@ -296,5 +297,48 @@ public sealed class MemTableTests
         table.Append(1UL, 2000L, "v", FieldValue.FromDouble(2.0), 2L);
 
         Assert.Equal(32L, table.EstimatedBytes);
+    }
+
+    [Fact]
+    public void EstimatedBytes_StringAndNonStringBuckets_MatchesLegacyFormula()
+    {
+        var table = new MemTable();
+        string[] strings = ["", "ok", "温度"];
+
+        long expected = 0;
+        for (int i = 0; i < strings.Length; i++)
+        {
+            table.Append(1UL, i, "label", FieldValue.FromString(strings[i]), i + 1);
+            expected += 16L + Encoding.UTF8.GetByteCount(strings[i]);
+        }
+
+        table.Append(1UL, 10L, "value", FieldValue.FromDouble(1.5), 10L);
+        expected += 16L;
+        table.Append(1UL, 11L, "ok", FieldValue.FromBool(true), 11L);
+        expected += 9L;
+        table.Append(1UL, 12L, "embedding", FieldValue.FromVector(new[] { 1.0f, 2.0f }), 12L);
+        expected += 24L;
+        table.Append(1UL, 13L, "location", FieldValue.FromGeoPoint(31.23, 121.47), 13L);
+        expected += 24L;
+
+        Assert.Equal(7L, table.PointCount);
+        Assert.Equal(expected, table.EstimatedBytes);
+    }
+
+    [Fact]
+    public void Append_NullFieldName_ThrowsAndDoesNotChangeIncrementalStatistics()
+    {
+        var table = new MemTable();
+        table.Append(1UL, 1000L, "label", FieldValue.FromString("ok"), 1L);
+        long expectedBytes = 16L + Encoding.UTF8.GetByteCount("ok");
+
+        Assert.Throws<ArgumentNullException>(() =>
+            table.Append(1UL, 2000L, null!, FieldValue.FromString("bad"), 2L));
+
+        Assert.Equal(1L, table.PointCount);
+        Assert.Equal(1, table.SeriesCount);
+        Assert.Equal(expectedBytes, table.EstimatedBytes);
+        Assert.Equal(1000L, table.MinTimestamp);
+        Assert.Equal(1000L, table.MaxTimestamp);
     }
 }

@@ -1,6 +1,8 @@
 ﻿using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Storage.Format;
+using System.Runtime.InteropServices;
+using System.Text;
 using Xunit;
 
 namespace SonnetDB.Core.Tests.Memory;
@@ -137,6 +139,55 @@ public sealed class MemTableSeriesTests
     }
 
     [Fact]
+    public void Snapshot_RepeatedQueries_ReusesCachedReadOnlySnapshot()
+    {
+        var series = new MemTableSeries(MakeKey(), FieldType.Float64);
+        for (int i = 0; i < 256; i++)
+            series.Append(i, FieldValue.FromDouble(i));
+
+        var snapshot = series.Snapshot();
+        var range = series.SnapshotRange(10L, 20L);
+        Assert.False(MemoryMarshal.TryGetArray(snapshot, out ArraySegment<DataPoint> _));
+        Assert.False(MemoryMarshal.TryGetArray(range, out ArraySegment<DataPoint> _));
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        long checksum = 0;
+        for (int i = 0; i < 1_000; i++)
+        {
+            var snap = series.Snapshot();
+            var slice = series.SnapshotRange(10L, 20L);
+            checksum += snap.Length;
+            checksum += slice.Length;
+            checksum += snap.Span[0].Timestamp;
+            checksum += slice.Span[0].Timestamp;
+        }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.True(checksum > 0);
+        Assert.True(allocated < 1024, $"重复 Snapshot/SnapshotRange 不应分配新数组，实际分配 {allocated} bytes。");
+    }
+
+    [Fact]
+    public void Snapshot_AfterAppend_InvalidatesCachedSnapshot()
+    {
+        var series = new MemTableSeries(MakeKey(), FieldType.Float64);
+        series.Append(1000L, FieldValue.FromDouble(1.0));
+        series.Append(2000L, FieldValue.FromDouble(2.0));
+
+        var beforeAppend = series.Snapshot();
+
+        series.Append(3000L, FieldValue.FromDouble(3.0));
+        var afterAppend = series.Snapshot();
+
+        Assert.Equal(2, beforeAppend.Length);
+        Assert.Equal(3, afterAppend.Length);
+        Assert.Equal(1000L, afterAppend.Span[0].Timestamp);
+        Assert.Equal(2000L, afterAppend.Span[1].Timestamp);
+        Assert.Equal(3000L, afterAppend.Span[2].Timestamp);
+        Assert.False(MemoryMarshal.TryGetArray(afterAppend, out ArraySegment<DataPoint> _));
+    }
+
+    [Fact]
     public void Count_UpdatesOnAppend()
     {
         var series = new MemTableSeries(MakeKey(), FieldType.Boolean);
@@ -170,6 +221,36 @@ public sealed class MemTableSeriesTests
             series.Append(i, FieldValue.FromBool(i % 2 == 0));
 
         Assert.Equal(n * 9L, series.EstimatedBytes);
+    }
+
+    [Fact]
+    public void EstimatedBytes_String_IncrementalUtf8BytesMatchLegacyFormula()
+    {
+        var series = new MemTableSeries(MakeKey(), FieldType.String);
+        string[] values = ["", "sensor-a", "温度=二十"];
+
+        long expected = 0;
+        for (int i = 0; i < values.Length; i++)
+        {
+            series.Append(i, FieldValue.FromString(values[i]));
+            expected += 16L + Encoding.UTF8.GetByteCount(values[i]);
+            Assert.Equal(expected, series.EstimatedBytes);
+        }
+
+        Assert.Equal(values.Length, series.Count);
+    }
+
+    [Fact]
+    public void EstimatedBytes_StringNull_ThrowsAndDoesNotChangeStatistics()
+    {
+        var series = new MemTableSeries(MakeKey(), FieldType.String);
+        series.Append(1L, FieldValue.FromString("ok"));
+        long expectedBytes = 16L + Encoding.UTF8.GetByteCount("ok");
+
+        Assert.Throws<ArgumentNullException>(() => FieldValue.FromString(null!));
+
+        Assert.Equal(1, series.Count);
+        Assert.Equal(expectedBytes, series.EstimatedBytes);
     }
 
     [Fact]
