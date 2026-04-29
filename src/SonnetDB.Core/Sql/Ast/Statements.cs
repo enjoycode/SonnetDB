@@ -61,13 +61,33 @@ public sealed record InsertStatement(
 /// <param name="GroupBy">GROUP BY 表达式列表；当未指定 GROUP BY 时为空集合（不为 <c>null</c>）。</param>
 /// <param name="TableValuedFunction">FROM 子句若为表值函数调用（PR #55 起的 forecast 等）则非 <c>null</c>，否则 <c>null</c>。</param>
 /// <param name="Pagination">可选分页子句；支持 <c>OFFSET/FETCH</c> 与兼容语法 <c>LIMIT</c>。</param>
+/// <param name="OrderBy">可选排序子句；当前仅支持 <c>ORDER BY time [ASC|DESC]</c>。</param>
+/// <param name="TableAlias">FROM 子句声明的可选单表别名；当前不支持 JOIN。</param>
 public sealed record SelectStatement(
     IReadOnlyList<SelectItem> Projections,
     string Measurement,
     SqlExpression? Where,
     IReadOnlyList<SqlExpression> GroupBy,
     FunctionCallExpression? TableValuedFunction = null,
-    PaginationSpec? Pagination = null) : SqlStatement;
+    PaginationSpec? Pagination = null,
+    OrderBySpec? OrderBy = null,
+    string? TableAlias = null) : SqlStatement;
+
+/// <summary>排序方向。</summary>
+public enum SortDirection
+{
+    /// <summary>升序。</summary>
+    Ascending,
+    /// <summary>降序。</summary>
+    Descending,
+}
+
+/// <summary>
+/// 排序子句参数：当前仅支持 <c>ORDER BY time [ASC|DESC]</c>。
+/// </summary>
+/// <param name="Expression">排序表达式。</param>
+/// <param name="Direction">排序方向；未显式指定时为升序。</param>
+public sealed record OrderBySpec(SqlExpression Expression, SortDirection Direction);
 
 /// <summary>
 /// 分页子句参数：<c>OFFSET</c> + 可选 <c>FETCH</c>。

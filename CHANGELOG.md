@@ -6,6 +6,8 @@
 ## [Unreleased]
 
 ### Added
+- **SQL 单表别名与限定列名（PR 3）**：SQL lexer 新增 `.` token；parser 支持 `FROM measurement [AS] alias` 与 `alias.column` / `alias."Column"` 列引用；执行器在查询执行前校验限定符必须匹配当前单表别名，继续明确不支持 `JOIN`。
+- **SQL `ORDER BY time`（PR 2）**：SQL lexer 新增 `ORDER` / `ASC` 关键字识别（`DESC` 复用已有 `DESC` token），`SELECT` AST 增加 `OrderBySpec`，parser 支持 `ORDER BY time [ASC|DESC]`，执行器会在 `LIMIT/OFFSET/FETCH` 前按结果集中的 `time` 列排序，并同步修正分页文档示例。
 - **SQL 兼容性基础（PR 1）**：`SELECT` 现在支持常见探活写法 `SELECT 1 ... LIMIT 1` 的字面量投影；聚合函数 `count` 额外兼容 `count(1)`，语义等同于 `count(*)`，方便 Copilot / ORM 生成 SQL 直接执行。
 - 新增 `connectors/` 连接器目录，预留 C / Go / Rust / Java / ODBC 连接器；首个 C 连接器通过 .NET Native AOT 将 `SonnetDB.Core` 发布为原生共享库，并导出 open / close / execute / result cursor / flush / last_error 等 C ABI 函数，附带 `sonnetdb.h`、C quickstart 示例与 CMake 构建入口（Windows x64/x86/ARM64、Linux x64）。
 - 新增 Java 连接器第一版：提供 Java 8 兼容的默认 JNI 后端与 JDK 21+ 可选 FFM 后端，基于 C ABI 暴露 `SonnetDbConnection` / `SonnetDbResult` / `SonnetDbValueType` / `SonnetDbException`，支持打开嵌入式库、执行 SQL、读取 typed result cursor、Flush 与版本查询，并提供 CMake 构建入口和 quickstart 示例。
@@ -953,5 +955,4 @@
 [0.1.0]: https://github.com/maikebing/SonnetDB/releases/tag/v0.1.0
 [0.2.0]: https://github.com/maikebing/SonnetDB/releases/tag/v0.2.0
 [0.3.0]: https://github.com/maikebing/SonnetDB/releases/tag/v0.3.0
-
 

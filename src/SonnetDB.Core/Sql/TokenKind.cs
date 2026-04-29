@@ -22,6 +22,7 @@ public enum TokenKind
     RightBracket,
     Comma,
     Semicolon,
+    Dot,
     Star,
 
     // 比较 / 算术运算符
@@ -109,7 +110,9 @@ public enum TokenKind
     KeywordDescribe,
     KeywordDesc,
 
-    // 分页子句：OFFSET / FETCH / LIMIT
+    // 排序 / 分页子句：ORDER BY / ASC / DESC / OFFSET / FETCH / LIMIT
+    KeywordOrder,
+    KeywordAsc,
     KeywordOffset,
     KeywordFetch,
     KeywordLimit,

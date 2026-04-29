@@ -75,6 +75,8 @@ public sealed class SqlLexer
         ["desc"] = TokenKind.KeywordDesc,
 
         // 分页子句
+        ["order"] = TokenKind.KeywordOrder,
+        ["asc"] = TokenKind.KeywordAsc,
         ["offset"] = TokenKind.KeywordOffset,
         ["fetch"] = TokenKind.KeywordFetch,
         ["limit"] = TokenKind.KeywordLimit,
@@ -146,6 +148,7 @@ public sealed class SqlLexer
             case ']': _position++; return new Token(TokenKind.RightBracket, "]", start);
             case ',': _position++; return new Token(TokenKind.Comma, ",", start);
             case ';': _position++; return new Token(TokenKind.Semicolon, ";", start);
+            case '.': _position++; return new Token(TokenKind.Dot, ".", start);
             case '*': _position++; return new Token(TokenKind.Star, "*", start);
             case '+': _position++; return new Token(TokenKind.Plus, "+", start);
             case '-': _position++; return new Token(TokenKind.Minus, "-", start);

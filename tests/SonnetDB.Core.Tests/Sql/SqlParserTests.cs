@@ -247,6 +247,65 @@ public class SqlParserTests
     }
 
     [Fact]
+    public void Parse_Select_FromAliasWithQualifiedColumns_ReturnsAst()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse(
+            "SELECT c.time, c.\"usage\" FROM cpu AS c WHERE c.host = 'h1' ORDER BY c.time DESC LIMIT 2");
+
+        Assert.Equal("cpu", stmt.Measurement);
+        Assert.Equal("c", stmt.TableAlias);
+
+        var time = Assert.IsType<IdentifierExpression>(stmt.Projections[0].Expression);
+        Assert.Equal("time", time.Name);
+        Assert.Equal("c", time.Qualifier);
+
+        var usage = Assert.IsType<IdentifierExpression>(stmt.Projections[1].Expression);
+        Assert.Equal("usage", usage.Name);
+        Assert.Equal("c", usage.Qualifier);
+
+        var where = Assert.IsType<BinaryExpression>(stmt.Where);
+        var host = Assert.IsType<IdentifierExpression>(where.Left);
+        Assert.Equal("host", host.Name);
+        Assert.Equal("c", host.Qualifier);
+
+        var orderBy = Assert.IsType<IdentifierExpression>(stmt.OrderBy!.Expression);
+        Assert.Equal("time", orderBy.Name);
+        Assert.Equal("c", orderBy.Qualifier);
+        Assert.Equal(SortDirection.Descending, stmt.OrderBy.Direction);
+    }
+
+    [Fact]
+    public void Parse_Select_FromAliasWithoutAs_ParsesAlias()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse("SELECT c.time FROM cpu c");
+
+        Assert.Equal("c", stmt.TableAlias);
+        var time = Assert.IsType<IdentifierExpression>(stmt.Projections[0].Expression);
+        Assert.Equal("time", time.Name);
+        Assert.Equal("c", time.Qualifier);
+    }
+
+    [Fact]
+    public void Parse_Select_OrderByTimeDesc_ParsesOrderByBeforePagination()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse("SELECT time, usage FROM cpu ORDER BY time DESC LIMIT 2");
+
+        Assert.NotNull(stmt.OrderBy);
+        var id = Assert.IsType<IdentifierExpression>(stmt.OrderBy!.Expression);
+        Assert.Equal("time", id.Name);
+        Assert.Equal(SortDirection.Descending, stmt.OrderBy.Direction);
+        Assert.NotNull(stmt.Pagination);
+        Assert.Equal(2, stmt.Pagination!.Fetch);
+    }
+
+    [Fact]
+    public void Parse_Select_OrderByUnsupportedColumn_Throws()
+    {
+        Assert.Throws<SqlParseException>(() =>
+            SqlParser.Parse("SELECT time, usage FROM cpu ORDER BY usage DESC"));
+    }
+
+    [Fact]
     public void Parse_Select_OffsetFetch_ParsesPagination()
     {
         var stmt = (SelectStatement)SqlParser.Parse(
@@ -335,7 +394,13 @@ public class SqlParserTests
     [Fact]
     public void Parse_TrailingGarbage_Throws()
     {
-        Assert.Throws<SqlParseException>(() => SqlParser.Parse("SELECT * FROM cpu garbage"));
+        Assert.Throws<SqlParseException>(() => SqlParser.Parse("SELECT * FROM cpu alias garbage"));
+    }
+
+    [Fact]
+    public void Parse_Select_JoinSyntax_Throws()
+    {
+        Assert.Throws<SqlParseException>(() => SqlParser.Parse("SELECT * FROM cpu c JOIN memory"));
     }
 
     [Fact]

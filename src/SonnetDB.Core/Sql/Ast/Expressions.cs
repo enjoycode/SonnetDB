@@ -61,9 +61,10 @@ public sealed record VectorLiteralExpression(IReadOnlyList<double> Components) :
 /// <param name="Lon">经度，范围由执行器校验为 [-180, 180]。</param>
 public sealed record GeoPointLiteralExpression(double Lat, double Lon) : SqlExpression;
 
-/// <summary>标识符引用（列名 / 字段名 / tag 名）。</summary>
+/// <summary>标识符引用（列名 / 字段名 / tag 名），可带单表别名限定符。</summary>
 /// <param name="Name">标识符名称（保留原始大小写）。</param>
-public sealed record IdentifierExpression(string Name) : SqlExpression;
+/// <param name="Qualifier">可选限定符，例如 <c>alias.column</c> 中的 <c>alias</c>。</param>
+public sealed record IdentifierExpression(string Name, string? Qualifier = null) : SqlExpression;
 
 /// <summary><c>*</c> 通配符（仅出现在 SELECT 列表或 COUNT(*) 中）。</summary>
 public sealed record StarExpression : SqlExpression

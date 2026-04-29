@@ -310,6 +310,7 @@ public sealed class SqlParser
         //   1) 普通 measurement 标识符
         //   2) 表值函数调用，例如 forecast(measurement, field, horizon, 'algo'[, season])
         string measurement;
+        string? tableAlias = null;
         FunctionCallExpression? tvf = null;
         if (Current.Kind == TokenKind.IdentifierLiteral
             && _index + 1 < _tokens.Count
@@ -329,6 +330,7 @@ public sealed class SqlParser
         else
         {
             measurement = ExpectIdentifierName();
+            tableAlias = ParseOptionalTableAlias();
         }
 
         SqlExpression? where = null;
@@ -346,9 +348,64 @@ public sealed class SqlParser
             groupBy = ParseGroupByList();
         }
 
+        var orderBy = ParseOptionalOrderBy();
         var pagination = ParseOptionalPagination();
 
-        return new SelectStatement(projections, measurement, where, groupBy, tvf, pagination);
+        return new SelectStatement(
+            projections,
+            measurement,
+            where,
+            groupBy,
+            TableValuedFunction: tvf,
+            Pagination: pagination,
+            OrderBy: orderBy,
+            TableAlias: tableAlias);
+    }
+
+    private string? ParseOptionalTableAlias()
+    {
+        if (Current.Kind == TokenKind.KeywordAs)
+        {
+            Advance();
+            return ExpectIdentifierName();
+        }
+
+        if (Current.Kind == TokenKind.IdentifierLiteral)
+        {
+            var alias = Current.Text;
+            Advance();
+            return alias;
+        }
+
+        return null;
+    }
+
+    private OrderBySpec? ParseOptionalOrderBy()
+    {
+        if (Current.Kind != TokenKind.KeywordOrder)
+            return null;
+
+        Advance();
+        Expect(TokenKind.KeywordBy);
+        var expression = ParseExpression();
+        if (expression is not IdentifierExpression { Name: var name }
+            || !string.Equals(name, "time", StringComparison.OrdinalIgnoreCase))
+        {
+            throw Error("当前仅支持 ORDER BY time [ASC|DESC]");
+        }
+
+        var direction = SortDirection.Ascending;
+        if (Current.Kind == TokenKind.KeywordAsc)
+        {
+            Advance();
+        }
+        else if (Current.Kind == TokenKind.KeywordDesc)
+        {
+            Advance();
+            direction = SortDirection.Descending;
+        }
+
+        return new OrderBySpec(expression, direction);
     }
 
     private PaginationSpec? ParseOptionalPagination()
@@ -676,6 +733,12 @@ public sealed class SqlParser
     {
         var name = Current.Text;
         Advance();
+        if (Current.Kind == TokenKind.Dot)
+        {
+            Advance();
+            return new IdentifierExpression(ExpectQualifiedIdentifierPart(), name);
+        }
+
         if (Current.Kind == TokenKind.LeftParen)
         {
             return ParseFunctionCallTail(name);
@@ -687,6 +750,12 @@ public sealed class SqlParser
     {
         var name = Current.Text;
         Advance();
+        if (Current.Kind == TokenKind.Dot)
+        {
+            Advance();
+            return new IdentifierExpression(ExpectQualifiedIdentifierPart(), name);
+        }
+
         if (Current.Kind != TokenKind.LeftParen)
             return new IdentifierExpression(name);
 
@@ -696,6 +765,20 @@ public sealed class SqlParser
         double lon = ParseVectorComponent();
         Expect(TokenKind.RightParen);
         return new GeoPointLiteralExpression(lat, lon);
+    }
+
+    private string ExpectQualifiedIdentifierPart()
+    {
+        if (Current.Kind == TokenKind.IdentifierLiteral)
+            return ExpectIdentifierName();
+
+        if (Current.Kind == TokenKind.KeywordTime)
+        {
+            Advance();
+            return "time";
+        }
+
+        throw Error("限定列名中 '.' 后面期望列名");
     }
 
     private SqlExpression ParseFunctionCallTail(string name)

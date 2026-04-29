@@ -17,8 +17,10 @@ internal static class SelectExecutor
 {
     public static SelectExecutionResult Execute(Tsdb tsdb, SelectStatement statement)
     {
+        ValidateTableAliasReferences(statement);
+
         if (statement.TableValuedFunction is not null)
-            return ApplyPagination(TableValuedFunctionExecutor.Execute(tsdb, statement), statement.Pagination);
+            return ApplyPagination(ApplyOrderBy(TableValuedFunctionExecutor.Execute(tsdb, statement), statement.OrderBy), statement.Pagination);
 
         var schema = tsdb.Measurements.TryGet(statement.Measurement)
             ?? throw new InvalidOperationException(
@@ -46,7 +48,132 @@ internal static class SelectExecutor
             ? ExecuteAggregate(tsdb, schema, classified, matchedSeries, where, groupByTime)
             : ExecuteRaw(tsdb, schema, classified, matchedSeries, where);
 
-        return ApplyPagination(result, statement.Pagination);
+        return ApplyPagination(ApplyOrderBy(result, statement.OrderBy), statement.Pagination);
+    }
+
+    private static void ValidateTableAliasReferences(SelectStatement statement)
+    {
+        foreach (var identifier in EnumerateIdentifierReferences(statement))
+        {
+            if (identifier.Qualifier is null)
+                continue;
+
+            if (statement.TableAlias is null)
+            {
+                throw new InvalidOperationException(
+                    $"限定列名 '{identifier.Qualifier}.{identifier.Name}' 要求 FROM 子句声明单表别名。");
+            }
+
+            if (!string.Equals(identifier.Qualifier, statement.TableAlias, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"限定列名 '{identifier.Qualifier}.{identifier.Name}' 引用了未知别名 '{identifier.Qualifier}'；当前查询只声明了别名 '{statement.TableAlias}'。");
+            }
+        }
+    }
+
+    private static IEnumerable<IdentifierExpression> EnumerateIdentifierReferences(SelectStatement statement)
+    {
+        foreach (var projection in statement.Projections)
+        {
+            foreach (var identifier in EnumerateIdentifierReferences(projection.Expression))
+                yield return identifier;
+        }
+
+        if (statement.Where is not null)
+        {
+            foreach (var identifier in EnumerateIdentifierReferences(statement.Where))
+                yield return identifier;
+        }
+
+        foreach (var groupBy in statement.GroupBy)
+        {
+            foreach (var identifier in EnumerateIdentifierReferences(groupBy))
+                yield return identifier;
+        }
+
+        if (statement.TableValuedFunction is not null)
+        {
+            foreach (var identifier in EnumerateIdentifierReferences(statement.TableValuedFunction))
+                yield return identifier;
+        }
+
+        if (statement.OrderBy is not null)
+        {
+            foreach (var identifier in EnumerateIdentifierReferences(statement.OrderBy.Expression))
+                yield return identifier;
+        }
+    }
+
+    private static IEnumerable<IdentifierExpression> EnumerateIdentifierReferences(SqlExpression expression)
+    {
+        switch (expression)
+        {
+            case IdentifierExpression identifier:
+                yield return identifier;
+                yield break;
+
+            case FunctionCallExpression function:
+                foreach (var argument in function.Arguments)
+                {
+                    foreach (var identifier in EnumerateIdentifierReferences(argument))
+                        yield return identifier;
+                }
+                yield break;
+
+            case UnaryExpression unary:
+                foreach (var identifier in EnumerateIdentifierReferences(unary.Operand))
+                    yield return identifier;
+                yield break;
+
+            case BinaryExpression binary:
+                foreach (var identifier in EnumerateIdentifierReferences(binary.Left))
+                    yield return identifier;
+                foreach (var identifier in EnumerateIdentifierReferences(binary.Right))
+                    yield return identifier;
+                yield break;
+
+            default:
+                yield break;
+        }
+    }
+
+    private static SelectExecutionResult ApplyOrderBy(SelectExecutionResult result, OrderBySpec? orderBy)
+    {
+        if (orderBy is null)
+            return result;
+
+        if (orderBy.Expression is not IdentifierExpression { Name: var name }
+            || !string.Equals(name, "time", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("当前仅支持 ORDER BY time [ASC|DESC]。");
+        }
+
+        int timeColumnIndex = -1;
+        for (int i = 0; i < result.Columns.Count; i++)
+        {
+            if (string.Equals(result.Columns[i], "time", StringComparison.OrdinalIgnoreCase))
+            {
+                timeColumnIndex = i;
+                break;
+            }
+        }
+
+        if (timeColumnIndex < 0)
+            throw new InvalidOperationException("ORDER BY time 要求 SELECT 结果中包含 time 列。");
+
+        var orderedRows = orderBy.Direction == SortDirection.Descending
+            ? result.Rows.OrderByDescending(row => RequireOrderByTimestamp(row[timeColumnIndex])).ToList()
+            : result.Rows.OrderBy(row => RequireOrderByTimestamp(row[timeColumnIndex])).ToList();
+
+        return new SelectExecutionResult(result.Columns, orderedRows);
+    }
+
+    private static long RequireOrderByTimestamp(object? value)
+    {
+        if (value is long timestamp)
+            return timestamp;
+        throw new InvalidOperationException("ORDER BY time 要求 time 列为整数时间戳。");
     }
 
     private static SelectExecutionResult ApplyPagination(SelectExecutionResult result, PaginationSpec? pagination)

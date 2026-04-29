@@ -141,12 +141,25 @@ FROM cpu
 WHERE host = 'server-01';
 ```
 
-### 4.4 分页
+### 4.4 单表别名
+
+```sql
+SELECT c.time, c.host, c."usage"
+FROM cpu AS c
+WHERE c.host = 'server-01'
+ORDER BY c.time ASC
+LIMIT 10;
+```
+
+当前仅支持单个 measurement 的别名限定列名，不支持 `JOIN`。
+
+### 4.5 分页
 
 ```sql
 SELECT time, host, usage
 FROM cpu
 WHERE host = 'server-01'
+ORDER BY time ASC
 LIMIT 5 OFFSET 0;
 ```
 
@@ -154,6 +167,7 @@ LIMIT 5 OFFSET 0;
 SELECT time, host, usage
 FROM cpu
 WHERE host = 'server-01'
+ORDER BY time ASC
 OFFSET 5 ROWS FETCH NEXT 5 ROWS ONLY;
 ```
 

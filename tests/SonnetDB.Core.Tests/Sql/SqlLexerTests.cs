@@ -149,7 +149,7 @@ public class SqlLexerTests
     [Fact]
     public void Tokenize_OperatorsAreLexedDistinctly()
     {
-        var tokens = SqlLexer.Tokenize("= != <> < <= <=> <-> <#> > >= + - * / %");
+        var tokens = SqlLexer.Tokenize("= != <> < <= <=> <-> <#> > >= + - * / % .");
         var kinds = new[]
         {
             TokenKind.Equal, TokenKind.NotEqual, TokenKind.NotEqual,
@@ -157,6 +157,7 @@ public class SqlLexerTests
             TokenKind.VectorCosineDistance, TokenKind.VectorL2Distance, TokenKind.VectorInnerProduct,
             TokenKind.GreaterThan, TokenKind.GreaterThanOrEqual,
             TokenKind.Plus, TokenKind.Minus, TokenKind.Star, TokenKind.Slash, TokenKind.Percent,
+            TokenKind.Dot,
             TokenKind.EndOfFile,
         };
         Assert.Equal(kinds, System.Linq.Enumerable.Select(tokens, t => t.Kind));
@@ -218,12 +219,15 @@ public class SqlLexerTests
     }
 
     [Fact]
-    public void Tokenize_PaginationKeywords_AreRecognized()
+    public void Tokenize_OrderAndPaginationKeywords_AreRecognized()
     {
-        var tokens = SqlLexer.Tokenize("SELECT * FROM cpu OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY LIMIT 3");
+        var tokens = SqlLexer.Tokenize("SELECT * FROM cpu ORDER BY time DESC OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY LIMIT 3");
         var kinds = System.Linq.Enumerable.Select(tokens, t => t.Kind).ToArray();
         var texts = System.Linq.Enumerable.Select(tokens, t => t.Text).ToArray();
 
+        Assert.Contains(TokenKind.KeywordOrder, kinds);
+        Assert.Contains(TokenKind.KeywordAsc, SqlLexer.Tokenize("ASC").Select(t => t.Kind).ToArray());
+        Assert.Contains(TokenKind.KeywordDesc, kinds);
         Assert.Contains(TokenKind.KeywordOffset, kinds);
         Assert.Contains(TokenKind.KeywordFetch, kinds);
         Assert.Contains(TokenKind.KeywordLimit, kinds);

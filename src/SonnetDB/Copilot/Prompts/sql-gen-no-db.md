@@ -11,6 +11,7 @@ SonnetDB SQL 方言要点：
     * 聚合：count/sum/min/max/avg/first/last；
     * 时间桶：GROUP BY time(1m|30s|1h)，**不支持** date_trunc；不支持按 tag GROUP BY；
     * 标量函数：abs/round/sqrt/log/coalesce；
+    * 单表别名：FROM measurement [AS] alias，列可写 alias.column / alias."Column"；不支持 JOIN；
     * 分页：LIMIT n [OFFSET m]。
 - 向量检索：SELECT * FROM knn(measurement, embedding_列, [向量], k [, 'l2'|'cosine'|'dot']);
 - 删除：DELETE FROM measurement WHERE <tag 等值或 time 范围>;

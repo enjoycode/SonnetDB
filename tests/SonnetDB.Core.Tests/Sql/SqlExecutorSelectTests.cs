@@ -171,6 +171,66 @@ public class SqlExecutorSelectTests : IDisposable
     }
 
     [Fact]
+    public void Select_OrderByTimeDesc_AppliesBeforeLimit()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var r = Select(db, "SELECT time, host FROM cpu ORDER BY time DESC LIMIT 2");
+
+        Assert.Equal(2, r.Rows.Count);
+        Assert.Equal([3000L, 2500L], r.Rows.Select(row => (long)row[0]!));
+    }
+
+    [Fact]
+    public void Select_OrderByTimeAsc_AppliesBeforeOffset()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var r = Select(db, "SELECT time, host FROM cpu ORDER BY time ASC OFFSET 1 ROW FETCH NEXT 2 ROWS ONLY");
+
+        Assert.Equal(2, r.Rows.Count);
+        Assert.Equal([1500L, 2000L], r.Rows.Select(row => (long)row[0]!));
+    }
+
+    [Fact]
+    public void Select_OrderByTimeWithoutProjectedTime_Throws()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            SqlExecutor.Execute(db, "SELECT usage FROM cpu ORDER BY time DESC LIMIT 2"));
+    }
+
+    [Fact]
+    public void Select_QualifiedColumnsWithAlias_ReturnsRows()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var r = Select(db,
+            "SELECT c.time, c.host, c.usage FROM cpu AS c WHERE c.host = 'h1' AND c.time >= 1000 ORDER BY c.time DESC LIMIT 2");
+
+        Assert.Equal(["time", "host", "usage"], r.Columns);
+        Assert.Equal(2, r.Rows.Count);
+        Assert.Equal([3000L, 2000L], r.Rows.Select(row => (long)row[0]!));
+        Assert.All(r.Rows, row => Assert.Equal("h1", row[1]));
+    }
+
+    [Theory]
+    [InlineData("SELECT c.time FROM cpu")]
+    [InlineData("SELECT x.time FROM cpu AS c")]
+    public void Select_QualifiedColumnWithMissingOrWrongAlias_Throws(string sql)
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        Assert.Throws<InvalidOperationException>(() => SqlExecutor.Execute(db, sql));
+    }
+
+    [Fact]
     public void Select_WithOffsetBeyondEnd_ReturnsEmpty()
     {
         using var db = OpenWithSchema(Options());

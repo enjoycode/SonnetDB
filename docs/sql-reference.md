@@ -66,6 +66,7 @@ SELECT * FROM cpu WHERE host = 'server-01'
 SELECT time, host, usage
 FROM cpu
 WHERE host = 'server-01' AND time >= 1713676800000 AND time < 1713677400000
+ORDER BY time ASC
 ```
 
 标量函数投影：
@@ -74,6 +75,16 @@ WHERE host = 'server-01' AND time >= 1713676800000 AND time < 1713677400000
 SELECT abs(-usage), round(usage / 3, 2), sqrt(count), log(count, 10), coalesce(label, 'n/a')
 FROM cpu
 WHERE host = 'server-01'
+```
+
+单表别名与限定列名：
+
+```sql
+SELECT c.time, c.host, c."usage"
+FROM cpu AS c
+WHERE c.host = 'server-01'
+ORDER BY c.time DESC
+LIMIT 10
 ```
 
 兼容常见探活查询的字面量投影：
@@ -89,6 +100,8 @@ SELECT 1 AS ok FROM cpu LIMIT 1
 - 当某个时间点缺少某个 field 时，结果列会返回 `NULL`。
 - 标量函数当前支持 `abs`、`round`、`sqrt`、`log`、`coalesce`。
 - 标量函数当前仅支持出现在 `SELECT` 投影中，可嵌套，也可接收算术表达式参数。
+- 支持 `FROM measurement [AS] alias` 单表别名，以及 `alias.column` / `alias."Column"` 限定列名；执行前会校验限定符必须匹配当前别名。
+- 当前不支持 `JOIN`。
 - `coalesce(...)` 只会在当前结果行存在时参与求值；它不会额外扩展原始查询的时间轴。
 - 结果按时间升序返回。
 
@@ -99,21 +112,24 @@ SELECT 1 AS ok FROM cpu LIMIT 1
 SELECT time, host, usage
 FROM cpu
 WHERE host = 'server-01'
+ORDER BY time ASC
 OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY;
 
 -- MySQL/PostgreSQL 常见风格
 SELECT time, host, usage
 FROM cpu
 WHERE host = 'server-01'
+ORDER BY time DESC
 LIMIT 10 OFFSET 20;
 ```
 
 说明：
 
+- 支持 `ORDER BY time [ASC|DESC]`，排序会在分页前应用；当前要求查询结果中包含 `time` 列。
 - 支持 `OFFSET n`（仅跳过，不限制返回行数）。
 - 支持 `FETCH FIRST|NEXT n ROW|ROWS ONLY`。
 - 支持 `LIMIT n [OFFSET m]` 兼容语法。
-- `OFFSET/FETCH/LIMIT` 作用在最终结果集（投影/聚合之后）。
+- `ORDER BY/OFFSET/FETCH/LIMIT` 作用在最终结果集（投影/聚合之后）。
 
 ### 聚合查询
 

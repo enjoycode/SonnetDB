@@ -52,21 +52,35 @@ FROM cpu
 WHERE host = 'server-01';
 ```
 
-### 5. 分页查询
+### 5. 单表别名
+
+```sql
+SELECT c.time, c.host, c."usage"
+FROM cpu AS c
+WHERE c.host = 'server-01'
+ORDER BY c.time ASC
+LIMIT 10;
+```
+
+SonnetDB 支持单个 measurement 的别名限定列名，例如 `c.time` 或 `c."usage"`；当前不支持 `JOIN`。
+
+### 6. 分页查询
 
 ```sql
 -- 传统风格
 SELECT time, host, usage
 FROM cpu WHERE host = 'server-01'
+ORDER BY time ASC
 LIMIT 5 OFFSET 0;
 
 -- SQL 标准风格
 SELECT time, host, usage
 FROM cpu WHERE host = 'server-01'
+ORDER BY time ASC
 OFFSET 5 ROWS FETCH NEXT 5 ROWS ONLY;
 ```
 
-### 6. 基础聚合
+### 7. 基础聚合
 
 ```sql
 SELECT

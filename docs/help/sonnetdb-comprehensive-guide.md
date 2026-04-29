@@ -351,11 +351,20 @@ SELECT time, -usage AS neg FROM cpu;
 -- 标量函数嵌套
 SELECT time, round(abs(usage - 0.5), 2) AS dev FROM cpu;
 
+-- 单表别名 + 限定列名（不支持 JOIN）
+SELECT c.time, c.host, c."usage" FROM cpu AS c
+WHERE c.host = 'server-01'
+ORDER BY c.time ASC
+LIMIT 10;
+
 -- 分页：LIMIT / OFFSET 风格
-SELECT * FROM cpu WHERE host = 'server-01' LIMIT 10 OFFSET 0;
+SELECT * FROM cpu WHERE host = 'server-01'
+ORDER BY time ASC
+LIMIT 10 OFFSET 0;
 
 -- 分页：SQL 标准 FETCH 风格
 SELECT * FROM cpu WHERE host = 'server-01'
+ORDER BY time ASC
 OFFSET 5 ROWS FETCH NEXT 5 ROWS ONLY;
 ```
 

@@ -18,6 +18,7 @@ SonnetDB SQL 方言要点：
     * 时间桶分组只能写成 `GROUP BY time(1m)` / `time(30s)` / `time(1h)`，**不支持** date_trunc / DATE_FORMAT；
     * 不支持 `GROUP BY <tag列>`，只支持 `GROUP BY time(...)`；
     * 标量函数：abs, round, sqrt, log, coalesce；
+    * 单表别名：可写 `FROM measurement [AS] alias`，列可写 `alias.column` 或 `alias."Column"`；不支持 JOIN；
     * 分页：`LIMIT n [OFFSET m]` 或 `OFFSET n ROWS FETCH NEXT m ROWS ONLY`；
     * 结果按 time 升序返回，`SELECT *` = `time + 所有 tag + 所有 field`。
 - 向量检索：使用表值函数 `knn(measurement, 向量列, 查询向量, k [, metric])`：
