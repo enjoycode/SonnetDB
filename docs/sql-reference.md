@@ -76,9 +76,16 @@ FROM cpu
 WHERE host = 'server-01'
 ```
 
+兼容常见探活查询的字面量投影：
+
+```sql
+SELECT 1 AS ok FROM cpu LIMIT 1
+```
+
 当前行为：
 
 - `SELECT *` 会展开为 `time + 所有 tag 列 + 所有 field 列`。
+- 支持字面量投影（如 `SELECT 1 ... LIMIT 1`），会按匹配到的时间轴返回常量列。
 - 当某个时间点缺少某个 field 时，结果列会返回 `NULL`。
 - 标量函数当前支持 `abs`、`round`、`sqrt`、`log`、`coalesce`。
 - 标量函数当前仅支持出现在 `SELECT` 投影中，可嵌套，也可接收算术表达式参数。
@@ -128,10 +135,11 @@ FROM cpu
 WHERE host = 'server-01'
 ```
 
-`count(*)` 也受支持：
+`count(*)` 与 SQL 兼容写法 `count(1)` 也受支持：
 
 ```sql
 SELECT count(*) FROM cpu WHERE host = 'server-01'
+SELECT count(1) FROM cpu WHERE host = 'server-01'
 ```
 
 ### `GROUP BY time(...)`

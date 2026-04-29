@@ -6,8 +6,9 @@
 ## [Unreleased]
 
 ### Added
+- **SQL 兼容性基础（PR 1）**：`SELECT` 现在支持常见探活写法 `SELECT 1 ... LIMIT 1` 的字面量投影；聚合函数 `count` 额外兼容 `count(1)`，语义等同于 `count(*)`，方便 Copilot / ORM 生成 SQL 直接执行。
 - 新增 `connectors/` 连接器目录，预留 C / Go / Rust / Java / ODBC 连接器；首个 C 连接器通过 .NET Native AOT 将 `SonnetDB.Core` 发布为原生共享库，并导出 open / close / execute / result cursor / flush / last_error 等 C ABI 函数，附带 `sonnetdb.h`、C quickstart 示例与 CMake 构建入口（Windows x64/x86/ARM64、Linux x64）。
-- 新增 Java 连接器第一版：基于 JDK Foreign Function & Memory API 直接包装 C ABI，提供 `SonnetDbConnection` / `SonnetDbResult` / `SonnetDbValueType` / `SonnetDbException`，支持打开嵌入式库、执行 SQL、读取 typed result cursor、Flush 与版本查询，并提供 CMake 构建入口和 quickstart 示例。
+- 新增 Java 连接器第一版：提供 Java 8 兼容的默认 JNI 后端与 JDK 21+ 可选 FFM 后端，基于 C ABI 暴露 `SonnetDbConnection` / `SonnetDbResult` / `SonnetDbValueType` / `SonnetDbException`，支持打开嵌入式库、执行 SQL、读取 typed result cursor、Flush 与版本查询，并提供 CMake 构建入口和 quickstart 示例。
 - **写入路径支持受控 schema-on-write**：`Tsdb.Write/WriteMany` 现在会在写 WAL / MemTable 前自动创建或扩展 measurement schema，并先持久化 `measurements.tslschema`，覆盖 SQL `INSERT`、Line Protocol、JSON points 与 Bulk VALUES；缺失 TAG / FIELD 自动补齐，已有 `INT` 字段遇到 `FLOAT` 值会提升为 `FLOAT`，已有 `FLOAT` 字段接收整数时会转换为浮点保存，其它类型漂移仍拒绝。
 - 新增 `eng/build-windows.ps1`，一键完成 Windows `win-x64` Release 构建、NuGet 打包、ZIP Bundle 与 MSI 输出，并把最终可发布文件汇总到 `artifacts/windows/final/` 后清理中间产物；同步修正发布脚本 NuGet 清单为 `SonnetDB.Core` / `SonnetDB` / `SonnetDB.Cli`，让服务端 publish 正确尊重 `BuildAdminUi` 开关，并让 Windows MSI 安装 `SonnetDB` 服务、通过 `DATAROOT` 指定数据目录、把 `sndb` 加入系统 `PATH`。
 - **Apache IoTDB / PostgreSQL TimescaleDB 服务端基准**：`tests/SonnetDB.Benchmarks` 新增 IoTDB REST v2 `insertTablet` / SQL 查询 / `GROUP BY` 时间窗口基准，以及 TimescaleDB hypertable + binary COPY / range query / `time_bucket` 基准；Docker benchmark 环境、启动脚本、README 与 `docs/blogs/111-113` 对比通稿同步补齐实测数据，并统一 benchmark 文档中的时间单位为 ms、数据大小单位为 MB。
@@ -29,6 +30,7 @@
 - 新增 `docs/sql-cookbook.md`，把 `demo.sql` 中高频、当前真实支持的 `CREATE MEASUREMENT`、`INSERT`、`SELECT`、`GROUP BY time(...)`、窗口函数、PID、预测、向量检索、元数据与 `DELETE` 场景整理成可直接复制的 cookbook，并在 `docs/index.md` 与 `docs/sql-reference.md` 中加入入口。
 
 ### Fixed
+- 修复 Linux x64 C connector quickstart 运行时错误：CMake 现在在 Linux 下通过精确文件名链接 `SonnetDB.Native.so`，避免 Native AOT 共享库无 SONAME 时把构建目录写入 `DT_NEEDED`，并补充 WSL 开发环境与连接器验证文档。
 - **普通用户登录不再显示控制面虚拟库 `__control_plane__`**：Web Admin 会在普通用户进入后台时清理 SQL Console 与 Copilot 会话历史中残留的控制面本地状态；SQL Console 的新建标签、刷新数据库、运行 SQL 与待执行 SQL 注入路径也增加二次防护，避免同一浏览器先用 admin 打开 system tab 后再切换普通账号时暴露 `__control_plane__`。
 - **Copilot 会话历史补齐 assistant 回复与引用保存**：CopilotDock 现在按发起请求时的会话 ID 追加 user / assistant 消息，避免请求完成前切换或新建会话导致最终回复没有落盘；assistant 消息会连同 citations 一起写入本地历史，并在历史会话中渲染引用标题、来源与摘要。标题栏新增「+ 新会话」入口，历史弹层保留切换、重命名、删除与清空能力。
 - **CopilotDock 回答改为 Markdown 渲染并隐藏裸 citation 标记**：聊天浮窗现在会把 Copilot 回复按 Markdown 渲染，代码块、列表、表格与行内代码可正常排版；渲染时转义模型返回的原生 HTML，并隐藏回答末尾类似 `[C11][C12]` 的内部引用编号，避免用户误以为是 SQL 或异常内容。

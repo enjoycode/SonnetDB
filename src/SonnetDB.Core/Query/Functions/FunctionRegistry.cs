@@ -446,9 +446,16 @@ public static class FunctionRegistry
                 return null;
             }
 
+            if (LegacyAggregator == Aggregator.Count
+                && call.Arguments.Count == 1
+                && call.Arguments[0] is LiteralExpression { Kind: SqlLiteralKind.Integer, IntegerValue: 1 })
+            {
+                return null;
+            }
+
             if (call.Arguments.Count != 1 || call.Arguments[0] is not IdentifierExpression id)
                 throw new InvalidOperationException(
-                    $"{call.Name}(...) 必须接收一个列名作为参数。");
+                    $"{call.Name}(...) 必须接收一个列名作为参数；count 额外支持 count(*) 与 count(1)。");
 
             var col = schema.TryGetColumn(id.Name)
                 ?? throw new InvalidOperationException(

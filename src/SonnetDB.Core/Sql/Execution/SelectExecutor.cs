@@ -74,6 +74,7 @@ internal static class SelectExecutor
         Time,
         Tag,
         Field,
+        Constant,
         Aggregate,
         Scalar,
         Window,
@@ -85,7 +86,8 @@ internal static class SelectExecutor
         MeasurementColumn? Column,
         FunctionCallExpression? Function,
         IScalarFunction? ScalarFunction = null,
-        IWindowFunction? WindowFunction = null);
+        IWindowFunction? WindowFunction = null,
+        object? ConstantValue = null);
 
     private static IReadOnlyList<Projection> ClassifyProjections(
         IReadOnlyList<SelectItem> items,
@@ -110,6 +112,15 @@ internal static class SelectExecutor
 
                 case IdentifierExpression id:
                     result.Add(BuildIdentifierProjection(id.Name, item.Alias, schema));
+                    break;
+
+                case LiteralExpression literal:
+                    result.Add(new Projection(
+                        item.Alias ?? FormatLiteralColumnName(literal),
+                        ProjectionKind.Constant,
+                        null,
+                        null,
+                        ConstantValue: EvaluateLiteral(literal)));
                     break;
 
                 case FunctionCallExpression fn:
@@ -171,8 +182,20 @@ internal static class SelectExecutor
         if (fn.IsStar) return $"{fn.Name.ToLowerInvariant()}(*)";
         if (fn.Arguments.Count == 1 && fn.Arguments[0] is IdentifierExpression id)
             return $"{fn.Name.ToLowerInvariant()}({id.Name})";
+        if (fn.Arguments.Count == 1 && fn.Arguments[0] is LiteralExpression literal)
+            return $"{fn.Name.ToLowerInvariant()}({FormatLiteralColumnName(literal)})";
         return fn.Name.ToLowerInvariant();
     }
+
+    private static string FormatLiteralColumnName(LiteralExpression literal) => literal.Kind switch
+    {
+        SqlLiteralKind.Null => "NULL",
+        SqlLiteralKind.Boolean => literal.BooleanValue ? "TRUE" : "FALSE",
+        SqlLiteralKind.Integer => literal.IntegerValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        SqlLiteralKind.Float => literal.FloatValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        SqlLiteralKind.String => literal.StringValue ?? string.Empty,
+        _ => literal.Kind.ToString(),
+    };
 
     // ── 原始模式 ───────────────────────────────────────────────────────────
 
@@ -278,6 +301,7 @@ internal static class SelectExecutor
                         ProjectionKind.Field => fieldLookups[p.Column!.Name].TryGetValue(ts, out var v)
                             ? UnboxFieldValue(p.Column, v)
                             : null,
+                        ProjectionKind.Constant => p.ConstantValue,
                         ProjectionKind.Scalar => EvaluateScalarProjection(p, ts, series, fieldLookups),
                         ProjectionKind.Window => windowOutputs[i]![rowIdx],
                         _ => throw new InvalidOperationException("内部错误：不应在 raw 模式出现聚合投影。"),

@@ -123,6 +123,28 @@ public class SqlParserTests
     }
 
     [Fact]
+    public void Parse_Select_CountOne_ParsesLiteralArgument()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse("SELECT count(1) FROM cpu");
+
+        var fn = Assert.IsType<FunctionCallExpression>(stmt.Projections[0].Expression);
+        Assert.Equal("count", fn.Name);
+        Assert.False(fn.IsStar);
+        Assert.Equal(LiteralExpression.Integer(1), Assert.Single(fn.Arguments));
+    }
+
+    [Fact]
+    public void Parse_Select_LiteralProjection_ParsesExpression()
+    {
+        var stmt = (SelectStatement)SqlParser.Parse("SELECT 1 AS ok FROM cpu LIMIT 1");
+
+        Assert.Equal(LiteralExpression.Integer(1), stmt.Projections[0].Expression);
+        Assert.Equal("ok", stmt.Projections[0].Alias);
+        Assert.NotNull(stmt.Pagination);
+        Assert.Equal(1, stmt.Pagination!.Fetch);
+    }
+
+    [Fact]
     public void Parse_Select_ScalarFunctionCall_ParsesArguments()
     {
         var stmt = (SelectStatement)SqlParser.Parse(

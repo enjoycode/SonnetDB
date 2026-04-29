@@ -117,6 +117,19 @@ public class SqlExecutorSelectTests : IDisposable
     }
 
     [Fact]
+    public void Select_LiteralProjectionWithLimit_ReturnsConstantRows()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var r = Select(db, "SELECT 1 AS ok FROM cpu LIMIT 1");
+
+        Assert.Equal(["ok"], r.Columns);
+        Assert.Single(r.Rows);
+        Assert.Equal(1L, r.Rows[0][0]);
+    }
+
+    [Fact]
     public void Select_WithOffsetFetch_ReturnsPagedRows()
     {
         using var db = OpenWithSchema(Options());
@@ -287,6 +300,19 @@ public class SqlExecutorSelectTests : IDisposable
 
         Assert.Single(r.Rows);
         // h1 共 3 条，每条都写了 usage 和 count → 6 个 field 值
+        Assert.Equal(6L, r.Rows[0][0]);
+    }
+
+    [Fact]
+    public void Select_CountOne_IsCompatibleWithCountStar()
+    {
+        using var db = OpenWithSchema(Options());
+        Seed(db);
+
+        var r = Select(db, "SELECT count(1) FROM cpu WHERE host = 'h1'");
+
+        Assert.Equal(["count(1)"], r.Columns);
+        Assert.Single(r.Rows);
         Assert.Equal(6L, r.Rows[0][0]);
     }
 
