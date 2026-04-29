@@ -6,6 +6,8 @@
 ## [Unreleased]
 
 ### Added
+- 新增独立 `OPTIMIZATION_ROADMAP.md`，用于跟踪 `src/SonnetDB.Core` 核心库性能与可靠性优化路线，覆盖写入吞吐、MemTable 热路径、查询索引与缓存、窗口函数、崩溃恢复和现代 C# / Analyzer 六个阶段，并为每项任务提供状态标记、执行顺序、验收标准与可复用提示词。
+- **Copilot Agent 提示词增强**：参考 VS Code Copilot 的行动型助手原则，强化 SonnetDB Copilot 的身份边界、工具优先、上下文事实校验、安全/版权边界、模型回答规则与 SQL 方言纠错约束，避免冒充外部产品或编造数据库结构。
 - **SQL DDL 兼容修饰符（PR 4）**：lexer 新增 `DEFAULT` 关键字；`CREATE MEASUREMENT` parser 接受列级 `NULL` / `NOT NULL` 与 `DEFAULT <expr>` 并在 AST 中保留；执行层对 `DEFAULT` 返回明确 unsupported，`NULL` / `NOT NULL` 保持兼容性 no-op，并在 SQL 文档中说明 SonnetDB 的稀疏字段语义。
 - **SQL 单表别名与限定列名（PR 3）**：SQL lexer 新增 `.` token；parser 支持 `FROM measurement [AS] alias` 与 `alias.column` / `alias."Column"` 列引用；执行器在查询执行前校验限定符必须匹配当前单表别名，继续明确不支持 `JOIN`。
 - **SQL `ORDER BY time`（PR 2）**：SQL lexer 新增 `ORDER` / `ASC` 关键字识别（`DESC` 复用已有 `DESC` token），`SELECT` AST 增加 `OrderBySpec`，parser 支持 `ORDER BY time [ASC|DESC]`，执行器会在 `LIMIT/OFFSET/FETCH` 前按结果集中的 `time` 列排序，并同步修正分页文档示例。
