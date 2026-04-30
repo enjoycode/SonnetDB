@@ -1,5 +1,5 @@
-using System.Collections.Frozen;
 using System.Buffers.Binary;
+using System.Collections.Frozen;
 using System.IO.Hashing;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -31,6 +31,7 @@ public sealed class SegmentReader : IDisposable
     private readonly SegmentReaderOptions _options;
     private readonly BlockDescriptor[] _blocks;
     private readonly FrozenDictionary<ulong, BlockDescriptor[]> _blocksBySeries;
+    private readonly BlockTimeRangeIndex _blocksByTimeRange;
     private readonly IReadOnlyDictionary<int, HnswVectorBlockIndex> _vectorIndexesByBlock;
 
     /// <summary>段文件路径。</summary>
@@ -120,6 +121,7 @@ public sealed class SegmentReader : IDisposable
         SegmentFooter footer,
         BlockDescriptor[] blocks,
         FrozenDictionary<ulong, BlockDescriptor[]> blocksBySeries,
+        BlockTimeRangeIndex blocksByTimeRange,
         IReadOnlyDictionary<int, HnswVectorBlockIndex> vectorIndexesByBlock,
         SegmentReaderOptions options)
     {
@@ -129,6 +131,7 @@ public sealed class SegmentReader : IDisposable
         Footer = footer;
         _blocks = blocks;
         _blocksBySeries = blocksBySeries;
+        _blocksByTimeRange = blocksByTimeRange;
         _vectorIndexesByBlock = vectorIndexesByBlock;
         FileLength = bytes.Length;
         _options = options;
@@ -308,7 +311,8 @@ public sealed class SegmentReader : IDisposable
 
         var vectorIndexes = SegmentVectorIndexFile.TryLoad(path, blocks);
         var blocksBySeries = BuildBlocksBySeriesIndex(blocks);
-        return new SegmentReader(path, bytes, header, footer, blocks, blocksBySeries, vectorIndexes, options);
+        var blocksByTimeRange = BlockTimeRangeIndex.Build(blocks);
+        return new SegmentReader(path, bytes, header, footer, blocks, blocksBySeries, blocksByTimeRange, vectorIndexes, options);
     }
 
     /// <summary>
@@ -354,14 +358,13 @@ public sealed class SegmentReader : IDisposable
     /// <returns>时间范围重叠的 BlockDescriptor 列表。</returns>
     public IReadOnlyList<BlockDescriptor> FindByTimeRange(long from, long toInclusive)
     {
-        var result = new List<BlockDescriptor>();
-        foreach (var b in _blocks)
-        {
-            // 重叠条件：Block.Min <= toInclusive && Block.Max >= from
-            if (b.MinTimestamp <= toInclusive && b.MaxTimestamp >= from)
-                result.Add(b);
-        }
-        return result;
+        if (_blocks.Length == 0 || MinTimestamp > toInclusive || MaxTimestamp < from)
+            return Array.Empty<BlockDescriptor>();
+
+        if (from <= MinTimestamp && toInclusive >= MaxTimestamp)
+            return _blocks;
+
+        return _blocksByTimeRange.Find(from, toInclusive);
     }
 
     /// <summary>
@@ -482,6 +485,143 @@ public sealed class SegmentReader : IDisposable
         foreach (var (seriesId, seriesBlocks) in grouped)
             index.Add(seriesId, seriesBlocks.ToArray());
         return index.ToFrozenDictionary();
+    }
+
+    private sealed class BlockTimeRangeIndex
+    {
+        private readonly BlockDescriptor[] _byMinTimestamp;
+        private readonly BlockDescriptor[] _byMaxTimestamp;
+
+        private BlockTimeRangeIndex(
+            BlockDescriptor[] byMinTimestamp,
+            BlockDescriptor[] byMaxTimestamp)
+        {
+            _byMinTimestamp = byMinTimestamp;
+            _byMaxTimestamp = byMaxTimestamp;
+        }
+
+        public static BlockTimeRangeIndex Build(IReadOnlyList<BlockDescriptor> blocks)
+        {
+            var byMinTimestamp = new BlockDescriptor[blocks.Count];
+            var byMaxTimestamp = new BlockDescriptor[blocks.Count];
+            for (int i = 0; i < blocks.Count; i++)
+            {
+                byMinTimestamp[i] = blocks[i];
+                byMaxTimestamp[i] = blocks[i];
+            }
+
+            Array.Sort(byMinTimestamp, static (a, b) =>
+            {
+                int cmp = a.MinTimestamp.CompareTo(b.MinTimestamp);
+                return cmp != 0 ? cmp : a.Index.CompareTo(b.Index);
+            });
+            Array.Sort(byMaxTimestamp, static (a, b) =>
+            {
+                int cmp = a.MaxTimestamp.CompareTo(b.MaxTimestamp);
+                return cmp != 0 ? cmp : a.Index.CompareTo(b.Index);
+            });
+
+            return new BlockTimeRangeIndex(byMinTimestamp, byMaxTimestamp);
+        }
+
+        public IReadOnlyList<BlockDescriptor> Find(long from, long toInclusive)
+        {
+            int count = _byMinTimestamp.Length;
+            if (count == 0)
+                return Array.Empty<BlockDescriptor>();
+
+            int minUpper = FindMinUpperBound(_byMinTimestamp, toInclusive);
+            if (minUpper == 0)
+                return Array.Empty<BlockDescriptor>();
+
+            int maxLower = FindMaxLowerBound(_byMaxTimestamp, from);
+            if (maxLower == count)
+                return Array.Empty<BlockDescriptor>();
+
+            int maxCandidateCount = count - maxLower;
+            return minUpper <= maxCandidateCount
+                ? FilterByMax(_byMinTimestamp, 0, minUpper, from)
+                : FilterByMin(_byMaxTimestamp, maxLower, count, toInclusive);
+        }
+
+        private static IReadOnlyList<BlockDescriptor> FilterByMax(
+            BlockDescriptor[] sorted,
+            int start,
+            int end,
+            long from)
+        {
+            List<BlockDescriptor>? result = null;
+            for (int i = start; i < end; i++)
+            {
+                if (sorted[i].MaxTimestamp >= from)
+                {
+                    result ??= [];
+                    result.Add(sorted[i]);
+                }
+            }
+
+            return ToSegmentOrder(result);
+        }
+
+        private static IReadOnlyList<BlockDescriptor> FilterByMin(
+            BlockDescriptor[] sorted,
+            int start,
+            int end,
+            long toInclusive)
+        {
+            List<BlockDescriptor>? result = null;
+            for (int i = start; i < end; i++)
+            {
+                if (sorted[i].MinTimestamp <= toInclusive)
+                {
+                    result ??= [];
+                    result.Add(sorted[i]);
+                }
+            }
+
+            return ToSegmentOrder(result);
+        }
+
+        private static IReadOnlyList<BlockDescriptor> ToSegmentOrder(List<BlockDescriptor>? result)
+        {
+            if (result is null || result.Count == 0)
+                return Array.Empty<BlockDescriptor>();
+
+            if (result.Count > 1)
+                result.Sort(static (a, b) => a.Index.CompareTo(b.Index));
+
+            return result;
+        }
+
+        private static int FindMinUpperBound(BlockDescriptor[] sorted, long toInclusive)
+        {
+            int lo = 0, hi = sorted.Length;
+            while (lo < hi)
+            {
+                int mid = lo + (hi - lo) / 2;
+                if (sorted[mid].MinTimestamp <= toInclusive)
+                    lo = mid + 1;
+                else
+                    hi = mid;
+            }
+
+            return lo;
+        }
+
+        private static int FindMaxLowerBound(BlockDescriptor[] sorted, long from)
+        {
+            int lo = 0, hi = sorted.Length;
+            while (lo < hi)
+            {
+                int mid = lo + (hi - lo) / 2;
+                if (sorted[mid].MaxTimestamp < from)
+                    lo = mid + 1;
+                else
+                    hi = mid;
+            }
+
+            return lo;
+        }
     }
 
     private void ThrowIfDisposed()

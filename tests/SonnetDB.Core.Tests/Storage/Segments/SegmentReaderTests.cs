@@ -1,4 +1,5 @@
 ﻿using System.IO.Hashing;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using SonnetDB.Memory;
@@ -306,6 +307,81 @@ public sealed class SegmentReaderTests : IDisposable
 
         var all = reader.FindByTimeRange(0, 200);
         Assert.Equal(2, all.Count);
+    }
+
+    [Fact]
+    public void FindByTimeRange_WithOverlappingBlocksAndInclusiveBounds_ReturnsSegmentOrder()
+    {
+        string path = TempPath();
+        var series = new List<MemTableSeries>
+        {
+            BuildRangeSeries(1UL, "v", 0L, 100L),
+            BuildRangeSeries(2UL, "v", 101L, 200L),
+            BuildRangeSeries(3UL, "v", 50L, 150L),
+            BuildRangeSeries(4UL, "v", 201L, 300L),
+        };
+        _writer.Write(series, 1L, path);
+
+        using var reader = SegmentReader.Open(path);
+
+        var blocks = reader.FindByTimeRange(100L, 101L);
+
+        Assert.Equal([1UL, 2UL, 3UL], blocks.Select(static b => b.SeriesId).ToArray());
+        Assert.Equal([0, 1, 2], blocks.Select(static b => b.Index).ToArray());
+    }
+
+    [Fact]
+    public void FindByTimeRange_WithOutOfOrderBlockTimestamps_PreservesSegmentBlockOrder()
+    {
+        string path = TempPath();
+        var series = new List<MemTableSeries>
+        {
+            BuildRangeSeries(1UL, "v", 300L, 310L),
+            BuildRangeSeries(2UL, "v", 0L, 10L),
+            BuildRangeSeries(3UL, "v", 100L, 110L),
+            BuildRangeSeries(4UL, "v", 200L, 210L),
+        };
+        _writer.Write(series, 1L, path);
+
+        using var reader = SegmentReader.Open(path);
+
+        var blocks = reader.FindByTimeRange(5L, 305L);
+
+        Assert.Equal([1UL, 2UL, 3UL, 4UL], blocks.Select(static b => b.SeriesId).ToArray());
+        Assert.Equal([0, 1, 2, 3], blocks.Select(static b => b.Index).ToArray());
+    }
+
+    [Fact]
+    public void FindByTimeRange_WithLargeBlockList_IsFasterThanLinearScan()
+    {
+        string path = TempPath();
+        const int BlockCount = 8192;
+        const int Iterations = 1000;
+        long targetTimestamp = BlockCount - 1L;
+        var series = BuildLargeOutOfOrderTimeSeries(BlockCount);
+        _writer.Write(series, 1L, path);
+
+        using var reader = SegmentReader.Open(path);
+        Assert.Equal(BlockCount, reader.BlockCount);
+        Assert.Single(reader.FindByTimeRange(targetTimestamp, targetTimestamp));
+        Assert.Single(LinearFindByTimeRange(reader.Blocks, targetTimestamp, targetTimestamp));
+
+        long optimizedTicks = MeasureRepeated(
+            Iterations,
+            () => reader.FindByTimeRange(targetTimestamp, targetTimestamp),
+            out int optimizedCount);
+        long linearTicks = MeasureRepeated(
+            Iterations,
+            () => LinearFindByTimeRange(reader.Blocks, targetTimestamp, targetTimestamp),
+            out int linearCount);
+
+        Assert.Equal(Iterations, optimizedCount);
+        Assert.Equal(linearCount, optimizedCount);
+        double speedup = (double)linearTicks / Math.Max(1L, optimizedTicks);
+        Assert.True(
+            speedup >= 3.0d,
+            $"Expected indexed time-range lookup to be at least 3x faster than a linear scan. " +
+            $"Indexed={optimizedTicks} ticks, linear={linearTicks} ticks, speedup={speedup:0.00}x.");
     }
 
     [Fact]
@@ -623,5 +699,59 @@ public sealed class SegmentReaderTests : IDisposable
         for (int i = 0; i < 3; i++)
             series.Append(startTimestamp + i, FieldValue.FromDouble(i));
         return series;
+    }
+
+    private static MemTableSeries BuildRangeSeries(ulong seriesId, string fieldName, long minTimestamp, long maxTimestamp)
+    {
+        var series = new MemTableSeries(new SeriesFieldKey(seriesId, fieldName), FieldType.Float64);
+        series.Append(minTimestamp, FieldValue.FromDouble(minTimestamp));
+        if (maxTimestamp != minTimestamp)
+            series.Append(maxTimestamp, FieldValue.FromDouble(maxTimestamp));
+        return series;
+    }
+
+    private static List<MemTableSeries> BuildLargeOutOfOrderTimeSeries(int blockCount)
+    {
+        var series = new List<MemTableSeries>(blockCount);
+        for (int i = 0; i < blockCount; i++)
+        {
+            long timestamp = blockCount - i - 1L;
+            series.Add(BuildRangeSeries((ulong)(i + 1), "v", timestamp, timestamp));
+        }
+
+        return series;
+    }
+
+    private static long MeasureRepeated(
+        int iterations,
+        Func<IReadOnlyList<BlockDescriptor>> query,
+        out int totalCount)
+    {
+        int count = 0;
+        var stopwatch = Stopwatch.StartNew();
+        for (int i = 0; i < iterations; i++)
+            count += query().Count;
+        stopwatch.Stop();
+
+        totalCount = count;
+        return stopwatch.ElapsedTicks;
+    }
+
+    private static IReadOnlyList<BlockDescriptor> LinearFindByTimeRange(
+        IReadOnlyList<BlockDescriptor> blocks,
+        long from,
+        long toInclusive)
+    {
+        List<BlockDescriptor>? result = null;
+        foreach (var block in blocks)
+        {
+            if (block.MinTimestamp <= toInclusive && block.MaxTimestamp >= from)
+            {
+                result ??= [];
+                result.Add(block);
+            }
+        }
+
+        return result is null ? Array.Empty<BlockDescriptor>() : result;
     }
 }
