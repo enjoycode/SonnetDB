@@ -33,6 +33,7 @@ public sealed class SegmentReader : IDisposable
     private readonly FrozenDictionary<ulong, BlockDescriptor[]> _blocksBySeries;
     private readonly BlockTimeRangeIndex _blocksByTimeRange;
     private readonly IReadOnlyDictionary<int, HnswVectorBlockIndex> _vectorIndexesByBlock;
+    private readonly BlockDecodeCache? _decodeCache;
 
     /// <summary>段文件路径。</summary>
     public string Path { get; }
@@ -135,6 +136,9 @@ public sealed class SegmentReader : IDisposable
         _vectorIndexesByBlock = vectorIndexesByBlock;
         FileLength = bytes.Length;
         _options = options;
+        _decodeCache = options.DecodeBlockCacheMaxBytes > 0
+            ? new BlockDecodeCache(options.DecodeBlockCacheMaxBytes)
+            : null;
 
         long minTs = long.MaxValue;
         long maxTs = long.MinValue;
@@ -420,6 +424,19 @@ public sealed class SegmentReader : IDisposable
     /// <exception cref="SegmentCorruptedException">Block CRC32 校验失败时抛出（当 VerifyBlockCrc = true）。</exception>
     public DataPoint[] DecodeBlock(in BlockDescriptor descriptor)
     {
+        if (_decodeCache is not null)
+        {
+            var key = CreateDecodeCacheKey(descriptor);
+            if (_decodeCache.TryGet(key, out var cached))
+                return cached.ToArray();
+
+            var blockData = ReadBlock(descriptor);
+            var decoded = BlockDecoder.Decode(descriptor, blockData.TimestampPayload, blockData.ValuePayload);
+            long estimatedBytes = EstimateDecodedBlockBytes(descriptor);
+            bool cachedNow = _decodeCache.TryAdd(key, decoded, estimatedBytes);
+            return cachedNow ? decoded.ToArray() : decoded;
+        }
+
         var data = ReadBlock(descriptor);
         return BlockDecoder.Decode(descriptor, data.TimestampPayload, data.ValuePayload);
     }
@@ -435,6 +452,22 @@ public sealed class SegmentReader : IDisposable
     /// <exception cref="SegmentCorruptedException">Block CRC32 校验失败时抛出（当 VerifyBlockCrc = true）。</exception>
     public DataPoint[] DecodeBlockRange(in BlockDescriptor descriptor, long from, long toInclusive)
     {
+        if (_decodeCache is not null)
+        {
+            var key = CreateDecodeCacheKey(descriptor);
+            if (_decodeCache.TryGet(key, out var cached))
+                return CopyDecodedRange(cached, from, toInclusive);
+
+            long estimatedBytes = EstimateDecodedBlockBytes(descriptor);
+            if (_decodeCache.CanStore(estimatedBytes))
+            {
+                var fullData = ReadBlock(descriptor);
+                var decoded = BlockDecoder.Decode(descriptor, fullData.TimestampPayload, fullData.ValuePayload);
+                _decodeCache.TryAdd(key, decoded, estimatedBytes);
+                return CopyDecodedRange(decoded, from, toInclusive);
+            }
+        }
+
         var data = ReadBlock(descriptor);
         return BlockDecoder.DecodeRange(descriptor, data.TimestampPayload, data.ValuePayload, from, toInclusive);
     }
@@ -454,7 +487,16 @@ public sealed class SegmentReader : IDisposable
     public void Dispose()
     {
         _bytes = null;
+        _decodeCache?.Clear();
     }
+
+    internal long DecodeCacheHitCount => _decodeCache?.HitCount ?? 0L;
+
+    internal long DecodeCacheMissCount => _decodeCache?.MissCount ?? 0L;
+
+    internal long DecodeCacheCurrentBytes => _decodeCache?.CurrentBytes ?? 0L;
+
+    internal int DecodeCacheEntryCount => _decodeCache?.Count ?? 0;
 
     // ── 受保护虚方法（供测试或未来 mmap 派生类替换） ──────────────────────────
 
@@ -485,6 +527,69 @@ public sealed class SegmentReader : IDisposable
         foreach (var (seriesId, seriesBlocks) in grouped)
             index.Add(seriesId, seriesBlocks.ToArray());
         return index.ToFrozenDictionary();
+    }
+
+    private BlockDecodeCacheKey CreateDecodeCacheKey(in BlockDescriptor descriptor)
+        => new(Header.SegmentId, descriptor.Index, descriptor.Crc32);
+
+    private static long EstimateDecodedBlockBytes(in BlockDescriptor descriptor)
+    {
+        const long ArrayOverheadBytes = 24L;
+        const long DataPointApproxBytes = 48L;
+
+        long bytes = ArrayOverheadBytes + (long)descriptor.Count * DataPointApproxBytes;
+        if (descriptor.FieldType == FieldType.String)
+            bytes += (long)descriptor.ValuePayloadLength * 2L;
+        else if (descriptor.FieldType is FieldType.Vector or FieldType.GeoPoint)
+            bytes += descriptor.ValuePayloadLength;
+
+        return Math.Max(1L, bytes);
+    }
+
+    private static DataPoint[] CopyDecodedRange(DataPoint[] points, long from, long toInclusive)
+    {
+        if (points.Length == 0)
+            return [];
+
+        int start = LowerBound(points, from);
+        int end = UpperBound(points, toInclusive);
+        if (start >= end)
+            return [];
+
+        int length = end - start;
+        var result = new DataPoint[length];
+        Array.Copy(points, start, result, 0, length);
+        return result;
+    }
+
+    private static int LowerBound(DataPoint[] points, long timestamp)
+    {
+        int lo = 0, hi = points.Length;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (points[mid].Timestamp < timestamp)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+
+        return lo;
+    }
+
+    private static int UpperBound(DataPoint[] points, long timestamp)
+    {
+        int lo = 0, hi = points.Length;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (points[mid].Timestamp <= timestamp)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+
+        return lo;
     }
 
     private sealed class BlockTimeRangeIndex

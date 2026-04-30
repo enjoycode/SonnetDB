@@ -16,18 +16,19 @@ public sealed class SegmentManager : IDisposable
     private readonly object _lock = new();
     private readonly SegmentReaderOptions? _readerOptions;
     private readonly Dictionary<long, SegmentReader> _readerById = new();
-    private MultiSegmentIndex _index = MultiSegmentIndex.Empty;
-    private IReadOnlyList<SegmentReader> _readersSnapshot = Array.Empty<SegmentReader>();
+    private SegmentManagerSnapshot _snapshot = new(MultiSegmentIndex.Empty, Array.Empty<SegmentReader>());
     private bool _disposed;
 
     /// <summary>当前所有已打开的 <see cref="SegmentReader"/> 快照（按 SegmentId 升序）。</summary>
-    public IReadOnlyList<SegmentReader> Readers => Volatile.Read(ref _readersSnapshot);
+    public IReadOnlyList<SegmentReader> Readers => CurrentSnapshot.Readers;
 
-    /// <summary>当前索引快照（无锁读取，可能比写端稍旧但始终自洽）。</summary>
-    public MultiSegmentIndex Index => Volatile.Read(ref _index);
+    /// <summary>当前索引快照（无锁读取，与 <see cref="Readers"/> 来自同一个已发布快照）。</summary>
+    public MultiSegmentIndex Index => CurrentSnapshot.Index;
 
     /// <summary>当前已加载的段数量。</summary>
     public int SegmentCount => Index.SegmentCount;
+
+    internal SegmentManagerSnapshot CurrentSnapshot => Volatile.Read(ref _snapshot);
 
     private SegmentManager(SegmentReaderOptions? readerOptions)
     {
@@ -86,8 +87,11 @@ public sealed class SegmentManager : IDisposable
 
             var reader = SegmentReader.Open(path, _readerOptions);
             long segId = reader.Header.SegmentId;
+            SegmentReader[] replaced = _readerById.TryGetValue(segId, out var oldReader)
+                ? [oldReader]
+                : [];
             _readerById[segId] = reader;
-            RebuildSnapshotsLocked();
+            RebuildSnapshotsLocked(replaced);
             return reader;
         }
     }
@@ -127,13 +131,7 @@ public sealed class SegmentManager : IDisposable
             }
 
             _readerById[newSegId] = newReader;
-            RebuildSnapshotsLocked();
-        }
-
-        // 锁外 Dispose 旧 reader
-        foreach (var old in toDispose)
-        {
-            try { old.Dispose(); } catch { }
+            RebuildSnapshotsLocked(toDispose);
         }
 
         return newReader;
@@ -170,13 +168,7 @@ public sealed class SegmentManager : IDisposable
                 }
             }
 
-            RebuildSnapshotsLocked();
-        }
-
-        // 锁外 Dispose 旧 reader
-        foreach (var old in toDispose)
-        {
-            try { old.Dispose(); } catch { }
+            RebuildSnapshotsLocked(toDispose);
         }
 
         return toDispose.AsReadOnly();
@@ -198,8 +190,7 @@ public sealed class SegmentManager : IDisposable
                 return false;
 
             _readerById.Remove(segmentId);
-            RebuildSnapshotsLocked();
-            reader.Dispose();
+            RebuildSnapshotsLocked([reader]);
             return true;
         }
     }
@@ -217,29 +208,32 @@ public sealed class SegmentManager : IDisposable
             _disposed = true;
             readersToDispose = new List<SegmentReader>(_readerById.Values);
             _readerById.Clear();
+            PublishSnapshotUnsafe(MultiSegmentIndex.Empty, Array.Empty<SegmentReader>(), readersToDispose);
         }
+    }
 
-        Volatile.Write(ref _index, MultiSegmentIndex.Empty);
-        Volatile.Write(ref _readersSnapshot, Array.Empty<SegmentReader>());
-
-        foreach (var reader in readersToDispose)
+    internal SegmentManagerSnapshotLease AcquireSnapshot()
+    {
+        while (true)
         {
-            try { reader.Dispose(); } catch { }
+            var snapshot = CurrentSnapshot;
+            if (snapshot.TryAcquire())
+                return new SegmentManagerSnapshotLease(snapshot);
         }
     }
 
     /// <summary>
     /// 重建索引快照（调用方必须持有 <c>_lock</c>）。
     /// </summary>
-    private void RebuildSnapshotsLocked()
+    private void RebuildSnapshotsLocked(IReadOnlyList<SegmentReader>? readersToDispose = null)
     {
-        RebuildSnapshotsUnsafe();
+        RebuildSnapshotsUnsafe(readersToDispose);
     }
 
     /// <summary>
     /// 重建索引快照（单线程初始化时调用，无需持有锁）。
     /// </summary>
-    private void RebuildSnapshotsUnsafe()
+    private void RebuildSnapshotsUnsafe(IReadOnlyList<SegmentReader>? readersToDispose = null)
     {
         var ordered = _readerById
             .OrderBy(static kvp => kvp.Key)
@@ -252,7 +246,17 @@ public sealed class SegmentManager : IDisposable
         var newIndex = new MultiSegmentIndex(indices);
         var newReaders = (IReadOnlyList<SegmentReader>)ordered.Select(static kvp => kvp.Value).ToArray();
 
-        Volatile.Write(ref _index, newIndex);
-        Volatile.Write(ref _readersSnapshot, newReaders);
+        PublishSnapshotUnsafe(newIndex, newReaders, readersToDispose ?? Array.Empty<SegmentReader>());
+    }
+
+    private void PublishSnapshotUnsafe(
+        MultiSegmentIndex index,
+        IReadOnlyList<SegmentReader> readers,
+        IReadOnlyList<SegmentReader> readersToDispose)
+    {
+        var oldSnapshot = CurrentSnapshot;
+        var newSnapshot = new SegmentManagerSnapshot(index, readers);
+        Volatile.Write(ref _snapshot, newSnapshot);
+        oldSnapshot.Retire(readersToDispose);
     }
 }

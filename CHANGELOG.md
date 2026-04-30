@@ -35,6 +35,8 @@
 - **PR #77 — 地理空间基准 + 文档完善**：新增 `GeoQueryBenchmark`，覆盖 `100k` 默认轨迹点和可选 `1M` 档位下的 `geo_within`、`geo_bbox`、`trajectory_length` 与 `GEOPOINT` range scan；README 与 `docs/geo-spatial.md` 补齐地理空间功能矩阵、Web Admin / SQL Console 地图用法、基准运行方式和车辆追踪 / 户外运动 / IoT 地理围栏端到端示例。
 
 ### Changed
+- **SegmentReader block 解码缓存**：`SegmentReader` 新增按 `(SegmentId, BlockIndex, Crc32)` 标识的已解码 `DataPoint[]` LRU 缓存，默认单 reader 预算 16 MB，可通过 `SegmentReaderOptions.DecodeBlockCacheMaxBytes` 调整或禁用；`QueryEngine` 重复查询同一落盘 block 时复用解码结果，缓存受内存上限约束并在 reader Dispose 时清空引用。补充重复查询命中与预算淘汰测试。
+- **QueryEngine reader map 缓存**：`QueryEngine` 现在通过 `SegmentManager` 的绑定快照获取 `Index + Readers`，并在快照未变化时复用 `SegmentId -> SegmentReader` 映射，避免每次查询重复构建字典；`AddSegment` / `SwapSegments` / `Dispose` 发布新快照后会自动失效旧缓存，compaction swap 会延迟释放仍被查询快照租约持有的旧 reader，避免并发查询使用已 Dispose reader。
 - **SegmentReader 时间范围索引优化**：`SegmentReader.Open` 现在会构建仅驻留内存的 block 时间范围索引，`FindByTimeRange` 通过 MinTimestamp/MaxTimestamp 双排序数组二分并扫描较小候选集，避免按时间范围查找时线性遍历全部 block；保持 block 区间重叠、边界 inclusive 与段内 `BlockDescriptor` 顺序稳定，补充乱序 block、多重重叠边界和大 block 列表性能回归测试。
 - **SegmentReader series 索引优化**：`SegmentReader.Open` 现在会构建仅驻留内存的只读 `SeriesId -> BlockDescriptor[]` 索引（不改变 `.SDBSEG` 文件格式），`FindBySeries` 直接按 series 命中，`FindBySeriesAndField` 仅扫描该 series 的 block，并保持 `BlockDescriptor` 返回顺序稳定；补充多 series、多 field 与空命中回归测试。
 - **MemTable Flush 热路径统计增量化**：`MemTable.EstimatedBytes` / `MinTimestamp` / `MaxTimestamp` 现在由 `Append` / WAL replay / Flush reset 生命周期维护，`ShouldFlush` 不再遍历全部 series；`MemTableSeries` 的字符串字段在 Append 时增量累加 UTF-8 byte count，并通过 immutable snapshot swap 缓存无追加期间的只读 Snapshot，排序在锁外完成以避免查询长时间阻塞 Append；`SnapshotRange` 在有序数据上直接二分并只复制命中区间，避免小范围查询先分配全量数组。补充并发 append/read 压力、replay、string/null/非 string 混合统计、重复 Snapshot 分配、范围查询边界与 flush 后重置回归测试。

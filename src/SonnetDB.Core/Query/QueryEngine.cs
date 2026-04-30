@@ -25,6 +25,7 @@ public sealed class QueryEngine
     private readonly SegmentManager _segments;
     private readonly SeriesCatalog _catalog;
     private readonly TombstoneTable? _tombstones;
+    private ReaderMapCache? _readerMapCache;
 
     /// <summary>
     /// 初始化 <see cref="QueryEngine"/> 实例。
@@ -66,39 +67,38 @@ public sealed class QueryEngine
         ReadOnlyMemory<DataPoint>? memSlice = bucket?.SnapshotRange(from, to);
         FieldType? memFieldType = bucket?.FieldType;
 
-        // 2. 从 SegmentManager 取候选 Block 引用
-        var candidates = _segments.Index.LookupCandidates(
-            query.SeriesId, query.FieldName, from, to);
-
-        // 构建当次查询用的 SegmentId → SegmentReader 快照（轻量映射，每次查询时重建）
-        var readers = BuildReaderMap(_segments.Readers);
-
         // 3. 解码每个候选 Block
-        var segmentSlices = new List<DataPoint[]>(candidates.Count);
-        foreach (var blockRef in candidates)
+        List<DataPoint[]> segmentSlices;
+        using (var snapshotLease = _segments.AcquireSnapshot())
         {
-            if (query.GeoFilter is not null
-                && blockRef.Descriptor.HasGeoHashRange
-                && !GeoHash32.Overlaps(
-                    blockRef.Descriptor.GeoHashMin,
-                    blockRef.Descriptor.GeoHashMax,
-                    query.GeoFilter.HashMin,
-                    query.GeoFilter.HashMax))
+            var snapshot = snapshotLease.Snapshot;
+            var candidates = snapshot.Index.LookupCandidates(
+                query.SeriesId, query.FieldName, from, to);
+            var readers = BuildReaderMap(snapshot);
+
+            segmentSlices = new List<DataPoint[]>(candidates.Count);
+            foreach (var blockRef in candidates)
             {
-                continue;
+                if (query.GeoFilter is not null
+                    && blockRef.Descriptor.HasGeoHashRange
+                    && !GeoHash32.Overlaps(
+                        blockRef.Descriptor.GeoHashMin,
+                        blockRef.Descriptor.GeoHashMax,
+                        query.GeoFilter.HashMin,
+                        query.GeoFilter.HashMax))
+                {
+                    continue;
+                }
+
+                ThrowIfFieldTypeMismatch(memFieldType, blockRef);
+
+                if (!readers.TryGetValue(blockRef.SegmentId, out var reader))
+                    continue;
+
+                var slice = reader.DecodeBlockRange(blockRef.Descriptor, from, to);
+                if (slice.Length > 0)
+                    segmentSlices.Add(slice);
             }
-
-            ThrowIfFieldTypeMismatch(memFieldType, blockRef);
-
-            if (!readers.TryGetValue(blockRef.SegmentId, out var reader))
-            {
-                // 段文件不在当前 Readers 快照中（极端情况：Readers 快照比 Index 快照旧），跳过
-                continue;
-            }
-
-            var slice = reader.DecodeBlockRange(blockRef.Descriptor, from, to);
-            if (slice.Length > 0)
-                segmentSlices.Add(slice);
         }
 
         // 4. N 路有序合并
@@ -285,7 +285,11 @@ public sealed class QueryEngine
     }
 
     private IReadOnlyList<AggregateBucket> ExecuteAggregateFast(AggregateQuery query)
-        => ExecuteAggregateFast(query, _segments.Index, BuildReaderMap(_segments.Readers));
+    {
+        using var snapshotLease = _segments.AcquireSnapshot();
+        var snapshot = snapshotLease.Snapshot;
+        return ExecuteAggregateFast(query, snapshot.Index, BuildReaderMap(snapshot));
+    }
 
     private IReadOnlyList<AggregateBucket> ExecuteAggregateFast(
         AggregateQuery query,
@@ -410,8 +414,10 @@ public sealed class QueryEngine
         var result = new Dictionary<ulong, IReadOnlyList<AggregateBucket>>(seriesIds.Count);
 
         // 共享一份段索引快照与 reader 映射，避免每个 series 重复重建。
-        var index = _segments.Index;
-        var readers = BuildReaderMap(_segments.Readers);
+        using var snapshotLease = _segments.AcquireSnapshot();
+        var snapshot = snapshotLease.Snapshot;
+        var index = snapshot.Index;
+        var readers = BuildReaderMap(snapshot);
 
         foreach (var seriesId in seriesIds)
         {
@@ -985,13 +991,35 @@ public sealed class QueryEngine
         }
     }
 
-    /// <summary>构建 SegmentId → SegmentReader 的轻量映射（每次查询时重建，不长期缓存）。</summary>
-    private static Dictionary<long, SegmentReader> BuildReaderMap(IReadOnlyList<SegmentReader> readers)
+    /// <summary>构建或复用与 <see cref="SegmentManagerSnapshot"/> 绑定的 SegmentId → SegmentReader 映射。</summary>
+    private Dictionary<long, SegmentReader> BuildReaderMap(SegmentManagerSnapshot snapshot)
     {
+        var cached = Volatile.Read(ref _readerMapCache);
+        if (cached is not null && ReferenceEquals(cached.Snapshot, snapshot))
+            return cached.ReadersBySegmentId;
+
+        var readers = snapshot.Readers;
         var map = new Dictionary<long, SegmentReader>(readers.Count);
         foreach (var r in readers)
             map[r.Header.SegmentId] = r;
+
+        Volatile.Write(ref _readerMapCache, new ReaderMapCache(snapshot, map));
         return map;
+    }
+
+    private sealed class ReaderMapCache
+    {
+        public ReaderMapCache(
+            SegmentManagerSnapshot snapshot,
+            Dictionary<long, SegmentReader> readersBySegmentId)
+        {
+            Snapshot = snapshot;
+            ReadersBySegmentId = readersBySegmentId;
+        }
+
+        public SegmentManagerSnapshot Snapshot { get; }
+
+        public Dictionary<long, SegmentReader> ReadersBySegmentId { get; }
     }
 
     /// <summary>
