@@ -137,6 +137,24 @@ public sealed class SqlExecutorWindowFunctionTests : IDisposable
     }
 
     [Fact]
+    public void Select_RunningMinMax_ReturnCumulativeExtremes()
+    {
+        using var db = OpenWithSchema(Options());
+        SqlExecutor.Execute(db,
+            "INSERT INTO cpu (time, host, usage) VALUES " +
+            "(0, 'h1', 5), (1, 'h1', 3), (2, 'h1', 7)");
+
+        var r = Select(db, "SELECT running_min(usage), running_max(usage) FROM cpu");
+
+        Assert.Equal(5.0, (double)r.Rows[0][0]!);
+        Assert.Equal(5.0, (double)r.Rows[0][1]!);
+        Assert.Equal(3.0, (double)r.Rows[1][0]!);
+        Assert.Equal(5.0, (double)r.Rows[1][1]!);
+        Assert.Equal(3.0, (double)r.Rows[2][0]!);
+        Assert.Equal(7.0, (double)r.Rows[2][1]!);
+    }
+
+    [Fact]
     public void Select_Integral_OnConstant_EqualsValueTimesSeconds()
     {
         using var db = OpenWithSchema(Options());

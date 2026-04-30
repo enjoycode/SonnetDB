@@ -36,6 +36,7 @@
 
 ### Changed
 - **窗口函数流式状态接口**：新增 `IWindowState` / `IWindowStreamingEvaluator`，流式窗口函数可通过 `Update(timestamp, value)` 按行推进；`DoubleWindowEvaluatorBase` 保留旧 `Compute` / `ComputeDouble` 适配层，`SelectExecutor` 在窗口 evaluator 全部支持流式状态时跳过 `long[]` / `FieldValue?[]` 对齐数组和预计算输出，仍对未迁移函数自动回退旧 materialized 路径。补充流式状态语义与大数据集内存占用回归测试。
+- **窗口函数 Span 批量路径**：`moving_average`、`running_sum` 及新增 `running_min` / `running_max` 的 typed/boxed 批量计算改为基于 `ReadOnlySpan` / `Span` 单遍填充输出；`moving_average` 小窗口使用栈上环形缓冲，减少临时数组，同时保持前 `n-1` 行 NULL、缺失值跳过/延续和时间顺序语义不变。补充空输入、全缺失、窗口大小 1 与累计极值边界测试。
 - **窗口函数 typed evaluator**：新增 `IWindowDoubleEvaluator` / `WindowDoubleOutput` 数值窗口函数输出接口，`SelectExecutor` 对 typed evaluator 优先复用 `double[] + bool[]`，避免 `Compute` 先生成 `object?[]` 导致每行提前装箱；`moving_average`、`ewma`、`holt_winters` 与累计求和路径已迁移，并新增 `running_sum` 作为 `cumulative_sum` 兼容别名。补充 typed 语义测试、SQL 兼容测试与 BenchmarkDotNet 分配基准。
 - **SegmentReader 可选 memory-mapped 读取路径**：新增 `SegmentReaderOptions.UseMemoryMappedFileForLargeSegments` 与 `MemoryMappedFileThresholdBytes`，大段文件可通过 safe-only `MemoryMappedViewAccessor` 按需读取 header/index/block payload，避免默认 `File.ReadAllBytes` 把整段放入 LOH；默认仍保留 `byte[]` reader，mmap 打开失败会回退。补充默认回退、阈值回退、mmap 解码与 Dispose 释放文件句柄测试。
 - **SegmentReader HNSW vector sidecar 懒加载**：`SegmentReader.Open` 不再 eager 反序列化 `.SDBVIDX` 中全部 HNSW 图，改为 `TryGetVectorIndex` 首次命中 VECTOR block 时按需读取，并通过进程内共享 LRU 预算 `SegmentReaderOptions.VectorIndexCacheMaxBytes` 控制常驻引用；冷段打开后不占用 HNSW 图内存，reader Dispose 会移除本段缓存。补充懒加载、预算淘汰、KNN 结果一致性与 compaction 后 sidecar 可加载测试。
