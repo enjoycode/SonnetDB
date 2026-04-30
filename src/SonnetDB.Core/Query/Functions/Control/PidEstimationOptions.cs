@@ -3,7 +3,7 @@
 /// <summary>
 /// <see cref="PidParameterEstimator.Estimate"/> 的估算选项。
 /// </summary>
-public sealed class PidEstimationOptions
+public sealed record PidEstimationOptions
 {
     /// <summary>
     /// PID 整定方法，默认 <see cref="PidTuningMethod.ZieglerNichols"/>。

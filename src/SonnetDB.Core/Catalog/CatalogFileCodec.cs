@@ -146,9 +146,12 @@ public static class CatalogFileCodec
 
             int entryCount = header.EntryCount;
             var catalog = new SeriesCatalog();
+            var entries = new List<SeriesEntry>(entryCount);
 
             for (int i = 0; i < entryCount; i++)
-                catalog.LoadEntry(ReadEntry(source));
+                entries.Add(ReadEntry(source));
+
+            catalog.LoadEntries(entries);
 
             return catalog;
         }

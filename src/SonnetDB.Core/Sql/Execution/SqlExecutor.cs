@@ -13,6 +13,19 @@ namespace SonnetDB.Sql.Execution;
 /// </summary>
 public static class SqlExecutor
 {
+    private static readonly IReadOnlyList<string> _nameColumns =
+        new List<string>(1) { "name" }.AsReadOnly();
+    private static readonly IReadOnlyList<string> _describeMeasurementColumns =
+        new List<string>(3) { "column_name", "column_type", "data_type" }.AsReadOnly();
+    private static readonly IReadOnlyList<string> _userColumns =
+        new List<string>(4) { "name", "is_superuser", "created_utc", "token_count" }.AsReadOnly();
+    private static readonly IReadOnlyList<string> _grantColumns =
+        new List<string>(3) { "user_name", "database", "permission" }.AsReadOnly();
+    private static readonly IReadOnlyList<string> _tokenColumns =
+        new List<string>(4) { "token_id", "user_name", "created_utc", "last_used_utc" }.AsReadOnly();
+    private static readonly IReadOnlyList<string> _issuedTokenColumns =
+        new List<string>(2) { "token_id", "token" }.AsReadOnly();
+
     /// <summary>
     /// 解析并执行单条 SQL 语句。
     /// </summary>
@@ -102,7 +115,7 @@ public static class SqlExecutor
         var rows = new List<IReadOnlyList<object?>>(snapshot.Count);
         foreach (var schema in snapshot)
             rows.Add(new object?[] { schema.Name });
-        return new SelectExecutionResult(new[] { "name" }, rows);
+        return new SelectExecutionResult(_nameColumns, rows);
     }
 
     private static SelectExecutionResult DescribeMeasurement(Tsdb tsdb, string name)
@@ -120,7 +133,7 @@ public static class SqlExecutor
             });
         }
         return new SelectExecutionResult(
-            new[] { "column_name", "column_type", "data_type" },
+            _describeMeasurementColumns,
             rows);
     }
 
@@ -151,7 +164,7 @@ public static class SqlExecutor
             rows.Add(new object?[] { u.Name, u.IsSuperuser, u.CreatedUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture), (long)u.TokenCount });
         }
         return new SelectExecutionResult(
-            new[] { "name", "is_superuser", "created_utc", "token_count" },
+            _userColumns,
             rows);
     }
 
@@ -164,7 +177,7 @@ public static class SqlExecutor
             rows.Add(new object?[] { g.UserName, g.Database, g.Permission.ToString() });
         }
         return new SelectExecutionResult(
-            new[] { "user_name", "database", "permission" },
+            _grantColumns,
             rows);
     }
 
@@ -176,7 +189,7 @@ public static class SqlExecutor
         {
             rows.Add(new object?[] { d });
         }
-        return new SelectExecutionResult(new[] { "name" }, rows);
+        return new SelectExecutionResult(_nameColumns, rows);
     }
 
     private static object ShowTokens(IControlPlane cp, string? userName)
@@ -194,7 +207,7 @@ public static class SqlExecutor
             });
         }
         return new SelectExecutionResult(
-            new[] { "token_id", "user_name", "created_utc", "last_used_utc" },
+            _tokenColumns,
             rows);
     }
 
@@ -205,7 +218,7 @@ public static class SqlExecutor
         {
             new object?[] { tokenId, plain },
         };
-        return new SelectExecutionResult(new[] { "token_id", "token" }, rows);
+        return new SelectExecutionResult(_issuedTokenColumns, rows);
     }
 
     private static object ExecuteControlPlane(IControlPlane? controlPlane, Func<IControlPlane, object> action)

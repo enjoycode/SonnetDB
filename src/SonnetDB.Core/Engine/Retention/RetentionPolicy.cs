@@ -7,7 +7,7 @@
 ///   <item><description>per-measurement / per-series 粒度的策略 v1 不实现（PR #28+ 接 SQL 后再加）。</description></item>
 /// </list>
 /// </summary>
-public sealed class RetentionPolicy
+public sealed record RetentionPolicy
 {
     /// <summary>是否启用 Retention。默认 <c>false</c>（保持向后兼容）。</summary>
     public bool Enabled { get; init; } = false;

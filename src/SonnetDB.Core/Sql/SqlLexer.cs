@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.Buffers;
 using System.Text;
 
 namespace SonnetDB.Sql;
@@ -9,6 +10,24 @@ namespace SonnetDB.Sql;
 /// </summary>
 public sealed class SqlLexer
 {
+    private static readonly SearchValues<char> _asciiWhitespace =
+        SearchValues.Create(" \t\r\n\f\v\u001c\u001d\u001e\u001f");
+
+    private static readonly SearchValues<char> _lineBreaks = SearchValues.Create("\r\n");
+
+    private static readonly SearchValues<char> _asciiIdentifierStart =
+        SearchValues.Create("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_");
+
+    private static readonly SearchValues<char> _asciiIdentifierContinue =
+        SearchValues.Create("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_0123456789");
+
+    private static readonly SearchValues<char> _asciiDigits = SearchValues.Create("0123456789");
+
+    private static readonly SearchValues<char> _durationSuffixStarts = SearchValues.Create("numshd");
+
+    private static readonly SearchValues<char> _operatorOrPunctuationStarts =
+        SearchValues.Create("()[],;.*+-/%=!<>");
+
     private static readonly Dictionary<string, TokenKind> _keywords = new(StringComparer.OrdinalIgnoreCase)
     {
         ["create"] = TokenKind.KeywordCreate,
@@ -140,6 +159,9 @@ public sealed class SqlLexer
         if (ch == '"')
             return ScanQuotedIdentifier(start);
 
+        if (!_operatorOrPunctuationStarts.Contains(ch))
+            throw new SqlParseException($"无法识别的字符 '{ch}'", start);
+
         // 标点 / 运算符
         switch (ch)
         {
@@ -192,8 +214,7 @@ public sealed class SqlLexer
 
     private Token ScanIdentifierOrKeyword(int start)
     {
-        while (_position < _source.Length && IsIdentifierContinue(_source[_position]))
-            _position++;
+        AdvanceIdentifierContinue();
 
         var text = _source.Substring(start, _position - start);
         return _keywords.TryGetValue(text, out var keyword)
@@ -251,18 +272,16 @@ public sealed class SqlLexer
 
     private Token ScanNumber(int start)
     {
-        while (_position < _source.Length && char.IsAsciiDigit(_source[_position]))
-            _position++;
+        AdvanceAsciiDigits();
 
         var isFloat = false;
 
         // 小数部分
-        if (_position < _source.Length && _source[_position] == '.' && char.IsAsciiDigit(Peek(1)))
+        if (_position < _source.Length && _source[_position] == '.' && IsAsciiDigit(Peek(1)))
         {
             isFloat = true;
             _position++; // '.'
-            while (_position < _source.Length && char.IsAsciiDigit(_source[_position]))
-                _position++;
+            AdvanceAsciiDigits();
         }
 
         // 指数部分
@@ -272,10 +291,9 @@ public sealed class SqlLexer
             _position++;
             if (_position < _source.Length && (_source[_position] == '+' || _source[_position] == '-'))
                 _position++;
-            if (_position >= _source.Length || !char.IsAsciiDigit(_source[_position]))
+            if (_position >= _source.Length || !IsAsciiDigit(_source[_position]))
                 throw new SqlParseException("浮点数指数缺少数字", start);
-            while (_position < _source.Length && char.IsAsciiDigit(_source[_position]))
-                _position++;
+            AdvanceAsciiDigits();
         }
 
         var numericText = _source.Substring(start, _position - start);
@@ -347,8 +365,18 @@ public sealed class SqlLexer
     {
         while (_position < _source.Length)
         {
+            var rest = _source.AsSpan(_position);
+            var firstNonWhitespace = rest.IndexOfAnyExcept(_asciiWhitespace);
+            if (firstNonWhitespace < 0)
+            {
+                _position = _source.Length;
+                return;
+            }
+            if (firstNonWhitespace > 0)
+                _position += firstNonWhitespace;
+
             var ch = _source[_position];
-            if (char.IsWhiteSpace(ch))
+            if (IsWhitespace(ch))
             {
                 _position++;
                 continue;
@@ -392,7 +420,7 @@ public sealed class SqlLexer
             return false;
 
         var next = Peek(3);
-        if (next != '\0' && !char.IsWhiteSpace(next))
+        if (next != '\0' && !IsWhitespace(next))
             return false;
 
         return IsAtLineStartOrAfterStatementTerminator();
@@ -401,8 +429,9 @@ public sealed class SqlLexer
     private void SkipToEndOfLine()
     {
         _position += StartsWithIgnoreCase("rem") ? 3 : 2;
-        while (_position < _source.Length && _source[_position] != '\n' && _source[_position] != '\r')
-            _position++;
+        var rest = _source.AsSpan(_position);
+        var lineBreak = rest.IndexOfAny(_lineBreaks);
+        _position += lineBreak < 0 ? rest.Length : lineBreak;
     }
 
     private bool StartsWithIgnoreCase(string value)
@@ -427,7 +456,7 @@ public sealed class SqlLexer
             if (ch == '\n' || ch == '\r')
                 return true;
 
-            if (!char.IsWhiteSpace(ch))
+            if (!IsWhitespace(ch))
                 return ch == ';';
         }
 
@@ -440,11 +469,46 @@ public sealed class SqlLexer
         return index < _source.Length ? _source[index] : '\0';
     }
 
-    private static bool IsIdentifierStart(char ch) => ch == '_' || char.IsLetter(ch);
-    private static bool IsIdentifierContinue(char ch) => ch == '_' || char.IsLetterOrDigit(ch);
+    private void AdvanceIdentifierContinue()
+    {
+        while (_position < _source.Length)
+        {
+            var rest = _source.AsSpan(_position);
+            var firstNonIdentifier = rest.IndexOfAnyExcept(_asciiIdentifierContinue);
+            if (firstNonIdentifier < 0)
+            {
+                _position = _source.Length;
+                return;
+            }
+
+            _position += firstNonIdentifier;
+            if (_position >= _source.Length || !IsIdentifierContinue(_source[_position]))
+                return;
+
+            _position++;
+        }
+    }
+
+    private void AdvanceAsciiDigits()
+    {
+        var rest = _source.AsSpan(_position);
+        var firstNonDigit = rest.IndexOfAnyExcept(_asciiDigits);
+        _position += firstNonDigit < 0 ? rest.Length : firstNonDigit;
+    }
+
+    private static bool IsIdentifierStart(char ch)
+        => _asciiIdentifierStart.Contains(ch) || (ch > '\u007f' && char.IsLetter(ch));
+
+    private static bool IsIdentifierContinue(char ch)
+        => _asciiIdentifierContinue.Contains(ch) || (ch > '\u007f' && char.IsLetterOrDigit(ch));
+
+    private static bool IsWhitespace(char ch)
+        => _asciiWhitespace.Contains(ch) || (ch > '\u007f' && char.IsWhiteSpace(ch));
+
+    private static bool IsAsciiDigit(char ch) => _asciiDigits.Contains(ch);
 
     private static bool IsDurationSuffixStart(char ch)
-        => ch is 'n' or 'u' or 'm' or 's' or 'h' or 'd';
+        => _durationSuffixStarts.Contains(ch);
 
     private static bool IsDurationTwoCharSuffix(string s, int index)
     {

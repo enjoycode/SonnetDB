@@ -11,6 +11,14 @@ public sealed class SeriesCatalogTests
 {
     private static SeriesCatalog CreateCatalog() => new();
 
+    private static IReadOnlyDictionary<string, string> Tags(params (string Key, string Value)[] tags)
+    {
+        var dict = new Dictionary<string, string>(tags.Length, StringComparer.Ordinal);
+        foreach (var (key, value) in tags)
+            dict[key] = value;
+        return dict;
+    }
+
     // ── GetOrAdd 幂等性 ───────────────────────────────────────────────────────
 
     [Fact]
@@ -134,6 +142,21 @@ public sealed class SeriesCatalogTests
         Assert.Empty(catalog.Find("disk", null));
     }
 
+    [Fact]
+    public void Find_AfterAdditionalSeriesAdded_PublishesUpdatedTagSnapshot()
+    {
+        var catalog = CreateCatalog();
+        var first = catalog.GetOrAdd("cpu", Tags(("host", "a"), ("region", "east")));
+
+        Assert.Empty(catalog.Find("cpu", Tags(("host", "b"))));
+
+        var second = catalog.GetOrAdd("cpu", Tags(("host", "b"), ("region", "east")));
+
+        Assert.Same(first, Assert.Single(catalog.Find("cpu", Tags(("host", "a")))));
+        Assert.Same(second, Assert.Single(catalog.Find("cpu", Tags(("host", "b")))));
+        Assert.Equal(2, catalog.Find("cpu", Tags(("region", "east"))).Count);
+    }
+
     // ── Snapshot ──────────────────────────────────────────────────────────────
 
     [Fact]
@@ -144,6 +167,22 @@ public sealed class SeriesCatalogTests
         catalog.GetOrAdd("mem", null);
         var snap = catalog.Snapshot();
         Assert.Equal(2, snap.Count);
+    }
+
+    [Fact]
+    public void Snapshot_BeforeUpdate_RemainsStableAndNewSnapshotSeesEntry()
+    {
+        var catalog = CreateCatalog();
+        var first = catalog.GetOrAdd("cpu", Tags(("host", "a")));
+        var before = catalog.Snapshot();
+
+        var second = catalog.GetOrAdd("cpu", Tags(("host", "b")));
+        var after = catalog.Snapshot();
+
+        Assert.Single(before);
+        Assert.Same(first, before[0]);
+        Assert.Equal(2, after.Count);
+        Assert.Contains(after, e => e.Id == second.Id);
     }
 
     // ── Clear ─────────────────────────────────────────────────────────────────
@@ -209,5 +248,52 @@ public sealed class SeriesCatalogTests
         // 确保没有重复 ID
         var ids = catalog.Snapshot().Select(e => e.Id).ToHashSet();
         Assert.Equal(count, ids.Count);
+    }
+
+    [Fact]
+    public async Task Concurrent_ReadsWhileAddingSeries_AreSafeAndFinalVisible()
+    {
+        var catalog = CreateCatalog();
+        var errors = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        using var stop = new System.Threading.CancellationTokenSource();
+
+        var readers = Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                try
+                {
+                    var snapshot = catalog.Snapshot();
+                    foreach (var entry in snapshot)
+                    {
+                        Assert.Same(entry, catalog.TryGet(entry.Id));
+                        var key = entry.Key;
+                        Assert.Same(entry, catalog.TryGet(in key));
+                    }
+                    GC.KeepAlive(catalog.Find("cpu", Tags(("bucket", "3"))));
+                    GC.KeepAlive(catalog.Find("cpu", null));
+                }
+                catch (Exception ex)
+                {
+                    errors.Enqueue(ex);
+                    break;
+                }
+            }
+        })).ToArray();
+
+        const int count = 120;
+        for (int i = 0; i < count; i++)
+        {
+            catalog.GetOrAdd("cpu", Tags(
+                ("host", "h" + i),
+                ("bucket", (i % 6).ToString())));
+        }
+
+        stop.Cancel();
+        await Task.WhenAll(readers);
+
+        Assert.Empty(errors);
+        Assert.Equal(count, catalog.Count);
+        Assert.Equal(count / 6, catalog.Find("cpu", Tags(("bucket", "3"))).Count);
     }
 }

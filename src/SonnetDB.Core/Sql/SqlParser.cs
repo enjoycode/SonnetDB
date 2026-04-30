@@ -957,6 +957,15 @@ public sealed class SqlParser
         return name;
     }
 
+    private string ExpectUnquotedUserName()
+    {
+        if (Current.Kind != TokenKind.IdentifierLiteral && !IsKeyword(Current.Kind))
+            throw Error("期望用户名");
+        var name = Current.Text;
+        Advance();
+        return name;
+    }
+
     private static bool IsKeyword(TokenKind kind) =>
         kind >= TokenKind.KeywordCreate;
 
@@ -1033,7 +1042,7 @@ public sealed class SqlParser
     private CreateUserStatement ParseCreateUserBody()
     {
         Expect(TokenKind.KeywordUser);
-        var name = ExpectUserName();
+        var name = ExpectUnquotedUserName();
         Expect(TokenKind.KeywordWith);
         Expect(TokenKind.KeywordPassword);
         var password = ExpectStringLiteral();

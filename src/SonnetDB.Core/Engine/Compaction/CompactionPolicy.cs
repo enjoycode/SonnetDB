@@ -3,7 +3,7 @@
 /// <summary>
 /// Compaction 触发策略（Size-Tiered v1）。
 /// </summary>
-public sealed class CompactionPolicy
+public sealed record CompactionPolicy
 {
     /// <summary>是否启用 Compaction。默认 true。</summary>
     public bool Enabled { get; init; } = true;

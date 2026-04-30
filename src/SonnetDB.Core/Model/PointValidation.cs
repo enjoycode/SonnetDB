@@ -6,7 +6,8 @@
 internal static class PointValidation
 {
     /// <summary>保留字符集合：不允许出现在 tag/field 键值中。</summary>
-    private static readonly char[] _reservedChars = [',', '=', '\n', '\r', '\t', '"'];
+    private static readonly System.Buffers.SearchValues<char> _reservedChars =
+        System.Buffers.SearchValues.Create(",=\n\r\t\"");
 
     /// <summary>
     /// 校验 Measurement / Tag key / Tag value / Field key 名称。
@@ -20,7 +21,7 @@ internal static class PointValidation
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException($"'{paramName}' must not be null or whitespace.", paramName);
 
-        if (name.IndexOfAny(_reservedChars) >= 0)
+        if (name.AsSpan().IndexOfAny(_reservedChars) >= 0)
             throw new ArgumentException(
                 $"'{paramName}' contains reserved characters (,=\\n\\r\\t\"). Value: \"{name}\"",
                 paramName);

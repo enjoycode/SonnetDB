@@ -3,7 +3,7 @@ namespace SonnetDB.Engine;
 /// <summary>
 /// WAL group-commit 配置。仅在 <see cref="TsdbOptions.SyncWalOnEveryWrite"/> 为 <c>true</c> 时生效。
 /// </summary>
-public sealed class WalGroupCommitOptions
+public sealed record WalGroupCommitOptions
 {
     /// <summary>
     /// 是否启用 WAL group-commit。启用后，同一时间窗口内的多个写请求会共享一次 WAL fsync。

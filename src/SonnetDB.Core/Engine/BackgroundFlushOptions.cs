@@ -3,7 +3,7 @@
 /// <summary>
 /// 后台 Flush 线程的运行参数。
 /// </summary>
-public sealed class BackgroundFlushOptions
+public sealed record BackgroundFlushOptions
 {
     /// <summary>是否启用后台 Flush 线程。默认 true。</summary>
     public bool Enabled { get; init; } = true;

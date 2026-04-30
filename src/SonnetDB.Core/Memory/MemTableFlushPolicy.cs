@@ -3,7 +3,7 @@
 /// <summary>
 /// MemTable 触发 Flush 的阈值策略，基于字节数、数据点数与时间间隔三种条件。
 /// </summary>
-public sealed class MemTableFlushPolicy
+public sealed record MemTableFlushPolicy
 {
     /// <summary>触发 Flush 的字节数上限，默认 16 MB。</summary>
     public long MaxBytes { get; init; } = 16 * 1024 * 1024;

@@ -95,6 +95,72 @@ public class MeasurementSchemaTests
     }
 
     [Fact]
+    public void Catalog_TryGet_AfterAdd_ReturnsPublishedSchema()
+    {
+        var cat = new MeasurementCatalog();
+        var schema = MeasurementSchema.Create("cpu", new[] { Field("usage") });
+
+        cat.Add(schema);
+
+        Assert.Same(schema, cat.TryGet("cpu"));
+        Assert.True(cat.Contains("cpu"));
+        Assert.Equal(1, cat.Count);
+    }
+
+    [Fact]
+    public void Catalog_LoadOrReplace_AfterSnapshot_PublishesReplacement()
+    {
+        var cat = new MeasurementCatalog();
+        var original = MeasurementSchema.Create("cpu", new[] { Field("usage") });
+        var replacement = MeasurementSchema.Create("cpu", new[] { Field("load", FieldType.Int64) });
+        cat.Add(original);
+
+        var before = cat.Snapshot();
+        cat.LoadOrReplace(replacement);
+
+        Assert.Same(original, Assert.Single(before));
+        Assert.Same(replacement, cat.TryGet("cpu"));
+        Assert.Equal("load", Assert.Single(cat.Snapshot()).Columns[0].Name);
+    }
+
+    [Fact]
+    public async Task Catalog_ConcurrentReadsWhileAddingSchemas_AreSafeAndFinalVisible()
+    {
+        var cat = new MeasurementCatalog();
+        var errors = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        using var stop = new System.Threading.CancellationTokenSource();
+
+        var reader = Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                try
+                {
+                    _ = cat.Snapshot();
+                    for (int i = 0; i < 64; i++)
+                        _ = cat.TryGet("m" + i);
+                }
+                catch (Exception ex)
+                {
+                    errors.Enqueue(ex);
+                    break;
+                }
+            }
+        });
+
+        for (int i = 0; i < 64; i++)
+            cat.Add(MeasurementSchema.Create("m" + i, new[] { Field("v") }));
+
+        stop.Cancel();
+        await reader;
+
+        Assert.Empty(errors);
+        Assert.Equal(64, cat.Count);
+        for (int i = 0; i < 64; i++)
+            Assert.NotNull(cat.TryGet("m" + i));
+    }
+
+    [Fact]
     public void Catalog_Snapshot_ReturnsSortedByName()
     {
         var cat = new MeasurementCatalog();

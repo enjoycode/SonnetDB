@@ -120,6 +120,24 @@ public sealed class TagInvertedIndexTests
     }
 
     [Fact]
+    public void Find_AfterAdditionalAdd_PublishesUpdatedFrozenSnapshot()
+    {
+        var c = NewCatalog();
+        var first = c.GetOrAdd("cpu", Tags(("host", "a"), ("rack", "r1")));
+
+        Assert.Same(first, Assert.Single(c.Find("cpu", Tags(("rack", "r1")))));
+        Assert.Empty(c.Find("cpu", Tags(("host", "b"))));
+
+        var second = c.GetOrAdd("cpu", Tags(("host", "b"), ("rack", "r1")));
+
+        var rackHits = c.Find("cpu", Tags(("rack", "r1")));
+        Assert.Equal(2, rackHits.Count);
+        Assert.Contains(rackHits, e => e.Id == first.Id);
+        Assert.Contains(rackHits, e => e.Id == second.Id);
+        Assert.Same(second, Assert.Single(c.Find("cpu", Tags(("host", "b")))));
+    }
+
+    [Fact]
     public void LoadEntry_RebuildsTagIndex()
     {
         var src = NewCatalog();

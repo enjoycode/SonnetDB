@@ -1,4 +1,5 @@
 ﻿using System.Collections.ObjectModel;
+using System.Collections.Frozen;
 using SonnetDB.Storage.Format;
 
 namespace SonnetDB.Catalog;
@@ -9,7 +10,7 @@ namespace SonnetDB.Catalog;
 /// </summary>
 public sealed class MeasurementSchema
 {
-    private readonly Dictionary<string, MeasurementColumn> _byName;
+    private readonly FrozenDictionary<string, MeasurementColumn> _byName;
 
     /// <summary>Measurement 名称（区分大小写，非空且不含保留字符）。</summary>
     public string Name { get; }
@@ -25,9 +26,10 @@ public sealed class MeasurementSchema
         Name = name;
         Columns = columns;
         CreatedAtUtcTicks = createdAtUtcTicks;
-        _byName = new Dictionary<string, MeasurementColumn>(columns.Count, StringComparer.Ordinal);
+        var byName = new Dictionary<string, MeasurementColumn>(columns.Count, StringComparer.Ordinal);
         foreach (var col in columns)
-            _byName[col.Name] = col;
+            byName[col.Name] = col;
+        _byName = byName.ToFrozenDictionary(StringComparer.Ordinal);
     }
 
     /// <summary>
