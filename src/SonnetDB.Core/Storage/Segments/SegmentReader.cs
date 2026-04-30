@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Runtime.InteropServices;
@@ -29,6 +30,7 @@ public sealed class SegmentReader : IDisposable
     private byte[]? _bytes;
     private readonly SegmentReaderOptions _options;
     private readonly BlockDescriptor[] _blocks;
+    private readonly FrozenDictionary<ulong, BlockDescriptor[]> _blocksBySeries;
     private readonly IReadOnlyDictionary<int, HnswVectorBlockIndex> _vectorIndexesByBlock;
 
     /// <summary>段文件路径。</summary>
@@ -117,6 +119,7 @@ public sealed class SegmentReader : IDisposable
         SegmentHeader header,
         SegmentFooter footer,
         BlockDescriptor[] blocks,
+        FrozenDictionary<ulong, BlockDescriptor[]> blocksBySeries,
         IReadOnlyDictionary<int, HnswVectorBlockIndex> vectorIndexesByBlock,
         SegmentReaderOptions options)
     {
@@ -125,6 +128,7 @@ public sealed class SegmentReader : IDisposable
         Header = header;
         Footer = footer;
         _blocks = blocks;
+        _blocksBySeries = blocksBySeries;
         _vectorIndexesByBlock = vectorIndexesByBlock;
         FileLength = bytes.Length;
         _options = options;
@@ -303,7 +307,8 @@ public sealed class SegmentReader : IDisposable
         }
 
         var vectorIndexes = SegmentVectorIndexFile.TryLoad(path, blocks);
-        return new SegmentReader(path, bytes, header, footer, blocks, vectorIndexes, options);
+        var blocksBySeries = BuildBlocksBySeriesIndex(blocks);
+        return new SegmentReader(path, bytes, header, footer, blocks, blocksBySeries, vectorIndexes, options);
     }
 
     /// <summary>
@@ -312,15 +317,9 @@ public sealed class SegmentReader : IDisposable
     /// <param name="seriesId">目标序列 ID。</param>
     /// <returns>匹配的 BlockDescriptor 列表（可能为空）。</returns>
     public IReadOnlyList<BlockDescriptor> FindBySeries(ulong seriesId)
-    {
-        var result = new List<BlockDescriptor>();
-        foreach (var b in _blocks)
-        {
-            if (b.SeriesId == seriesId)
-                result.Add(b);
-        }
-        return result;
-    }
+        => _blocksBySeries.TryGetValue(seriesId, out var blocks)
+            ? blocks
+            : Array.Empty<BlockDescriptor>();
 
     /// <summary>
     /// 按 (SeriesId, FieldName) 过滤；通常 0 或 1 个结果。
@@ -332,14 +331,19 @@ public sealed class SegmentReader : IDisposable
     {
         ArgumentNullException.ThrowIfNull(fieldName);
 
-        var result = new List<BlockDescriptor>();
-        foreach (var b in _blocks)
+        if (!_blocksBySeries.TryGetValue(seriesId, out var seriesBlocks))
+            return Array.Empty<BlockDescriptor>();
+
+        List<BlockDescriptor>? result = null;
+        foreach (var b in seriesBlocks)
         {
-            if (b.SeriesId == seriesId &&
-                string.Equals(b.FieldName, fieldName, StringComparison.Ordinal))
+            if (string.Equals(b.FieldName, fieldName, StringComparison.Ordinal))
+            {
+                result ??= [];
                 result.Add(b);
+            }
         }
-        return result;
+        return result is null ? Array.Empty<BlockDescriptor>() : result.ToArray();
     }
 
     /// <summary>
@@ -459,6 +463,26 @@ public sealed class SegmentReader : IDisposable
     internal static byte[] LoadAll(string path) => File.ReadAllBytes(path);
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
+
+    private static FrozenDictionary<ulong, BlockDescriptor[]> BuildBlocksBySeriesIndex(
+        IReadOnlyList<BlockDescriptor> blocks)
+    {
+        var grouped = new Dictionary<ulong, List<BlockDescriptor>>();
+        foreach (var block in blocks)
+        {
+            if (!grouped.TryGetValue(block.SeriesId, out var seriesBlocks))
+            {
+                seriesBlocks = [];
+                grouped.Add(block.SeriesId, seriesBlocks);
+            }
+            seriesBlocks.Add(block);
+        }
+
+        var index = new Dictionary<ulong, BlockDescriptor[]>(grouped.Count);
+        foreach (var (seriesId, seriesBlocks) in grouped)
+            index.Add(seriesId, seriesBlocks.ToArray());
+        return index.ToFrozenDictionary();
+    }
 
     private void ThrowIfDisposed()
     {

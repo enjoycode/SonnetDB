@@ -3,6 +3,7 @@ using SonnetDB.Model;
 using SonnetDB.Storage.Format;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using Xunit;
 
 namespace SonnetDB.Core.Tests.Memory;
@@ -345,11 +346,86 @@ public sealed class MemTableSeriesTests
     }
 
     [Fact]
+    public async Task ConcurrentAppendAndReaders_Stress_StatisticsAndSnapshotsRemainConsistent()
+    {
+        var series = new MemTableSeries(MakeKey(), FieldType.Float64);
+        using var start = new ManualResetEventSlim(false);
+        const int writes = 1_000;
+        const int readers = 4;
+        int writerDone = 0;
+
+        var writer = Task.Run(() =>
+        {
+            start.Wait();
+            try
+            {
+                for (int i = 0; i < writes; i++)
+                    series.Append(writes - i, FieldValue.FromDouble(i));
+            }
+            finally
+            {
+                Volatile.Write(ref writerDone, 1);
+            }
+        });
+
+        var readerTasks = Enumerable.Range(0, readers)
+            .Select(_ => Task.Run(() =>
+            {
+                start.Wait();
+                int iterations = 0;
+                while (Volatile.Read(ref writerDone) == 0 || iterations < 500)
+                {
+                    var slice = series.SnapshotRange(100L, 200L);
+                    AssertSorted(slice);
+
+                    var snapshot = series.Snapshot();
+                    AssertSorted(snapshot);
+
+                    if (series.TryGetNumericAggregateSnapshot(
+                        out int count, out long minTs, out long maxTs,
+                        out double sum, out double min, out double max))
+                    {
+                        Assert.InRange(count, 1, writes);
+                        Assert.True(minTs <= maxTs);
+                        Assert.True(min <= max);
+                        Assert.True(sum >= 0.0);
+                    }
+
+                    iterations++;
+                    if ((iterations & 31) == 0)
+                        Thread.Yield();
+                }
+            }))
+            .ToArray();
+
+        start.Set();
+        await Task.WhenAll(readerTasks.Prepend(writer)).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(writes, series.Count);
+        Assert.True(series.TryGetNumericAggregateSnapshot(
+            out int finalCount, out long finalMinTs, out long finalMaxTs,
+            out double finalSum, out double finalMin, out double finalMax));
+        Assert.Equal(writes, finalCount);
+        Assert.Equal(1L, finalMinTs);
+        Assert.Equal(writes, finalMaxTs);
+        Assert.Equal(writes * (writes - 1) / 2.0, finalSum);
+        Assert.Equal(0.0, finalMin);
+        Assert.Equal(writes - 1.0, finalMax);
+    }
+
+    [Fact]
     public void MinMaxTimestamp_EmptySeries_ReturnsSentinelValues()
     {
         var series = new MemTableSeries(MakeKey(), FieldType.Float64);
 
         Assert.Equal(long.MaxValue, series.MinTimestamp);
         Assert.Equal(long.MinValue, series.MaxTimestamp);
+    }
+
+    private static void AssertSorted(ReadOnlyMemory<DataPoint> points)
+    {
+        var span = points.Span;
+        for (int i = 1; i < span.Length; i++)
+            Assert.True(span[i].Timestamp >= span[i - 1].Timestamp);
     }
 }

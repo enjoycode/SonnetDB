@@ -430,6 +430,19 @@ public sealed class MemTableSeries
         return lo;
     }
 
+    private sealed class SnapshotCache
+    {
+        public SnapshotCache(long version, ReadOnlyMemory<DataPoint> memory)
+        {
+            Version = version;
+            Memory = memory;
+        }
+
+        public long Version { get; }
+
+        public ReadOnlyMemory<DataPoint> Memory { get; }
+    }
+
     private sealed class SnapshotMemoryManager : MemoryManager<DataPoint>
     {
         private readonly DataPoint[] _items;

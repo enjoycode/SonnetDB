@@ -190,6 +190,25 @@ public sealed class SegmentReaderTests : IDisposable
     }
 
     [Fact]
+    public void MultiSeriesMultiField_FindBySeries_PreservesBlockDescriptorOrder()
+    {
+        string path = TempPath();
+        var mt = BuildMixedMemTable(seriesCount: 4, fieldsPerSeries: 4);
+        _writer.WriteFrom(mt, 1L, path);
+
+        using var reader = SegmentReader.Open(path);
+
+        var expected = reader.Blocks
+            .Where(static b => b.SeriesId == 3UL)
+            .Select(static b => b.Index)
+            .ToArray();
+        var actual = reader.FindBySeries(3UL);
+
+        Assert.Equal(["field0", "field1", "field2", "field3"], actual.Select(static b => b.FieldName).ToArray());
+        Assert.Equal(expected, actual.Select(static b => b.Index).ToArray());
+    }
+
+    [Fact]
     public void MultiSeriesMultiField_FindBySeriesAndField_OneResult()
     {
         string path = TempPath();
@@ -205,6 +224,36 @@ public sealed class SegmentReaderTests : IDisposable
     }
 
     [Fact]
+    public void MultiSeriesMultiField_FindBySeriesAndField_PreservesMatchingOrder()
+    {
+        string path = TempPath();
+        var series = new List<MemTableSeries>
+        {
+            BuildSeries(1UL, "value", 0L),
+            BuildSeries(2UL, "other", 100L),
+            BuildSeries(1UL, "value", 200L),
+            BuildSeries(1UL, "status", 300L),
+        };
+        _writer.Write(series, 1L, path);
+
+        using var reader = SegmentReader.Open(path);
+
+        var expected = reader.Blocks
+            .Where(static b => b.SeriesId == 1UL && b.FieldName == "value")
+            .Select(static b => b.Index)
+            .ToArray();
+        var actual = reader.FindBySeriesAndField(1UL, "value");
+
+        Assert.Equal(2, actual.Count);
+        Assert.Equal(expected, actual.Select(static b => b.Index).ToArray());
+        Assert.All(actual, static b =>
+        {
+            Assert.Equal(1UL, b.SeriesId);
+            Assert.Equal("value", b.FieldName);
+        });
+    }
+
+    [Fact]
     public void MultiSeriesMultiField_FindBySeriesAndField_UnknownFieldReturnsEmpty()
     {
         string path = TempPath();
@@ -215,6 +264,19 @@ public sealed class SegmentReaderTests : IDisposable
 
         var blocks = reader.FindBySeriesAndField(1UL, "nonexistent");
         Assert.Empty(blocks);
+    }
+
+    [Fact]
+    public void MultiSeriesMultiField_FindBySeries_UnknownSeriesReturnsEmpty()
+    {
+        string path = TempPath();
+        var mt = BuildMixedMemTable(seriesCount: 2, fieldsPerSeries: 2);
+        _writer.WriteFrom(mt, 1L, path);
+
+        using var reader = SegmentReader.Open(path);
+
+        Assert.Same(Array.Empty<BlockDescriptor>(), reader.FindBySeries(99UL));
+        Assert.Same(Array.Empty<BlockDescriptor>(), reader.FindBySeriesAndField(99UL, "field0"));
     }
 
     [Fact]
@@ -553,5 +615,13 @@ public sealed class SegmentReaderTests : IDisposable
             }
         }
         return mt;
+    }
+
+    private static MemTableSeries BuildSeries(ulong seriesId, string fieldName, long startTimestamp)
+    {
+        var series = new MemTableSeries(new SeriesFieldKey(seriesId, fieldName), FieldType.Float64);
+        for (int i = 0; i < 3; i++)
+            series.Append(startTimestamp + i, FieldValue.FromDouble(i));
+        return series;
     }
 }
