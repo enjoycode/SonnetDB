@@ -11,16 +11,19 @@ namespace SonnetDB.Storage.Format;
 /// [SegmentHeader 64B]
 /// [Block 0 ... Block N-1]
 /// [BlockIndexEntry 0 ... N-1  (每项 48B，共 IndexCount 项)]
+/// [v6 Embedded Extension Area (可为空)]
 /// [SegmentFooter  64B]
 /// </code>
-/// 文件长度满足：<c>IndexOffset + IndexCount * 48 + 64 == FileLength</c>。
+/// v2-v5 文件长度满足：<c>IndexOffset + IndexCount * 48 + 64 == FileLength</c>。
+/// v6 起允许索引区与 Footer 之间存在内嵌扩展区，因此满足：
+/// <c>IndexOffset + IndexCount * 48 &lt;= FileLength - 64</c>。
 /// </para>
 /// <para>
 /// 二进制布局（little-endian）：
 /// <code>
 /// Offset  Size  Field
 /// 0       8     Magic              ("SDBSEGv1")
-/// 8       4     FormatVersion      (当前 = 1)
+/// 8       4     FormatVersion      (当前 = SegmentFormatVersion)
 /// 12      4     IndexCount         (BlockIndexEntry 条目数)
 /// 16      8     IndexOffset        (索引数组在文件中的偏移)
 /// 24      8     FileLength         (段文件总字节数)
@@ -48,7 +51,7 @@ public struct SegmentFooter
     /// <summary>BlockIndexEntry 数组在段文件中的字节偏移。</summary>
     public long IndexOffset;
 
-    /// <summary>段文件总字节数（= <see cref="IndexOffset"/> + <see cref="IndexCount"/> * 48 + 64）。</summary>
+    /// <summary>段文件总字节数；v6 起可能包含索引区之后、Footer 之前的内嵌扩展区。</summary>
     public long FileLength;
 
     /// <summary>CRC32 校验值（预留，Milestone 3 中填写，当前填 0）。</summary>

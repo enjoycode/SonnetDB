@@ -3,7 +3,7 @@
 /// <summary>
 /// <see cref="SegmentWriter"/> 的构建选项。
 /// </summary>
-public sealed class SegmentWriterOptions
+public sealed record SegmentWriterOptions
 {
     /// <summary>底层 <see cref="System.IO.BufferedStream"/> 缓冲区大小，默认 64 KiB。</summary>
     public int BufferSize { get; init; } = 64 * 1024;

@@ -1,8 +1,10 @@
 using System.Buffers.Binary;
+using System.IO.Hashing;
 using System.Runtime.InteropServices;
 using SonnetDB.Buffers;
 using SonnetDB.Catalog;
 using SonnetDB.Engine;
+using SonnetDB.IO;
 using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Storage.Format;
@@ -122,7 +124,7 @@ public sealed class VectorSegmentTests : IDisposable
     }
 
     [Fact]
-    public void Segment_WriteWithHnswVectorIndex_CreatesSidecarAndReaderLoadsIt()
+    public void Segment_WriteWithHnswVectorIndex_EmbedsIndexAndReaderLoadsIt()
     {
         ulong seriesId = 4242UL;
         const string fieldName = "embedding";
@@ -142,18 +144,19 @@ public sealed class VectorSegmentTests : IDisposable
         writer.WriteFrom(mt, segmentId: 7L, path, vectorIndexes);
 
         string sidecarPath = TsdbPaths.VectorIndexPathForSegment(path);
-        Assert.True(File.Exists(sidecarPath));
+        Assert.False(File.Exists(sidecarPath));
 
         using var reader = SegmentReader.Open(path);
         var block = Assert.Single(reader.FindBySeries(seriesId));
         Assert.True(reader.TryGetVectorIndex(block, out var vectorIndex));
+        Assert.True(reader.VectorIndexOffsetsEmbedded);
         Assert.Equal(block.Index, vectorIndex.BlockIndex);
         Assert.Equal(8, vectorIndex.Count);
         Assert.Equal(3, vectorIndex.Dimension);
     }
 
     [Fact]
-    public void SegmentReader_Open_WithHnswSidecar_DoesNotLoadVectorIndexUntilTryGet()
+    public void SegmentReader_Open_WithEmbeddedHnswIndex_DoesNotLoadVectorIndexUntilTryGet()
     {
         ulong seriesId = 5252UL;
         const string fieldName = "embedding";
@@ -177,7 +180,7 @@ public sealed class VectorSegmentTests : IDisposable
             VectorIndexCacheMaxBytes = 1024 * 1024,
         });
 
-        Assert.True(File.Exists(TsdbPaths.VectorIndexPathForSegment(path)));
+        Assert.False(File.Exists(TsdbPaths.VectorIndexPathForSegment(path)));
         Assert.False(reader.VectorIndexOffsetsLoaded);
         Assert.Equal(0, reader.VectorIndexCacheEntryCountForSegment);
         Assert.Equal(0L, reader.VectorIndexCacheCurrentBytesForSegment);
@@ -186,6 +189,7 @@ public sealed class VectorSegmentTests : IDisposable
         Assert.True(reader.TryGetVectorIndex(block, out var vectorIndex));
 
         Assert.True(reader.VectorIndexOffsetsLoaded);
+        Assert.True(reader.VectorIndexOffsetsEmbedded);
         Assert.Equal(block.Index, vectorIndex.BlockIndex);
         Assert.Equal(1, reader.VectorIndexCacheEntryCountForSegment);
         Assert.True(reader.VectorIndexCacheCurrentBytesForSegment > 0);
@@ -237,30 +241,33 @@ public sealed class VectorSegmentTests : IDisposable
         Assert.True(reader.VectorIndexCacheCurrentBytesForSegment <= BudgetBytes);
     }
 
-    // ── Segment 文件头：版本号升级到 v3 + v2 只读兼容 ──────────────────────
+    // ── Segment 文件头：版本号升级到 v6 + 历史版本只读兼容 ──────────────────
 
     [Fact]
-    public void TsdbMagic_SegmentFormatVersion_IsThree()
-        => Assert.Equal(3, TsdbMagic.SegmentFormatVersion);
+    public void TsdbMagic_SegmentFormatVersion_IsSix()
+        => Assert.Equal(6, TsdbMagic.SegmentFormatVersion);
 
     [Fact]
-    public void TsdbMagic_SupportedSegmentFormatVersions_ContainsV2AndV3()
+    public void TsdbMagic_SupportedSegmentFormatVersions_ContainsV2ThroughV6()
     {
         int[] supported = TsdbMagic.SupportedSegmentFormatVersions.ToArray();
         Assert.Contains(2, supported);
         Assert.Contains(3, supported);
+        Assert.Contains(4, supported);
+        Assert.Contains(5, supported);
+        Assert.Contains(6, supported);
     }
 
     [Fact]
-    public void SegmentHeader_IsCompatibleForRead_AcceptsV2AndV3_RejectsOthers()
+    public void SegmentHeader_IsCompatibleForRead_AcceptsV2ThroughV6_RejectsOthers()
     {
         var h = SegmentHeader.CreateNew(1L);
 
-        h.FormatVersion = 3;
-        Assert.True(h.IsCompatibleForRead());
-
-        h.FormatVersion = 2;
-        Assert.True(h.IsCompatibleForRead());
+        for (int version = 2; version <= 6; version++)
+        {
+            h.FormatVersion = version;
+            Assert.True(h.IsCompatibleForRead());
+        }
 
         h.FormatVersion = 1;
         Assert.False(h.IsCompatibleForRead());
@@ -270,32 +277,90 @@ public sealed class VectorSegmentTests : IDisposable
     }
 
     [Fact]
-    public void SegmentReader_Open_AcceptsV2DowngradedSegment()
+    public void SegmentReader_Open_AcceptsV5SegmentWithoutEmbeddedExtensions()
     {
-        // 写一个普通 Float64 段，再把文件里的 v3 版本字段改回 v2，验证 SegmentReader 仍然可读。
+        // 写一个 VECTOR 段且不传入 HNSW 定义，使 v6 extension area 为空；
+        // 再把文件里的版本字段改为 v5，验证当前 Reader 仍能读取旧主格式。
         ulong seriesId = 7777UL;
         var mt = new MemTable();
         long lsn = 1L;
         for (int i = 0; i < 4; i++)
-            mt.Append(seriesId, 1_000L + i, "v", FieldValue.FromDouble(i * 0.1), lsn++);
+            mt.Append(seriesId, 1_000L + i, "embedding", FieldValue.FromVector(new[] { (float)i, 0f, 1f }), lsn++);
 
-        string path = Path.Combine(_tempDir, "downgraded.SDBSEG");
+        string path = Path.Combine(_tempDir, "v5-compatible.SDBSEG");
         new SegmentWriter(new SegmentWriterOptions { FsyncOnCommit = false }).WriteFrom(mt, segmentId: 1L, path);
-
-        // 把 SegmentHeader.FormatVersion 与 SegmentFooter.FormatVersion 由 3 改为 2。
-        // FormatVersion 在两处均位于 magic(8B) 之后偏移 8 处，4 字节 LE int。
-        byte[] bytes = File.ReadAllBytes(path);
-        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(8, 4), 2);
-        // Footer 起始偏移 = bytes.Length - SegmentFooterSize
-        int footerStart = bytes.Length - FormatSizes.SegmentFooterSize;
-        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(footerStart + 8, 4), 2);
-        File.WriteAllBytes(path, bytes);
+        RewriteSegmentVersion(path, 5);
 
         using var reader = SegmentReader.Open(path);
         Assert.Equal(1, reader.BlockCount);
         var blocks = reader.FindBySeries(seriesId);
         var decoded = reader.DecodeBlock(blocks[0]);
         Assert.Equal(4, decoded.Length);
+        Assert.Equal(FieldType.Vector, blocks[0].FieldType);
+    }
+
+    [Fact]
+    public void SegmentReader_Open_AcceptsEmptyV4Segment()
+    {
+        string path = Path.Combine(_tempDir, "v4-empty.SDBSEG");
+        new SegmentWriter(new SegmentWriterOptions { FsyncOnCommit = false })
+            .WriteFrom(new MemTable(), segmentId: 2L, path);
+        RewriteSegmentVersion(path, 4);
+
+        using var reader = SegmentReader.Open(path);
+
+        Assert.Equal(0, reader.BlockCount);
+        Assert.Empty(reader.Blocks);
+    }
+
+    [Fact]
+    public void SegmentReader_Open_AcceptsNonEmptyV4Segment()
+    {
+        string path = Path.Combine(_tempDir, "v4-float64.SDBSEG");
+        WriteLegacyV4Float64Segment(path);
+
+        using var reader = SegmentReader.Open(path);
+        var block = Assert.Single(reader.FindBySeriesAndField(8080UL, "v"));
+        var decoded = reader.DecodeBlock(block);
+
+        Assert.Equal(FormatSizes.LegacyBlockHeaderSizeV4, block.HeaderSize);
+        Assert.Single(decoded);
+        Assert.Equal(1234L, decoded[0].Timestamp);
+        Assert.Equal(42.5d, decoded[0].Value.AsDouble(), precision: 10);
+    }
+
+    [Fact]
+    public void SegmentReader_TryGetVectorIndex_WithLegacyV5Sidecar_LoadsFallback()
+    {
+        ulong seriesId = 6060UL;
+        const string fieldName = "embedding";
+        var mt = new MemTable();
+        var points = new DataPoint[8];
+        long lsn = 1L;
+        for (int i = 0; i < points.Length; i++)
+        {
+            var value = FieldValue.FromVector(new[] { (float)i, 0f, 0f });
+            mt.Append(seriesId, 4_000L + i, fieldName, value, lsn++);
+            points[i] = new DataPoint(4_000L + i, value);
+        }
+
+        string path = Path.Combine(_tempDir, "legacy-vector-sidecar.SDBSEG");
+        new SegmentWriter(new SegmentWriterOptions { FsyncOnCommit = false })
+            .WriteFrom(mt, segmentId: 3L, path);
+        RewriteSegmentVersion(path, 5);
+
+        var sidecarIndex = HnswVectorBlockIndex.Build(
+            blockIndex: 0,
+            points,
+            VectorIndexDefinition.CreateHnsw(4, 8).Hnsw);
+        SegmentVectorIndexFile.Write(TsdbPaths.VectorIndexPathForSegment(path), [sidecarIndex]);
+
+        using var reader = SegmentReader.Open(path);
+        var block = Assert.Single(reader.FindBySeries(seriesId));
+
+        Assert.True(reader.TryGetVectorIndex(block, out var loaded));
+        Assert.False(reader.VectorIndexOffsetsEmbedded);
+        Assert.Equal(8, loaded.Count);
     }
 
     // ── 辅助 ────────────────────────────────────────────────────────────────
@@ -319,5 +384,94 @@ public sealed class VectorSegmentTests : IDisposable
         for (int i = 0; i < vectors.Length; i++)
             arr[i] = new DataPoint(i * 1000L, FieldValue.FromVector(vectors[i]));
         return arr;
+    }
+
+    private static void RewriteSegmentVersion(string path, int version)
+    {
+        byte[] bytes = File.ReadAllBytes(path);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(8, 4), version);
+        if (version < 6)
+            bytes.AsSpan(36, FormatSizes.SegmentHeaderSize - 36).Clear();
+
+        int footerStart = bytes.Length - FormatSizes.SegmentFooterSize;
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(footerStart + 8, 4), version);
+        File.WriteAllBytes(path, bytes);
+    }
+
+    private static void WriteLegacyV4Float64Segment(string path)
+    {
+        const long SegmentId = 404L;
+        const ulong SeriesId = 8080UL;
+        const long Timestamp = 1234L;
+        const double Value = 42.5d;
+        byte[] fieldName = "v"u8.ToArray();
+
+        byte[] tsPayload = new byte[8];
+        BinaryPrimitives.WriteInt64LittleEndian(tsPayload, Timestamp);
+
+        byte[] valuePayload = new byte[8];
+        BinaryPrimitives.WriteInt64LittleEndian(valuePayload, BitConverter.DoubleToInt64Bits(Value));
+
+        var blockCrc = new Crc32();
+        blockCrc.Append(fieldName);
+        blockCrc.Append(tsPayload);
+        blockCrc.Append(valuePayload);
+        uint blockCrc32 = blockCrc.GetCurrentHashAsUInt32();
+
+        byte[] legacyBlockHeader = new byte[FormatSizes.LegacyBlockHeaderSizeV4];
+        BinaryPrimitives.WriteUInt64LittleEndian(legacyBlockHeader.AsSpan(0, 8), SeriesId);
+        BinaryPrimitives.WriteInt64LittleEndian(legacyBlockHeader.AsSpan(8, 8), Timestamp);
+        BinaryPrimitives.WriteInt64LittleEndian(legacyBlockHeader.AsSpan(16, 8), Timestamp);
+        BinaryPrimitives.WriteInt32LittleEndian(legacyBlockHeader.AsSpan(24, 4), 1);
+        BinaryPrimitives.WriteInt32LittleEndian(legacyBlockHeader.AsSpan(28, 4), tsPayload.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(legacyBlockHeader.AsSpan(32, 4), valuePayload.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(legacyBlockHeader.AsSpan(36, 4), fieldName.Length);
+        legacyBlockHeader[40] = (byte)BlockEncoding.None;
+        legacyBlockHeader[41] = (byte)FieldType.Float64;
+        BinaryPrimitives.WriteInt16LittleEndian(
+            legacyBlockHeader.AsSpan(42, 2),
+            BlockHeader.HasSumCount | BlockHeader.HasMinMax);
+        BinaryPrimitives.WriteInt64LittleEndian(legacyBlockHeader.AsSpan(44, 8), BitConverter.DoubleToInt64Bits(Value));
+        BinaryPrimitives.WriteInt64LittleEndian(legacyBlockHeader.AsSpan(52, 8), BitConverter.DoubleToInt64Bits(Value));
+        BinaryPrimitives.WriteInt64LittleEndian(legacyBlockHeader.AsSpan(60, 8), BitConverter.DoubleToInt64Bits(Value));
+        BinaryPrimitives.WriteUInt32LittleEndian(legacyBlockHeader.AsSpan(68, 4), blockCrc32);
+
+        int blockLength = legacyBlockHeader.Length + fieldName.Length + tsPayload.Length + valuePayload.Length;
+        long blockOffset = FormatSizes.SegmentHeaderSize;
+        long indexOffset = blockOffset + blockLength;
+        long fileLength = indexOffset + FormatSizes.BlockIndexEntrySize + FormatSizes.SegmentFooterSize;
+
+        var indexEntry = new BlockIndexEntry
+        {
+            SeriesId = SeriesId,
+            MinTimestamp = Timestamp,
+            MaxTimestamp = Timestamp,
+            FileOffset = blockOffset,
+            BlockLength = blockLength,
+            FieldNameHash = FieldNameHash.Compute(fieldName),
+        };
+        Span<byte> indexBytes = stackalloc byte[FormatSizes.BlockIndexEntrySize];
+        MemoryMarshal.Write(indexBytes, in indexEntry);
+        uint indexCrc32 = Crc32.HashToUInt32(indexBytes);
+
+        var header = SegmentHeader.CreateNew(SegmentId);
+        header.FormatVersion = 4;
+        header.BlockCount = 1;
+
+        var footer = SegmentFooter.CreateNew(1, indexOffset, fileLength);
+        footer.FormatVersion = 4;
+        footer.Crc32 = indexCrc32;
+
+        byte[] bytes = new byte[checked((int)fileLength)];
+        var writer = new SpanWriter(bytes);
+        writer.WriteStruct(in header);
+        writer.WriteBytes(legacyBlockHeader);
+        writer.WriteBytes(fieldName);
+        writer.WriteBytes(tsPayload);
+        writer.WriteBytes(valuePayload);
+        writer.WriteStruct(in indexEntry);
+        writer.WriteStruct(in footer);
+
+        File.WriteAllBytes(path, bytes);
     }
 }

@@ -77,6 +77,9 @@ internal static class BlockDecoder
         if (count == 0)
             return [];
 
+        if (from <= d.MinTimestamp && toInclusive >= d.MaxTimestamp)
+            return Decode(d, tsPayload, valPayload);
+
         if ((d.TimestampEncoding & BlockEncoding.DeltaTimestamp) == 0)
             return DecodeRawTimestampRange(d, tsPayload, valPayload, count, from, toInclusive);
 
@@ -116,18 +119,7 @@ internal static class BlockDecoder
     {
         if ((tsEncoding & BlockEncoding.DeltaTimestamp) != 0)
         {
-            long[] rented = ArrayPool<long>.Shared.Rent(count);
-            try
-            {
-                Span<long> tmp = rented.AsSpan(0, count);
-                TimestampCodec.ReadDeltaOfDelta(tsPayload, tmp);
-                for (int i = 0; i < count; i++)
-                    result[i] = new DataPoint(tmp[i], default);
-            }
-            finally
-            {
-                ArrayPool<long>.Shared.Return(rented);
-            }
+            TimestampCodec.ReadDeltaOfDelta(tsPayload, result.AsSpan(0, count));
             return;
         }
 
@@ -168,9 +160,7 @@ internal static class BlockDecoder
     {
         if ((valEncoding & BlockEncoding.DeltaValue) != 0)
         {
-            var values = ValuePayloadCodecV2.Decode(fieldType, valPayload, count);
-            for (int i = 0; i < count; i++)
-                result[i] = new DataPoint(result[i].Timestamp, values[i]);
+            ValuePayloadCodecV2.DecodeInto(fieldType, valPayload, count, result.AsSpan(0, count));
             return;
         }
 
@@ -228,10 +218,13 @@ internal static class BlockDecoder
     {
         if ((valEncoding & BlockEncoding.DeltaValue) != 0)
         {
-            // V2 编码不支持随机访问，先全量解码再切片
-            var all = ValuePayloadCodecV2.Decode(fieldType, valPayload, totalCount);
-            for (int i = 0; i < rangeCount; i++)
-                result[i] = new DataPoint(result[i].Timestamp, all[start + i]);
+            ValuePayloadCodecV2.DecodeRangeInto(
+                fieldType,
+                valPayload,
+                totalCount,
+                start,
+                rangeCount,
+                result.AsSpan(0, rangeCount));
             return;
         }
 

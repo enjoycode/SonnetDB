@@ -382,6 +382,40 @@ public sealed class ValuePayloadCodecV2Tests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(FieldType.Float64)]
+    [InlineData(FieldType.Int64)]
+    [InlineData(FieldType.Boolean)]
+    [InlineData(FieldType.String)]
+    public void SegmentWriter_BothEncodings_DecodeRangeMatchesFullSubset(FieldType fieldType)
+    {
+        var mt = BuildMemTable(seriesCount: 1, pointsPerSeries: 80, fieldType);
+        string path = Path.Combine(_tempDir, $"v2_range_{fieldType}.SDBSEG");
+
+        new SegmentWriter(new SegmentWriterOptions
+        {
+            FsyncOnCommit = false,
+            TimestampEncoding = BlockEncoding.DeltaTimestamp,
+            ValueEncoding = BlockEncoding.DeltaValue,
+        }).WriteFrom(mt, 10L, path);
+
+        using var reader = SegmentReader.Open(path);
+        var block = reader.Blocks[0];
+        var all = reader.DecodeBlock(block);
+
+        const int startIndex = 11;
+        const int endIndex = 37;
+        var range = reader.DecodeBlockRange(block, all[startIndex].Timestamp, all[endIndex].Timestamp);
+
+        Assert.Equal(endIndex - startIndex + 1, range.Length);
+        for (int i = 0; i < range.Length; i++)
+        {
+            var expected = all[startIndex + i];
+            Assert.Equal(expected.Timestamp, range[i].Timestamp);
+            Assert.Equal(expected.Value, range[i].Value);
+        }
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     private static ReadOnlyMemory<DataPoint> MakePoints(params FieldValue[] values)

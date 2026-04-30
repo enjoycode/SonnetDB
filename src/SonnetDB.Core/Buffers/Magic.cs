@@ -45,13 +45,20 @@ public static class TsdbMagic
     /// <c>GeoHashMin</c> / <c>GeoHashMax</c> 两个 32-bit geohash 前缀字段，BlockHeader
     /// 大小由 72B 增至 80B，用于 GEOPOINT Block 级空间剪枝；读取层兼容 v4。
     /// </para>
+    /// <para>
+    /// v6：<see cref="SonnetDB.Storage.Format.SegmentHeader"/> 的保留区写入
+    /// SegmentFooter mini-footer 摘要副本，主 <see cref="SonnetDB.Storage.Format.SegmentFooter"/>
+    /// 仍保持 64B 并位于文件末尾；旧 `.SDBVIDX` / `.SDBAIDX` sidecar 对应的 HNSW 与
+    /// 聚合 sketch section 改为写入主 `.SDBSEG` 的索引区与 Footer 之间。读取层兼容 v4/v5，
+    /// v6 在尾部 footer 损坏时可提供更精确诊断。
+    /// </para>
     /// </summary>
-    public const int SegmentFormatVersion = 5;
+    public const int SegmentFormatVersion = 6;
 
     /// <summary>
     /// SegmentReader 允许读取的段格式版本集合（含历史只读兼容版本）。
     /// </summary>
-    public static ReadOnlySpan<int> SupportedSegmentFormatVersions => [2, 3, 4, 5];
+    public static ReadOnlySpan<int> SupportedSegmentFormatVersions => [2, 3, 4, 5, 6];
 
     /// <summary>构造文件 magic <see cref="InlineBytes8"/>。</summary>
     /// <returns>内容为 <c>"SONNETDB"</c>（8 字节 ASCII）的 <see cref="InlineBytes8"/> 实例。</returns>

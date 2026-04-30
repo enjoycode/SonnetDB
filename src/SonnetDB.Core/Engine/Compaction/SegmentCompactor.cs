@@ -41,7 +41,7 @@ public sealed class SegmentCompactor
     /// <param name="newSegmentId">新段的 SegmentId。</param>
     /// <param name="newSegmentPath">新段的输出文件路径。</param>
     /// <param name="tombstones">可选的墓碑集合；若非 null，合并时过滤被墓碑覆盖的数据点（物理删除）。</param>
-    /// <param name="seriesCatalog">可选的 Series 目录；提供时会按 schema 为声明了向量索引的字段构建 sidecar。</param>
+    /// <param name="seriesCatalog">可选的 Series 目录；提供时会按 schema 为声明了向量索引的字段构建段内索引 section。</param>
     /// <param name="measurementCatalog">可选的 measurement schema 目录；需与 <paramref name="seriesCatalog"/> 一起提供。</param>
     /// <returns>Compaction 执行结果统计。</returns>
     /// <exception cref="ArgumentNullException">任何必选参数为 null 时抛出。</exception>

@@ -1,4 +1,5 @@
 ﻿using System.Runtime.CompilerServices;
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using SonnetDB.Buffers;
 
@@ -11,14 +12,14 @@ namespace SonnetDB.Storage.Format;
 /// <code>
 /// Offset  Size  Field
 /// 0       8     Magic              ("SDBSEGv1")
-/// 8       4     FormatVersion      (当前 = 1)
+/// 8       4     FormatVersion      (当前 = SegmentFormatVersion)
 /// 12      4     HeaderSize         (= 64)
 /// 16      8     SegmentId          (段唯一标识，单调递增)
 /// 24      8     CreatedAtUtcTicks
 /// 32      4     BlockCount         (预留，写入时填 0，Flush 后更新)
-/// 36      4     Reserved0
-/// 40      16    Reserved16
-/// 56      8     Reserved8
+/// 36      4     Reserved0         (v6: mini-footer magic "SMF1")
+/// 40      16    Reserved16        (v6: IndexCount, IndexCrc32, IndexOffset)
+/// 56      8     Reserved8         (v6: FileLength)
 /// ─────────────────────────────────
 /// Total  64
 /// </code>
@@ -27,6 +28,8 @@ namespace SonnetDB.Storage.Format;
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct SegmentHeader
 {
+    internal const uint FooterMiniCopyMagic = 0x31464D53u; // "SMF1" little-endian
+
     /// <summary>段文件 magic（"SDBSEGv1"，8 字节）。</summary>
     public InlineBytes8 Magic;
 
@@ -45,13 +48,13 @@ public struct SegmentHeader
     /// <summary>本段包含的 Block 数量（预留，Flush 后回填）。</summary>
     public int BlockCount;
 
-    /// <summary>保留字段（0）。</summary>
+    /// <summary>保留字段；v6 起写入 mini-footer magic。</summary>
     public int Reserved0;
 
-    /// <summary>保留字节（全 0）。</summary>
+    /// <summary>保留字节；v6 起写入 IndexCount、IndexCrc32 与 IndexOffset 摘要。</summary>
     public InlineBytes16 Reserved16;
 
-    /// <summary>保留字节（全 0）。</summary>
+    /// <summary>保留字节；v6 起写入 FileLength 摘要。</summary>
     public InlineBytes8 Reserved8;
 
     /// <summary>
@@ -94,5 +97,32 @@ public struct SegmentHeader
                 return true;
         }
         return false;
+    }
+
+    internal void WriteFooterMiniCopy(int indexCount, long indexOffset, long fileLength, uint indexCrc32)
+    {
+        Reserved0 = unchecked((int)FooterMiniCopyMagic);
+
+        Span<byte> reserved16 = Reserved16.AsSpan();
+        BinaryPrimitives.WriteInt32LittleEndian(reserved16[..4], indexCount);
+        BinaryPrimitives.WriteUInt32LittleEndian(reserved16.Slice(4, 4), indexCrc32);
+        BinaryPrimitives.WriteInt64LittleEndian(reserved16.Slice(8, 8), indexOffset);
+        BinaryPrimitives.WriteInt64LittleEndian(Reserved8.AsSpan(), fileLength);
+    }
+
+    internal readonly bool TryReadFooterMiniCopy(out SegmentFooterMiniCopy copy)
+    {
+        copy = default;
+        if (FormatVersion < 6 || Reserved0 != unchecked((int)FooterMiniCopyMagic))
+            return false;
+
+        ReadOnlySpan<byte> reserved16 = Reserved16.AsReadOnlySpan();
+        int indexCount = BinaryPrimitives.ReadInt32LittleEndian(reserved16[..4]);
+        uint indexCrc32 = BinaryPrimitives.ReadUInt32LittleEndian(reserved16.Slice(4, 4));
+        long indexOffset = BinaryPrimitives.ReadInt64LittleEndian(reserved16.Slice(8, 8));
+        long fileLength = BinaryPrimitives.ReadInt64LittleEndian(Reserved8.AsReadOnlySpan());
+
+        copy = new SegmentFooterMiniCopy(indexCount, indexOffset, fileLength, indexCrc32);
+        return copy.IsShapeValid();
     }
 }

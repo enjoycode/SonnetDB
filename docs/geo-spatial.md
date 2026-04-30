@@ -142,7 +142,7 @@ WHERE trip = 'trip-a';
 
 ## PR #76 Geohash 段内剪枝
 
-Segment 格式 v5 在每个 `GEOPOINT` block 的 `BlockHeader` 中写入：
+Segment 格式 v5 在每个 `GEOPOINT` block 的 `BlockHeader` 中写入以下字段；当前 v6 继续保留该布局并兼容读取 v5 段：
 
 - `GeoHashMin`：block 内最小 32-bit geohash 前缀。
 - `GeoHashMax`：block 内最大 32-bit geohash 前缀。

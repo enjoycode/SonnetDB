@@ -86,6 +86,79 @@ internal static class ValuePayloadCodecV2
         };
     }
 
+    /// <summary>
+    /// 解码 V2 值载荷并直接填充已包含时间戳的 <see cref="DataPoint"/> 目标视图。
+    /// </summary>
+    public static void DecodeInto(
+        FieldType fieldType,
+        ReadOnlySpan<byte> payload,
+        int count,
+        Span<DataPoint> destination)
+    {
+        if (count == 0)
+            return;
+
+        if (destination.Length < count)
+            throw new ArgumentException("目标缓冲区长度小于点数。", nameof(destination));
+
+        switch (fieldType)
+        {
+            case FieldType.Float64:
+                DecodeFloat64Into(payload, count, destination);
+                break;
+            case FieldType.Int64:
+                DecodeInt64RawInto(payload, count, destination);
+                break;
+            case FieldType.Boolean:
+                DecodeBoolInto(payload, count, destination);
+                break;
+            case FieldType.String:
+                DecodeStringInto(payload, count, destination);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(fieldType), fieldType, null);
+        }
+    }
+
+    /// <summary>
+    /// 解码 V2 值载荷的指定逻辑区间，并直接填充已包含时间戳的目标视图。
+    /// </summary>
+    public static void DecodeRangeInto(
+        FieldType fieldType,
+        ReadOnlySpan<byte> payload,
+        int totalCount,
+        int start,
+        int rangeCount,
+        Span<DataPoint> destination)
+    {
+        if ((uint)start > (uint)totalCount || (uint)rangeCount > (uint)(totalCount - start))
+            throw new ArgumentOutOfRangeException(nameof(start), "解码范围超出点数。");
+
+        if (rangeCount == 0)
+            return;
+
+        if (destination.Length < rangeCount)
+            throw new ArgumentException("目标缓冲区长度小于范围点数。", nameof(destination));
+
+        switch (fieldType)
+        {
+            case FieldType.Float64:
+                DecodeFloat64RangeInto(payload, totalCount, start, rangeCount, destination);
+                break;
+            case FieldType.Int64:
+                DecodeInt64RawRangeInto(payload, totalCount, start, rangeCount, destination);
+                break;
+            case FieldType.Boolean:
+                DecodeBoolRangeInto(payload, totalCount, start, rangeCount, destination);
+                break;
+            case FieldType.String:
+                DecodeStringRangeInto(payload, totalCount, start, rangeCount, destination);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(fieldType), fieldType, null);
+        }
+    }
+
     // ── Float64 (Gorilla XOR) ───────────────────────────────────────────────
 
     /// <remarks>
@@ -182,6 +255,89 @@ internal static class ValuePayloadCodecV2
         return result;
     }
 
+    private static void DecodeFloat64Into(ReadOnlySpan<byte> payload, int count, Span<DataPoint> destination)
+    {
+        var reader = new BitReader(payload);
+        ulong prev = reader.ReadBits(64);
+
+        destination[0] = new DataPoint(
+            destination[0].Timestamp,
+            FieldValue.FromDouble(BitConverter.UInt64BitsToDouble(prev)));
+
+        for (int i = 1; i < count; i++)
+        {
+            int control = reader.ReadBit();
+            ulong cur;
+            if (control == 0)
+            {
+                cur = prev;
+            }
+            else
+            {
+                int leadZ = (int)reader.ReadBits(6);
+                int meaningful = (int)reader.ReadBits(6) + 1;
+                int trailZ = 64 - leadZ - meaningful;
+                if (trailZ < 0)
+                    throw new InvalidDataException("Gorilla XOR 解码失败：leading + meaningful 越界。");
+                ulong xor = reader.ReadBits(meaningful) << trailZ;
+                cur = prev ^ xor;
+            }
+
+            destination[i] = new DataPoint(
+                destination[i].Timestamp,
+                FieldValue.FromDouble(BitConverter.UInt64BitsToDouble(cur)));
+            prev = cur;
+        }
+    }
+
+    private static void DecodeFloat64RangeInto(
+        ReadOnlySpan<byte> payload,
+        int totalCount,
+        int start,
+        int rangeCount,
+        Span<DataPoint> destination)
+    {
+        var reader = new BitReader(payload);
+        ulong prev = reader.ReadBits(64);
+        int end = start + rangeCount;
+
+        if (start == 0)
+        {
+            destination[0] = new DataPoint(
+                destination[0].Timestamp,
+                FieldValue.FromDouble(BitConverter.UInt64BitsToDouble(prev)));
+        }
+
+        for (int i = 1; i < totalCount; i++)
+        {
+            int control = reader.ReadBit();
+            ulong cur;
+            if (control == 0)
+            {
+                cur = prev;
+            }
+            else
+            {
+                int leadZ = (int)reader.ReadBits(6);
+                int meaningful = (int)reader.ReadBits(6) + 1;
+                int trailZ = 64 - leadZ - meaningful;
+                if (trailZ < 0)
+                    throw new InvalidDataException("Gorilla XOR 解码失败：leading + meaningful 越界。");
+                ulong xor = reader.ReadBits(meaningful) << trailZ;
+                cur = prev ^ xor;
+            }
+
+            if (i >= start && i < end)
+            {
+                int targetIndex = i - start;
+                destination[targetIndex] = new DataPoint(
+                    destination[targetIndex].Timestamp,
+                    FieldValue.FromDouble(BitConverter.UInt64BitsToDouble(cur)));
+            }
+            prev = cur;
+        }
+    }
+
     // ── Int64 raw (passthrough) ─────────────────────────────────────────────
 
     private static void WriteInt64Raw(ReadOnlySpan<DataPoint> points, Span<byte> destination)
@@ -196,6 +352,32 @@ internal static class ValuePayloadCodecV2
         for (int i = 0; i < count; i++)
             result[i] = FieldValue.FromLong(BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8)));
         return result;
+    }
+
+    private static void DecodeInt64RawInto(ReadOnlySpan<byte> payload, int count, Span<DataPoint> destination)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            long value = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(i * 8, 8));
+            destination[i] = new DataPoint(destination[i].Timestamp, FieldValue.FromLong(value));
+        }
+    }
+
+    private static void DecodeInt64RawRangeInto(
+        ReadOnlySpan<byte> payload,
+        int totalCount,
+        int start,
+        int rangeCount,
+        Span<DataPoint> destination)
+    {
+        if ((long)totalCount * 8L > payload.Length)
+            throw new InvalidDataException("Int64 V2 载荷长度不足。");
+
+        for (int i = 0; i < rangeCount; i++)
+        {
+            long value = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice((start + i) * 8, 8));
+            destination[i] = new DataPoint(destination[i].Timestamp, FieldValue.FromLong(value));
+        }
     }
 
     // ── Boolean RLE ─────────────────────────────────────────────────────────
@@ -274,6 +456,65 @@ internal static class ValuePayloadCodecV2
         return result;
     }
 
+    private static void DecodeBoolInto(ReadOnlySpan<byte> payload, int count, Span<DataPoint> destination)
+    {
+        if (payload.Length < 1)
+            throw new InvalidDataException("Bool RLE 载荷长度不足。");
+
+        bool current = payload[0] != 0;
+        int pos = 1;
+        int written = 0;
+        while (written < count)
+        {
+            int run = checked((int)ReadVarint(payload, ref pos));
+            if (run <= 0 || written + run > count)
+                throw new InvalidDataException($"Bool RLE 段长越界：run={run}, written={written}, count={count}。");
+            for (int k = 0; k < run; k++)
+            {
+                int index = written + k;
+                destination[index] = new DataPoint(destination[index].Timestamp, FieldValue.FromBool(current));
+            }
+            written += run;
+            current = !current;
+        }
+    }
+
+    private static void DecodeBoolRangeInto(
+        ReadOnlySpan<byte> payload,
+        int totalCount,
+        int start,
+        int rangeCount,
+        Span<DataPoint> destination)
+    {
+        if (payload.Length < 1)
+            throw new InvalidDataException("Bool RLE 载荷长度不足。");
+
+        bool current = payload[0] != 0;
+        int pos = 1;
+        int written = 0;
+        int rangeEnd = start + rangeCount;
+        while (written < totalCount)
+        {
+            int run = checked((int)ReadVarint(payload, ref pos));
+            if (run <= 0 || written + run > totalCount)
+                throw new InvalidDataException($"Bool RLE 段长越界：run={run}, written={written}, count={totalCount}。");
+
+            int runEnd = written + run;
+            int copyStart = Math.Max(written, start);
+            int copyEnd = Math.Min(runEnd, rangeEnd);
+            for (int sourceIndex = copyStart; sourceIndex < copyEnd; sourceIndex++)
+            {
+                int targetIndex = sourceIndex - start;
+                destination[targetIndex] = new DataPoint(
+                    destination[targetIndex].Timestamp,
+                    FieldValue.FromBool(current));
+            }
+
+            written = runEnd;
+            current = !current;
+        }
+    }
+
     // ── String dictionary ───────────────────────────────────────────────────
 
     /// <remarks>
@@ -338,6 +579,71 @@ internal static class ValuePayloadCodecV2
             result[i] = FieldValue.FromString(dict[idx]);
         }
         return result;
+    }
+
+    private static void DecodeStringInto(ReadOnlySpan<byte> payload, int count, Span<DataPoint> destination)
+    {
+        int pos = 0;
+        int dictSize = checked((int)ReadVarint(payload, ref pos));
+        if (dictSize < 0)
+            throw new InvalidDataException("字符串字典大小为负。");
+
+        var dict = new string[dictSize];
+        for (int e = 0; e < dictSize; e++)
+        {
+            int len = checked((int)ReadVarint(payload, ref pos));
+            if (len < 0 || pos + len > payload.Length)
+                throw new InvalidDataException($"字符串字典条目越界：len={len}, pos={pos}, payload={payload.Length}。");
+            dict[e] = Encoding.UTF8.GetString(payload.Slice(pos, len));
+            pos += len;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            int idx = checked((int)ReadVarint(payload, ref pos));
+            if ((uint)idx >= (uint)dictSize)
+                throw new InvalidDataException($"字符串字典索引越界：idx={idx}, dictSize={dictSize}。");
+            destination[i] = new DataPoint(destination[i].Timestamp, FieldValue.FromString(dict[idx]));
+        }
+    }
+
+    private static void DecodeStringRangeInto(
+        ReadOnlySpan<byte> payload,
+        int totalCount,
+        int start,
+        int rangeCount,
+        Span<DataPoint> destination)
+    {
+        int pos = 0;
+        int dictSize = checked((int)ReadVarint(payload, ref pos));
+        if (dictSize < 0)
+            throw new InvalidDataException("字符串字典大小为负。");
+
+        var dict = new string[dictSize];
+        for (int e = 0; e < dictSize; e++)
+        {
+            int len = checked((int)ReadVarint(payload, ref pos));
+            if (len < 0 || pos + len > payload.Length)
+                throw new InvalidDataException($"字符串字典条目越界：len={len}, pos={pos}, payload={payload.Length}。");
+            dict[e] = Encoding.UTF8.GetString(payload.Slice(pos, len));
+            pos += len;
+        }
+
+        int end = start + rangeCount;
+        for (int i = 0; i < totalCount; i++)
+        {
+            int idx = checked((int)ReadVarint(payload, ref pos));
+            if ((uint)idx >= (uint)dictSize)
+                throw new InvalidDataException($"字符串字典索引越界：idx={idx}, dictSize={dictSize}。");
+
+            if (i >= start && i < end)
+            {
+                int targetIndex = i - start;
+                destination[targetIndex] = new DataPoint(
+                    destination[targetIndex].Timestamp,
+                    FieldValue.FromString(dict[idx]));
+            }
+        }
     }
 
     private readonly record struct StringDict(

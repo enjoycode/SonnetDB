@@ -394,16 +394,33 @@ public sealed class SegmentWriterTests : IDisposable
         var footer = MemoryMarshal.Read<SegmentFooter>(bytes.AsSpan(bytes.Length - FormatSizes.SegmentFooterSize));
         Assert.True(footer.IsValid(), "SegmentFooter must have valid magic and version.");
 
-        // 3. FooterOffset + 64 == bytes.Length
-        Assert.Equal(
-            (long)bytes.Length,
-            footer.IndexOffset + (long)footer.IndexCount * FormatSizes.BlockIndexEntrySize + FormatSizes.SegmentFooterSize);
+        // 3. v6 allows an embedded extension area between BlockIndexEntry[] and the footer.
+        long indexEnd = footer.IndexOffset + (long)footer.IndexCount * FormatSizes.BlockIndexEntrySize;
+        long footerStart = bytes.Length - FormatSizes.SegmentFooterSize;
+        if (footer.FormatVersion >= 6)
+        {
+            Assert.True(indexEnd <= footerStart,
+                $"Index area ends at {indexEnd}, beyond footer start {footerStart}.");
+        }
+        else
+        {
+            Assert.Equal(indexEnd, footerStart);
+        }
 
         // 4. FileLength in footer == actual file length
         Assert.Equal((long)bytes.Length, footer.FileLength);
 
         // 5. SegmentHeader.BlockCount == footer.IndexCount
         Assert.Equal(segHeader.BlockCount, footer.IndexCount);
+
+        if (segHeader.FormatVersion >= 6)
+        {
+            Assert.True(segHeader.TryReadFooterMiniCopy(out var mini), "SegmentHeader mini-footer copy must exist for v6 segments.");
+            Assert.Equal(footer.IndexCount, mini.IndexCount);
+            Assert.Equal(footer.IndexOffset, mini.IndexOffset);
+            Assert.Equal(footer.FileLength, mini.FileLength);
+            Assert.Equal(footer.Crc32, mini.IndexCrc32);
+        }
 
         // 6. Each BlockIndexEntry.FileOffset points to valid BlockHeader (SeriesId matches)
         for (int i = 0; i < footer.IndexCount; i++)

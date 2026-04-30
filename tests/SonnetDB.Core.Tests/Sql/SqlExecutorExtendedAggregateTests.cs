@@ -132,7 +132,7 @@ public sealed class SqlExecutorExtendedAggregateTests : IDisposable
     }
 
     [Fact]
-    public void PercentileAndDistinctCount_AfterFlush_UseAggregateSketchSidecar()
+    public void PercentileAndDistinctCount_AfterFlush_UseEmbeddedAggregateSketch()
     {
         using var db = OpenWithSchema(ManualFlushOptions());
         var values = Enumerable.Range(0, 200)
@@ -142,7 +142,7 @@ public sealed class SqlExecutorExtendedAggregateTests : IDisposable
 
         var flush = db.FlushNow();
         Assert.NotNull(flush);
-        Assert.True(File.Exists(TsdbPaths.AggregateIndexPath(_root, flush.SegmentId)));
+        Assert.False(File.Exists(TsdbPaths.AggregateIndexPath(_root, flush.SegmentId)));
 
         var reader = Assert.Single(db.Segments.Readers);
         Assert.False(reader.AggregateSketchOffsetsLoaded);
@@ -154,10 +154,11 @@ public sealed class SqlExecutorExtendedAggregateTests : IDisposable
         Assert.InRange((double)r.Rows[0][0]!, 45d, 49d);
         Assert.InRange((long)r.Rows[0][2]!, 48L, 52L);
         Assert.True(reader.AggregateSketchOffsetsLoaded);
+        Assert.True(reader.AggregateSketchOffsetsEmbedded);
     }
 
     [Fact]
-    public void PercentileAndDistinctCount_MissingSidecar_FallBackToDecodedBlocks()
+    public void PercentileAndDistinctCount_WithoutExternalSidecar_StillUseEmbeddedSketch()
     {
         using var db = OpenWithSchema(ManualFlushOptions());
         var values = Enumerable.Range(1, 100).Select(i => (double)i).ToArray();
@@ -172,7 +173,9 @@ public sealed class SqlExecutorExtendedAggregateTests : IDisposable
         Assert.Single(r.Rows);
         Assert.InRange((double)r.Rows[0][0]!, 90d, 99d);
         Assert.InRange((long)r.Rows[0][1]!, 98L, 102L);
-        Assert.True(Assert.Single(db.Segments.Readers).AggregateSketchOffsetsLoaded);
+        var reader = Assert.Single(db.Segments.Readers);
+        Assert.True(reader.AggregateSketchOffsetsLoaded);
+        Assert.True(reader.AggregateSketchOffsetsEmbedded);
     }
 
     [Fact]

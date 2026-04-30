@@ -120,6 +120,43 @@ internal static class TimestampCodec
         }
     }
 
+    /// <summary>
+    /// 解码 V2 格式时间戳载荷，直接写入已分配的 <see cref="SonnetDB.Model.DataPoint"/> 目标视图。
+    /// 值列保持默认值，供 <see cref="BlockDecoder"/> 随后原地填充。
+    /// </summary>
+    /// <param name="payload">V2 编码字节视图。</param>
+    /// <param name="destination">目标数据点视图，长度等于点数。</param>
+    /// <exception cref="InvalidDataException">载荷格式损坏（长度不足或 varint 越界）时抛出。</exception>
+    public static void ReadDeltaOfDelta(ReadOnlySpan<byte> payload, Span<SonnetDB.Model.DataPoint> destination)
+    {
+        int count = destination.Length;
+        if (count == 0)
+            return;
+
+        if (payload.Length < 8)
+            throw new InvalidDataException("时间戳 V2 载荷长度不足以包含锚点。");
+
+        long ts0 = BinaryPrimitives.ReadInt64LittleEndian(payload);
+        destination[0] = new SonnetDB.Model.DataPoint(ts0, default);
+        int pos = 8;
+
+        if (count == 1)
+            return;
+
+        long prevDelta = ZigZagDecode(ReadVarint(payload, ref pos));
+        long ts = ts0 + prevDelta;
+        destination[1] = new SonnetDB.Model.DataPoint(ts, default);
+
+        for (int i = 2; i < count; i++)
+        {
+            long dod = ZigZagDecode(ReadVarint(payload, ref pos));
+            long delta = prevDelta + dod;
+            ts += delta;
+            destination[i] = new SonnetDB.Model.DataPoint(ts, default);
+            prevDelta = delta;
+        }
+    }
+
     // ── ZigZag + varint ──────────────────────────────────────────────────────
 
     private static ulong ZigZagEncode(long value)

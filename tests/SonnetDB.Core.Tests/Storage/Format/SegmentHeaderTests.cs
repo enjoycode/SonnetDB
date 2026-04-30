@@ -120,4 +120,21 @@ public sealed class SegmentHeaderTests
 
         Assert.True(original.Reserved16.AsReadOnlySpan().SequenceEqual(read.Reserved16.AsReadOnlySpan()));
     }
+
+    [Fact]
+    public void FooterMiniCopy_WriteAndRead_RoundTrip()
+    {
+        SegmentHeader header = SegmentHeader.CreateNew(1L);
+        header.WriteFooterMiniCopy(
+            indexCount: 7,
+            indexOffset: 4096L,
+            fileLength: 8192L,
+            indexCrc32: 0xAABBCCDDU);
+
+        Assert.True(header.TryReadFooterMiniCopy(out var mini));
+        Assert.Equal(7, mini.IndexCount);
+        Assert.Equal(4096L, mini.IndexOffset);
+        Assert.Equal(8192L, mini.FileLength);
+        Assert.Equal(0xAABBCCDDU, mini.IndexCrc32);
+    }
 }

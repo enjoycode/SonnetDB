@@ -215,7 +215,7 @@ public sealed class SegmentCompactorTests : IDisposable
     }
 
     [Fact]
-    public void Execute_VectorFieldWithHnswIndex_BuildsSidecarForCompactedSegment()
+    public void Execute_VectorFieldWithHnswIndex_EmbedsIndexForCompactedSegment()
     {
         const string measurement = "docs";
         const string fieldName = "embedding";
@@ -263,7 +263,7 @@ public sealed class SegmentCompactorTests : IDisposable
             seriesCatalog: seriesCatalog,
             measurementCatalog: measurements);
 
-        Assert.True(File.Exists(TsdbPaths.VectorIndexPathForSegment(outPath)));
+        Assert.False(File.Exists(TsdbPaths.VectorIndexPathForSegment(outPath)));
 
         using var merged = SegmentReader.Open(outPath, _readerOpts);
         var block = Assert.Single(merged.Blocks);
@@ -273,6 +273,7 @@ public sealed class SegmentCompactorTests : IDisposable
         Assert.True(merged.TryGetVectorIndex(block, out var vectorIndex));
         Assert.Equal(block.Count, vectorIndex.Count);
         Assert.True(merged.VectorIndexOffsetsLoaded);
+        Assert.True(merged.VectorIndexOffsetsEmbedded);
         Assert.Equal(1, merged.VectorIndexCacheEntryCountForSegment);
 
         var data = merged.ReadBlock(block);

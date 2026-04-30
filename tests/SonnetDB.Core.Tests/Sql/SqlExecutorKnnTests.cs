@@ -176,7 +176,7 @@ public sealed class SqlExecutorKnnTests : IDisposable
 
             var flush = db.FlushNow();
             Assert.NotNull(flush);
-            Assert.True(File.Exists(TsdbPaths.VectorIndexPath(_root, flush!.SegmentId)));
+            Assert.False(File.Exists(TsdbPaths.VectorIndexPath(_root, flush!.SegmentId)));
         }
 
         using var reopened = Tsdb.Open(new TsdbOptions { RootDirectory = _root });

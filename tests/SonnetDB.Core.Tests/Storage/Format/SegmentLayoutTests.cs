@@ -12,12 +12,13 @@ namespace SonnetDB.Core.Tests.Storage.Format;
 /// 布局：
 /// <code>
 /// [SegmentHeader 64B]         offset 0
-/// [BlockHeader   64B]         offset 64
-/// [FieldNameUtf8  N B]        offset 128
-/// [TimestampPayload P B]      offset 128+N
-/// [ValuePayload   Q B]        offset 128+N+P
+/// [BlockHeader   80B]         offset 64
+/// [FieldNameUtf8  N B]        offset 144
+/// [TimestampPayload P B]      offset 144+N
+/// [ValuePayload   Q B]        offset 144+N+P
 /// [BlockIndexEntry 48B]       offset IndexOffset
-/// [SegmentFooter   64B]       offset IndexOffset+48
+/// [v6 Extension Area 0..N B]   offset IndexOffset+48
+/// [SegmentFooter   64B]       offset FileLength-64
 /// </code>
 /// </para>
 /// </summary>
@@ -44,7 +45,7 @@ public sealed class SegmentLayoutTests
 
         // ── 计算各段偏移 ─────────────────────────────────────────────────────
         int segHeaderSize = FormatSizes.SegmentHeaderSize;      // 64
-        int blockHeaderSize = FormatSizes.BlockHeaderSize;      // 64
+        int blockHeaderSize = FormatSizes.BlockHeaderSize;      // 80
         int blockDataSize = fieldNameLen + tsPayload.Length + valPayload.Length;
         int blockTotalSize = blockHeaderSize + blockDataSize;
         long blockOffset = segHeaderSize;                       // = 64
@@ -62,6 +63,7 @@ public sealed class SegmentLayoutTests
         // 1. SegmentHeader
         SegmentHeader segHeader = SegmentHeader.CreateNew(segmentId);
         segHeader.BlockCount = 1;
+        segHeader.WriteFooterMiniCopy(indexCount, indexOffset, fileLength, indexCrc32: 0);
         writer.WriteStruct(in segHeader);
         Assert.Equal(segHeaderSize, writer.Position);
 
@@ -139,24 +141,25 @@ public sealed class SegmentLayoutTests
     }
 
     /// <summary>
-    /// 验证 IndexOffset + IndexCount * 48 + 64 == FileLength（文件长度约束）。
+    /// 验证 v6 中 Index 区末尾可以等于或早于 Footer 起点。
     /// </summary>
     [Fact]
-    public void SegmentFooter_IndexOffsetConstraint_HoldsForMinimalSegment()
+    public void SegmentFooter_IndexEnd_DoesNotExceedFooterStart()
     {
-        // 构造最简段（SegmentHeader + 0 个 Block + 1 个索引条目 + Footer）
+        // 构造最简段（SegmentHeader + 0 个 Block + 1 个索引条目 + 32B 内嵌扩展区 + Footer）
         long indexOffset = FormatSizes.SegmentHeaderSize; // 64，没有 Block
         int indexCount = 1;
+        const int ExtensionBytes = 32;
         long fileLength = indexOffset
             + (long)indexCount * FormatSizes.BlockIndexEntrySize
+            + ExtensionBytes
             + FormatSizes.SegmentFooterSize;
 
         SegmentFooter footer = SegmentFooter.CreateNew(indexCount, indexOffset, fileLength);
 
-        // 核心约束：IndexOffset + IndexCount * 48 + 64 == FileLength
-        Assert.Equal(
-            footer.FileLength,
-            footer.IndexOffset + (long)footer.IndexCount * FormatSizes.BlockIndexEntrySize + FormatSizes.SegmentFooterSize);
+        long indexEnd = footer.IndexOffset + (long)footer.IndexCount * FormatSizes.BlockIndexEntrySize;
+        long footerStart = footer.FileLength - FormatSizes.SegmentFooterSize;
+        Assert.True(indexEnd <= footerStart);
     }
 
     /// <summary>

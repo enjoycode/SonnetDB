@@ -500,7 +500,7 @@ public sealed class QueryEngine
     }
 
     /// <summary>
-    /// 为 SQL 扩展聚合尝试走 block sketch sidecar 快路径；不支持或遇到 tombstone 时返回 false，由调用方回退逐点扫描。
+    /// 为 SQL 扩展聚合尝试走 block sketch 快路径；不支持或遇到 tombstone 时返回 false，由调用方回退逐点扫描。
     /// </summary>
     internal bool TryAddExtendedAggregateSketches(
         ulong seriesId,

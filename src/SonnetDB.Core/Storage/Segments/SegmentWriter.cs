@@ -22,14 +22,14 @@ namespace SonnetDB.Storage.Segments;
 /// ┌─────────────────────────────────────────────────────────────────┐
 /// │  SegmentHeader  (固定 64 字节，offset = 0)                       │
 /// │    Magic = "SDBSEGv1"                                           │
-/// │    FormatVersion = 2  (PR #50: BlockHeader.AggregateMin/Max → double) │
+/// │    FormatVersion = 6                                        │
 /// │    SegmentId                                                    │
 /// │    CreatedAtUtcTicks                                            │
 /// │    BlockCount（回填）                                            │
 /// ├─────────────────────────────────────────────────────────────────┤
 /// │  Block 1 ... Block N  （每个 (SeriesId, FieldName) 桶 = 1 Block） │
 /// │  ┌───────────────────────────────────────────────────────────┐  │
-/// │  │ BlockHeader (固定 64 字节)                                  │  │
+/// │  │ BlockHeader (固定 80 字节)                                  │  │
 /// │  │   SeriesId / Min/MaxTimestamp / Count                      │  │
 /// │  │   FieldNameUtf8Length / TimestampPayloadLength             │  │
 /// │  │   ValuePayloadLength / Encoding=None / FieldType           │  │
@@ -48,7 +48,11 @@ namespace SonnetDB.Storage.Segments;
 /// │    SeriesId / Min/MaxTimestamp / FileOffset / BlockLength       │
 /// │    FieldNameHash = XxHash32(FieldNameUtf8)                      │
 /// ├─────────────────────────────────────────────────────────────────┤
-/// │  SegmentFooter  (固定 64 字节)                                   │
+/// │  v6 Embedded Extension Area（可为空）                            │
+/// │    SDBVIDX1 section: HNSW VECTOR block index                    │
+/// │    SDBAIDX1 section: TDigest / HyperLogLog aggregate sketch      │
+/// ├─────────────────────────────────────────────────────────────────┤
+/// │  SegmentFooter  (固定 64 字节；v6 起 Header 保留区含 mini-footer 摘要副本) │
 /// │    Magic = "SDBSEGv1"                                           │
 /// │    IndexOffset / IndexCount                                     │
 /// │    FileLength  (= FooterOffset + 64)                            │
@@ -57,10 +61,11 @@ namespace SonnetDB.Storage.Segments;
 ///
 /// 不变量：
 ///   1. IndexOffset == SegmentHeaderSize + Σ BlockLength
-///   2. FooterOffset == IndexOffset + IndexCount × 48
+///   2. IndexOffset + IndexCount × 48 <= FooterOffset
 ///   3. FooterOffset + 64 == FileLength
 ///   4. BlockIndexEntry[i].FileOffset 指向第 i 个 BlockHeader 起点
-///   5. 文件以 SegmentFooter.Magic == "SDBSEGv1" 收尾
+///   5. 文件以 SegmentFooter.Magic == "SDBSEGv1" 收尾；v6 Header mini-footer 与 Footer 摘要一致
+///   6. v6 起不再为新段写 `.SDBVIDX` / `.SDBAIDX` sidecar；旧 sidecar 仅读取兼容
 /// </code>
 /// </para>
 /// </summary>
@@ -141,9 +146,7 @@ public sealed class SegmentWriter
         var vectorIndexBlocks = new List<HnswVectorBlockIndex>();
         var aggregateSketchBlocks = new List<BlockAggregateSketch>();
         bool tempFileCreated = false;
-        string tempVectorIndexPath = SonnetDB.Engine.TsdbPaths.VectorIndexPathForSegment(tempPath);
         string vectorIndexPath = SonnetDB.Engine.TsdbPaths.VectorIndexPathForSegment(path);
-        string tempAggregateIndexPath = SonnetDB.Engine.TsdbPaths.AggregateIndexPathForSegment(tempPath);
         string aggregateIndexPath = SonnetDB.Engine.TsdbPaths.AggregateIndexPathForSegment(path);
 
         try
@@ -233,31 +236,43 @@ public sealed class SegmentWriter
                 WriteStructToStreamAndHash(bs, in entry, indexCrc);
 
             uint indexCrc32 = indexCrc.GetCurrentHashAsUInt32();
+            currentOffset = indexOffset + (long)indexEntries.Count * FormatSizes.BlockIndexEntrySize;
 
-            // ─── 阶段 D：写 SegmentFooter ──────────────────────────────────
-            footerOffset = indexOffset + (long)indexEntries.Count * FormatSizes.BlockIndexEntrySize;
+            // ─── 阶段 D：写 v6 内嵌扩展区（替代旧 .SDBVIDX / .SDBAIDX sidecar）────────────
+            if (vectorIndexBlocks.Count > 0)
+            {
+                long before = bs.Position;
+                SegmentVectorIndexFile.WriteTo(bs, vectorIndexBlocks);
+                currentOffset += bs.Position - before;
+            }
+
+            if (aggregateSketchBlocks.Count > 0)
+            {
+                long before = bs.Position;
+                SegmentAggregateSketchFile.WriteTo(bs, aggregateSketchBlocks);
+                currentOffset += bs.Position - before;
+            }
+
+            // ─── 阶段 E：写 SegmentFooter ──────────────────────────────────
+            footerOffset = currentOffset;
             long fileLength = footerOffset + FormatSizes.SegmentFooterSize;
 
             var footer = SegmentFooter.CreateNew(indexEntries.Count, indexOffset, fileLength);
             footer.Crc32 = indexCrc32;
             WriteStructToStream(bs, in footer);
 
-            // ─── 阶段 E：Seek(0) 回填 SegmentHeader ───────────────────────
+            // ─── 阶段 F：Seek(0) 回填 SegmentHeader ───────────────────────
             bs.Flush();
             bs.Seek(0, SeekOrigin.Begin);
 
             var finalHeader = SegmentHeader.CreateNew(segmentId);
             finalHeader.BlockCount = indexEntries.Count;
+            finalHeader.WriteFooterMiniCopy(indexEntries.Count, indexOffset, fileLength, indexCrc32);
             WriteStructToStream(bs, in finalHeader);
 
             bs.Flush();
             if (_options.FsyncOnCommit)
                 fs.Flush(true);
-
-            if (vectorIndexBlocks.Count > 0)
-                SegmentVectorIndexFile.Write(tempVectorIndexPath, vectorIndexBlocks);
-            if (aggregateSketchBlocks.Count > 0)
-                SegmentAggregateSketchFile.Write(tempAggregateIndexPath, aggregateSketchBlocks);
 
             bs.Dispose();
             // using var fs ensures fs is disposed when the try block exits (idempotent if bs already closed it)
@@ -267,45 +282,13 @@ public sealed class SegmentWriter
             // 仅删除我们创建的临时文件，不删除原本已存在的文件
             if (tempFileCreated)
                 try { File.Delete(tempPath); } catch { }
-            try { File.Delete(tempVectorIndexPath); } catch { }
-            try { File.Delete(tempAggregateIndexPath); } catch { }
             throw;
         }
 
         // 原子替换：临时文件 → 目标文件
         File.Move(tempPath, path, overwrite: true);
-
-        if (vectorIndexBlocks.Count > 0)
-        {
-            try
-            {
-                File.Move(tempVectorIndexPath, vectorIndexPath, overwrite: true);
-            }
-            catch
-            {
-                try { File.Delete(tempVectorIndexPath); } catch { }
-            }
-        }
-        else if (File.Exists(vectorIndexPath))
-        {
-            try { File.Delete(vectorIndexPath); } catch { }
-        }
-
-        if (aggregateSketchBlocks.Count > 0)
-        {
-            try
-            {
-                File.Move(tempAggregateIndexPath, aggregateIndexPath, overwrite: true);
-            }
-            catch
-            {
-                try { File.Delete(tempAggregateIndexPath); } catch { }
-            }
-        }
-        else if (File.Exists(aggregateIndexPath))
-        {
-            try { File.Delete(aggregateIndexPath); } catch { }
-        }
+        try { File.Delete(vectorIndexPath); } catch { }
+        try { File.Delete(aggregateIndexPath); } catch { }
 
         // 崩溃注入钩子（仅测试使用）：rename 完成后、Checkpoint 写入之前
         _options.PostRenameAction?.Invoke();

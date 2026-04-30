@@ -1,4 +1,5 @@
 ﻿using System.IO.Hashing;
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -572,7 +573,9 @@ public sealed class SegmentReaderTests : IDisposable
         byte[] truncated = bytes[..^1]; // 截断最后一字节
         File.WriteAllBytes(path, truncated);
 
-        Assert.Throws<SegmentCorruptedException>(() => SegmentReader.Open(path));
+        var ex = Assert.Throws<SegmentCorruptedException>(() => SegmentReader.Open(path));
+        Assert.Contains("mini-footer", ex.Message);
+        Assert.Contains("128", ex.Message);
     }
 
     [Fact]
@@ -587,7 +590,7 @@ public sealed class SegmentReaderTests : IDisposable
     // ── Footer.FooterOffset 不一致 ──────────────────────────────────────────────
 
     [Fact]
-    public void FooterOffsetMismatch_Open_ThrowsSegmentCorruptedException()
+    public void FooterOffsetMismatch_WithHeaderMiniFooterFallback_OpenSucceeds()
     {
         string path = TempPath();
         _writer.WriteFrom(new MemTable(), 1L, path);
@@ -599,8 +602,26 @@ public sealed class SegmentReaderTests : IDisposable
         int footerStart = bytes.Length - FormatSizes.SegmentFooterSize;
         int indexOffsetPos = footerStart + 16; // Magic(8)+FormatVersion(4)+IndexCount(4)=16
         // 设置 IndexOffset 为一个错误的值
-        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(
-            bytes.AsSpan(indexOffsetPos, 8), 999L);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(indexOffsetPos, 8), 999L);
+        File.WriteAllBytes(path, bytes);
+
+        using var reader = SegmentReader.Open(path);
+        Assert.Equal(0, reader.BlockCount);
+        Assert.Equal(FormatSizes.SegmentHeaderSize, reader.Footer.IndexOffset);
+    }
+
+    [Fact]
+    public void FooterOffsetMismatch_WithoutMiniFooter_ThrowsSegmentCorruptedException()
+    {
+        string path = TempPath();
+        _writer.WriteFrom(new MemTable(), 1L, path);
+
+        byte[] bytes = File.ReadAllBytes(path);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(8, 4), 5);
+        bytes.AsSpan(36, FormatSizes.SegmentHeaderSize - 36).Clear();
+        int footerStart = bytes.Length - FormatSizes.SegmentFooterSize;
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(footerStart + 8, 4), 5);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(footerStart + 16, 8), 999L);
         File.WriteAllBytes(path, bytes);
 
         Assert.Throws<SegmentCorruptedException>(() => SegmentReader.Open(path));

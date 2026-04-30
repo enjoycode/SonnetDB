@@ -38,10 +38,14 @@ public sealed class SegmentReader : IDisposable
     private readonly BlockTimeRangeIndex _blocksByTimeRange;
     private readonly BlockDecodeCache? _decodeCache;
     private readonly HnswVectorIndexCache? _vectorIndexCache;
+    private readonly long _embeddedExtensionOffset;
+    private readonly long _embeddedExtensionLength;
     private readonly object _vectorIndexLoadLock = new();
     private readonly object _aggregateSketchLoadLock = new();
     private IReadOnlyDictionary<int, long>? _vectorIndexOffsetsByBlock;
     private IReadOnlyDictionary<int, long>? _aggregateSketchOffsetsByBlock;
+    private bool _vectorIndexOffsetsEmbedded;
+    private bool _aggregateSketchOffsetsEmbedded;
     private volatile bool _vectorIndexOffsetsLoaded;
     private volatile bool _aggregateSketchOffsetsLoaded;
 
@@ -133,6 +137,8 @@ public sealed class SegmentReader : IDisposable
         BlockDescriptor[] blocks,
         FrozenDictionary<ulong, BlockDescriptor[]> blocksBySeries,
         BlockTimeRangeIndex blocksByTimeRange,
+        long embeddedExtensionOffset,
+        long embeddedExtensionLength,
         SegmentReaderOptions options)
     {
         Path = path;
@@ -142,6 +148,8 @@ public sealed class SegmentReader : IDisposable
         _blocks = blocks;
         _blocksBySeries = blocksBySeries;
         _blocksByTimeRange = blocksByTimeRange;
+        _embeddedExtensionOffset = embeddedExtensionOffset;
+        _embeddedExtensionLength = embeddedExtensionLength;
         FileLength = source.Length;
         _options = options;
         _decodeCache = options.DecodeBlockCacheMaxBytes > 0
@@ -197,9 +205,9 @@ public sealed class SegmentReader : IDisposable
         long length = source.Length;
         int minLen = FormatSizes.SegmentHeaderSize + FormatSizes.SegmentFooterSize;
 
-        if (length < minLen)
+        if (length < FormatSizes.SegmentHeaderSize)
             throw new SegmentCorruptedException(path, 0,
-                $"文件过短（{length} 字节），最小需要 {minLen} 字节。");
+                $"文件过短（{length} 字节），最小需要完整 SegmentHeader {FormatSizes.SegmentHeaderSize} 字节。");
 
         // 读 SegmentHeader（offset 0）
         var header = MemoryMarshal.Read<SegmentHeader>(source.ReadSpan(0, FormatSizes.SegmentHeaderSize));
@@ -212,36 +220,27 @@ public sealed class SegmentReader : IDisposable
                 "v3（PR #58 c）新增 BlockEncoding.VectorRaw 与 FieldType.Vector，仅在使用 VECTOR 列时落盘；" +
                 "v4（PR #70）新增 BlockEncoding.GeoPointRaw 与 FieldType.GeoPoint，仅在使用 GEOPOINT 列时落盘；" +
                 "v5（PR #76）将 BlockHeader 扩展为 80B 并新增 GeoHashMin/GeoHashMax；" +
+                "v6 将 HNSW/聚合 sketch section 内嵌到 .SDBSEG，并在 SegmentHeader 写入 mini-footer；" +
                 "旧 v1 段文件需通过重放 WAL（删除 .SDBSEG 后启动）重新生成。");
 
         if (header.HeaderSize != FormatSizes.SegmentHeaderSize)
             throw new SegmentCorruptedException(path, 0,
                 $"SegmentHeader.HeaderSize={header.HeaderSize} 不等于预期值 {FormatSizes.SegmentHeaderSize}。");
 
-        // 读 SegmentFooter（文件末尾 64 字节）
-        long footerStart = length - FormatSizes.SegmentFooterSize;
-        var footer = MemoryMarshal.Read<SegmentFooter>(source.ReadSpan(footerStart, FormatSizes.SegmentFooterSize));
+        if (length < minLen)
+            throw new SegmentCorruptedException(path, length,
+                BuildTooShortSegmentMessage(header, length, minLen));
 
-        if (!footer.IsCompatibleForRead())
-            throw new SegmentCorruptedException(path, footerStart,
-                "SegmentFooter Magic 或 FormatVersion 不匹配。");
+        if (!TryReadPrimaryFooter(path, source, length, out var footer, out long footerStart, out string primaryFooterError)
+            && !TryReadFooterFromHeaderMiniCopy(path, header, length, out footer, out footerStart, out string miniFooterError))
+        {
+            throw new SegmentCorruptedException(path, length - FormatSizes.SegmentFooterSize,
+                $"{primaryFooterError}；{miniFooterError}");
+        }
 
-        // 校验 FooterOffset + 64 == bytes.Length
-        long expectedFooterStart = footer.IndexOffset + (long)footer.IndexCount * FormatSizes.BlockIndexEntrySize;
-        if (expectedFooterStart != footerStart)
-            throw new SegmentCorruptedException(path, footerStart,
-                $"SegmentFooter 位置不一致：IndexOffset({footer.IndexOffset}) + IndexCount({footer.IndexCount}) * {FormatSizes.BlockIndexEntrySize} = {expectedFooterStart}，但实际 FooterOffset = {footerStart}。");
-
-        // 校验 FileLength 字段
-        if (footer.FileLength != length)
-            throw new SegmentCorruptedException(path, footerStart,
-                $"SegmentFooter.FileLength={footer.FileLength} 与实际文件长度 {length} 不一致。");
-
-        // 校验 IndexEntrySize（必须等于 48）
-        long expectedIndexEnd = footer.IndexOffset + (long)footer.IndexCount * FormatSizes.BlockIndexEntrySize;
-        if (expectedIndexEnd > footerStart)
-            throw new SegmentCorruptedException(path, (long)footer.IndexOffset,
-                $"BlockIndexEntry 区域越界：IndexOffset({footer.IndexOffset}) + IndexCount({footer.IndexCount}) * {FormatSizes.BlockIndexEntrySize} = {expectedIndexEnd} > FooterOffset({footerStart})。");
+        long indexEndOffset = footer.IndexOffset + (long)footer.IndexCount * FormatSizes.BlockIndexEntrySize;
+        long embeddedExtensionOffset = indexEndOffset;
+        long embeddedExtensionLength = footerStart - indexEndOffset;
 
         // 读 BlockIndexEntry[]
         long indexByteLenLong = (long)footer.IndexCount * FormatSizes.BlockIndexEntrySize;
@@ -349,7 +348,17 @@ public sealed class SegmentReader : IDisposable
 
         var blocksBySeries = BuildBlocksBySeriesIndex(blocks);
         var blocksByTimeRange = BlockTimeRangeIndex.Build(blocks);
-        return new SegmentReader(path, source, header, footer, blocks, blocksBySeries, blocksByTimeRange, options);
+        return new SegmentReader(
+            path,
+            source,
+            header,
+            footer,
+            blocks,
+            blocksBySeries,
+            blocksByTimeRange,
+            embeddedExtensionOffset,
+            embeddedExtensionLength,
+            options);
     }
 
     /// <summary>
@@ -536,12 +545,24 @@ public sealed class SegmentReader : IDisposable
             if (!offsets.TryGetValue(descriptor.Index, out long offset))
                 return false;
 
-            if (!SegmentVectorIndexFile.TryLoadBlockAt(
-                Path,
-                offset,
-                _blocks,
-                descriptor.Index,
-                out var loaded))
+            HnswVectorBlockIndex loaded;
+            bool loadedOk = _vectorIndexOffsetsEmbedded
+                ? SegmentVectorIndexFile.TryLoadEmbeddedBlockAt(
+                    Path,
+                    offset,
+                    _embeddedExtensionOffset,
+                    _embeddedExtensionLength,
+                    _blocks,
+                    descriptor.Index,
+                    out loaded)
+                : SegmentVectorIndexFile.TryLoadBlockAt(
+                    Path,
+                    offset,
+                    _blocks,
+                    descriptor.Index,
+                    out loaded);
+
+            if (!loadedOk)
             {
                 return false;
             }
@@ -578,13 +599,23 @@ public sealed class SegmentReader : IDisposable
         if (!offsets.TryGetValue(descriptor.Index, out long offset))
             return false;
 
-        return SegmentAggregateSketchFile.TryLoadBlockAt(
-            Path,
-            offset,
-            _blocks,
-            descriptor.Index,
-            descriptor.Crc32,
-            out sketch);
+        return _aggregateSketchOffsetsEmbedded
+            ? SegmentAggregateSketchFile.TryLoadEmbeddedBlockAt(
+                Path,
+                offset,
+                _embeddedExtensionOffset,
+                _embeddedExtensionLength,
+                _blocks,
+                descriptor.Index,
+                descriptor.Crc32,
+                out sketch)
+            : SegmentAggregateSketchFile.TryLoadBlockAt(
+                Path,
+                offset,
+                _blocks,
+                descriptor.Index,
+                descriptor.Crc32,
+                out sketch);
     }
 
     /// <summary>
@@ -623,6 +654,10 @@ public sealed class SegmentReader : IDisposable
     internal bool VectorIndexOffsetsLoaded => _vectorIndexOffsetsLoaded;
 
     internal bool AggregateSketchOffsetsLoaded => _aggregateSketchOffsetsLoaded;
+
+    internal bool VectorIndexOffsetsEmbedded => _vectorIndexOffsetsEmbedded;
+
+    internal bool AggregateSketchOffsetsEmbedded => _aggregateSketchOffsetsEmbedded;
 
     internal bool UsesMemoryMappedStorage => _source?.IsMemoryMapped == true;
 
@@ -678,6 +713,122 @@ public sealed class SegmentReader : IDisposable
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
 
+    private static string BuildTooShortSegmentMessage(SegmentHeader header, long length, int minLen)
+    {
+        string message = $"文件过短（{length} 字节），最小需要 {minLen} 字节。";
+        if (header.TryReadFooterMiniCopy(out var mini))
+        {
+            message +=
+                $" SegmentHeader mini-footer 指示完整文件长度应为 {mini.FileLength} 字节，" +
+                $"IndexOffset={mini.IndexOffset}，IndexCount={mini.IndexCount}。";
+        }
+
+        return message;
+    }
+
+    private static bool TryReadPrimaryFooter(
+        string path,
+        SegmentByteSource source,
+        long length,
+        out SegmentFooter footer,
+        out long footerStart,
+        out string error)
+    {
+        footerStart = length - FormatSizes.SegmentFooterSize;
+        footer = MemoryMarshal.Read<SegmentFooter>(source.ReadSpan(footerStart, FormatSizes.SegmentFooterSize));
+
+        if (!footer.IsCompatibleForRead())
+        {
+            error = "SegmentFooter Magic 或 FormatVersion 不匹配";
+            return false;
+        }
+
+        return TryValidateFooterLayout(path, length, footerStart, footer, out error);
+    }
+
+    private static bool TryReadFooterFromHeaderMiniCopy(
+        string path,
+        SegmentHeader header,
+        long length,
+        out SegmentFooter footer,
+        out long footerStart,
+        out string error)
+    {
+        footer = default;
+        footerStart = 0;
+
+        if (!header.TryReadFooterMiniCopy(out var mini))
+        {
+            error = "SegmentHeader mini-footer 不存在或形状无效";
+            return false;
+        }
+
+        long expectedIndexEnd = mini.IndexOffset + (long)mini.IndexCount * FormatSizes.BlockIndexEntrySize;
+        if (expectedIndexEnd > mini.FileLength - FormatSizes.SegmentFooterSize)
+        {
+            error =
+                $"SegmentHeader mini-footer 自身不一致：IndexOffset({mini.IndexOffset}) + " +
+                $"IndexCount({mini.IndexCount}) * {FormatSizes.BlockIndexEntrySize} = {expectedIndexEnd}，" +
+                $"超过 FooterOffset({mini.FileLength - FormatSizes.SegmentFooterSize})";
+            return false;
+        }
+
+        if (mini.FileLength != length)
+        {
+            error =
+                $"SegmentHeader mini-footer 可读，但文件尾部疑似截断：mini-footer FileLength={mini.FileLength}，" +
+                $"实际文件长度={length}，IndexOffset={mini.IndexOffset}，IndexCount={mini.IndexCount}";
+            return false;
+        }
+
+        footerStart = mini.FileLength - FormatSizes.SegmentFooterSize;
+        footer = SegmentFooter.CreateNew(mini.IndexCount, mini.IndexOffset, mini.FileLength);
+        footer.FormatVersion = header.FormatVersion;
+        footer.Crc32 = mini.IndexCrc32;
+
+        return TryValidateFooterLayout(path, length, footerStart, footer, out error);
+    }
+
+    private static bool TryValidateFooterLayout(
+        string path,
+        long length,
+        long footerStart,
+        SegmentFooter footer,
+        out string error)
+    {
+        _ = path;
+
+        long expectedIndexEnd = footer.IndexOffset + (long)footer.IndexCount * FormatSizes.BlockIndexEntrySize;
+        if (footer.FormatVersion >= 6)
+        {
+            if (expectedIndexEnd > footerStart)
+            {
+                error =
+                    $"SegmentFooter 位置不一致：IndexOffset({footer.IndexOffset}) + " +
+                    $"IndexCount({footer.IndexCount}) * {FormatSizes.BlockIndexEntrySize} = {expectedIndexEnd}，" +
+                    $"超过 FooterOffset({footerStart})";
+                return false;
+            }
+        }
+        else if (expectedIndexEnd != footerStart)
+        {
+            error =
+                $"SegmentFooter 位置不一致：IndexOffset({footer.IndexOffset}) + " +
+                $"IndexCount({footer.IndexCount}) * {FormatSizes.BlockIndexEntrySize} = {expectedIndexEnd}，" +
+                $"但实际 FooterOffset = {footerStart}";
+            return false;
+        }
+
+        if (footer.FileLength != length)
+        {
+            error = $"SegmentFooter.FileLength={footer.FileLength} 与实际文件长度 {length} 不一致";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
     private static FrozenDictionary<ulong, BlockDescriptor[]> BuildBlocksBySeriesIndex(
         IReadOnlyList<BlockDescriptor> blocks)
     {
@@ -713,7 +864,21 @@ public sealed class SegmentReader : IDisposable
         {
             if (!_vectorIndexOffsetsLoaded)
             {
-                _vectorIndexOffsetsByBlock = SegmentVectorIndexFile.TryLoadOffsets(Path, _blocks);
+                var embeddedOffsets = SegmentVectorIndexFile.TryLoadEmbeddedOffsets(
+                    Path,
+                    _embeddedExtensionOffset,
+                    _embeddedExtensionLength,
+                    _blocks);
+                if (embeddedOffsets.Count > 0)
+                {
+                    _vectorIndexOffsetsByBlock = embeddedOffsets;
+                    _vectorIndexOffsetsEmbedded = true;
+                }
+                else
+                {
+                    _vectorIndexOffsetsByBlock = SegmentVectorIndexFile.TryLoadOffsets(Path, _blocks);
+                    _vectorIndexOffsetsEmbedded = false;
+                }
                 _vectorIndexOffsetsLoaded = true;
             }
 
@@ -730,7 +895,21 @@ public sealed class SegmentReader : IDisposable
         {
             if (!_aggregateSketchOffsetsLoaded)
             {
-                _aggregateSketchOffsetsByBlock = SegmentAggregateSketchFile.TryLoadOffsets(Path, _blocks);
+                var embeddedOffsets = SegmentAggregateSketchFile.TryLoadEmbeddedOffsets(
+                    Path,
+                    _embeddedExtensionOffset,
+                    _embeddedExtensionLength,
+                    _blocks);
+                if (embeddedOffsets.Count > 0)
+                {
+                    _aggregateSketchOffsetsByBlock = embeddedOffsets;
+                    _aggregateSketchOffsetsEmbedded = true;
+                }
+                else
+                {
+                    _aggregateSketchOffsetsByBlock = SegmentAggregateSketchFile.TryLoadOffsets(Path, _blocks);
+                    _aggregateSketchOffsetsEmbedded = false;
+                }
                 _aggregateSketchOffsetsLoaded = true;
             }
 
@@ -948,7 +1127,8 @@ public sealed class SegmentReader : IDisposable
 
         var header = default(BlockHeader);
         var destination = MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref header, 1));
-        bytes.CopyTo(destination[..blockHeaderSize]);
+        bytes[..68].CopyTo(destination[..68]);
+        header.Crc32 = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(68, 4));
         return header;
     }
 }

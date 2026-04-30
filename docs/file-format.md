@@ -47,6 +47,24 @@ permalink: /file-format/
 | `wal/*.SDBWAL` | 分段 WAL 文件 |
 | `segments/*.SDBSEG` | 不可变数据段 |
 
+## Segment v6 主文件布局
+
+当前写入版本为 Segment Format v6。新段不再为 HNSW 向量索引或扩展聚合 sketch 生成独立 sidecar 文件，而是统一写入主 `.SDBSEG`：
+
+```text
+[SegmentHeader 64B]
+[Block 0 ... Block N-1]
+[BlockIndexEntry 0 ... N-1]
+[Embedded Extension Area]
+  ├─ SDBVIDX1 section（可选，HNSW VECTOR block index）
+  └─ SDBAIDX1 section（可选，TDigest / HyperLogLog block sketch）
+[SegmentFooter 64B]
+```
+
+v6 还会在 `SegmentHeader` 保留区写入一份 mini-footer 摘要（IndexCount / IndexOffset / FileLength / IndexCrc32）。当文件尾部 Footer 损坏或截断时，读取器可用这份摘要给出更明确的诊断，并在主 Footer 损坏但主段长度与索引区仍一致时恢复打开。
+
+读取层继续兼容 v4/v5 主段。旧版本产生的 `.SDBVIDX` / `.SDBAIDX` 文件仍会作为 legacy fallback 按需读取，但新写出的 v6 段不会再创建这些额外文件。
+
 ## 与旧描述的差异
 
 当前版本需要明确：
