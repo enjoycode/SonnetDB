@@ -35,13 +35,23 @@
 - **PR #77 — 地理空间基准 + 文档完善**：新增 `GeoQueryBenchmark`，覆盖 `100k` 默认轨迹点和可选 `1M` 档位下的 `geo_within`、`geo_bbox`、`trajectory_length` 与 `GEOPOINT` range scan；README 与 `docs/geo-spatial.md` 补齐地理空间功能矩阵、Web Admin / SQL Console 地图用法、基准运行方式和车辆追踪 / 户外运动 / IoT 地理围栏端到端示例。
 
 ### Changed
+- **Codec/BlockDecoder V2 专用化快路径**：评估 source generator、静态泛型与手写 fast path 后，选择零依赖、safe-only 的手写专用化；`TimestampCodec` 可直接把 delta-of-delta 时间戳写入 `DataPoint` 目标视图，`ValuePayloadCodecV2` 新增全量与范围 `DecodeInto` 路径，`BlockDecoder` 避免 V2 全量/范围解码中的中间 `long[]` / `FieldValue[]` 分配。新增 `CodecSpecializationBenchmark`，覆盖旧组合路径与生产快路径对比，并补充 V2 range 语义回归测试。
+- **SonnetDB.Core 性能 analyzer 配置**：为核心库启用低噪声性能规则，覆盖热路径 LINQ、重复数组分配、Count/Any、Dictionary 查询、SearchValues 与字符串比较相关建议；高语义取舍规则先以 suggestion 暴露，并修复新增 warning 命中的保留字符搜索与 SQL 元数据列名数组分配点，保持 `TreatWarningsAsErrors` 通过且不新增 suppress。
+- **Options/config 值对象化**：`TsdbOptions`、flush/WAL/segment/compaction/retention/background/pid 等配置类型改为 `sealed record`，继续保留 `new Options { ... }` 对象初始化器与 init-only 属性，同时支持 `with` 生成新配置快照，降低运行时共享配置被意外修改带来的并发不确定性。补充对象初始化器兼容、`with` 快照与值语义测试。
+- **SQL Lexer 字符分类快路径**：`SqlLexer` 的空白、标识符、数字、duration 后缀与运算符起始字符判断改为基于 `SearchValues<char>` 的 ASCII 快路径，并保留 Unicode 标识符/空白 fallback；补充 `SqlLexerBenchmark` 对比旧分支分类 lexer 与新实现。
+- **Catalog/schema/tag index 冻结快照**：`SeriesCatalog`、`MeasurementCatalog` 与 `TagInvertedIndex` 改为写入路径维护 mutable builder 并原子发布 `FrozenDictionary` / `FrozenSet` 快照，`MeasurementSchema` 的列名索引也改为构造后冻结；读路径无锁查询已发布快照，保持并发 `GetOrAdd` 幂等与 tag 查询语义不变。补充查找正确性、更新后可见性与并发读写回归测试。
+- **Segment v6 主格式整合**：Segment 写入版本升级到 v6，新段把原先为保持 v5 而外置的 HNSW `.SDBVIDX` 与扩展聚合 `.SDBAIDX` 内容内嵌为 `.SDBSEG` 索引区之后、Footer 之前的 extension section；`SegmentHeader` 保留区新增 mini-footer 摘要副本（IndexCount / IndexOffset / FileLength / IndexCrc32），用于尾部损坏时的诊断与受控 fallback。读取层继续兼容 v4/v5，并保留旧 sidecar 按需读取回退。
+- **WalSegmentSet checkpoint replay 单遍化**：`ReplayWithCheckpoint` 改为单次扫描 WAL records，并利用 segment `LastLsn` 元数据或相邻 segment 起始 LSN 推导结果跳过 durable checkpoint 之前的整段；旧 WAL、无 footer WAL 与 legacy `active.SDBWAL` 升级路径继续兼容，补充多段、checkpoint 命中和 legacy 升级回归测试。
+- **Tombstone manifest 周期性 checkpoint**：新增 `TombstoneCheckpointOptions`，Delete 路径可按累计删除数或时间间隔把当前 tombstone 快照持久化到 manifest；恢复时以 manifest 最大 `CreatedLsn` 作为 Delete replay 下界并对 tombstone 去重，降低大量删除后崩溃恢复对 WAL Delete 全量重放的依赖，同时保持 Delete 过滤与 Compaction 消化语义不变。
+- **Checkpoint LSN 持久化语义增强**：Flush 成功写出 Segment 并 Sync WAL checkpoint 后，会把 durable checkpoint LSN 以 tmp 写入、fsync、原子 rename、父目录 best-effort fsync 的方式保存到 WAL 元数据文件；恢复时仅当对应 Segment 文件存在且长度匹配才采用该 checkpoint，否则忽略并完整 replay WAL，避免坏中间状态错误跳过未 flush 数据。
+- **WAL record torn-write 检测增强**：新写入的 WAL record 在不改变 32 字节 header 尺寸的前提下启用 header checksum，`WalReader.Replay` 与 `WalWriter.Open` 扫描旧 WAL 时会在第一条 header/payload/CRC 损坏记录处停止并忽略尾部；`Flags=0/Reserved=0` 的旧 WAL record 继续按原格式读取。
 - **数值聚合 SIMD 快路径**：新增可选 `TsdbOptions.UseSimdNumericAggregates`（默认开启），`sum` / `min` / `max` / `count` 在适合的落盘数值 block 部分范围聚合上可使用 `System.Numerics.Vector<T>` 处理 Float64 / Int64 payload；不支持硬件加速、遇到 NaN、Boolean 或不适合的编码时自动回退标量路径，保持查询结果语义不变，并补充 scalar/SIMD 一致性测试与 `NumericAggregateSimdBenchmark` BenchmarkDotNet 对比。
-- **扩展聚合 block sketch sidecar 快路径**：新增可选 `.SDBAIDX` sidecar，为数值 block 写入 TDigest 与 HyperLogLog sketch，`percentile` / `p50` / `p90` / `p95` / `p99` / `tdigest_agg` / `distinct_count` 在全局聚合且无 tombstone/geo 过滤时可按 block 合并 sketch；`.SDBSEG` v5 主格式不变，缺失或损坏 sidecar 会自动回退旧解码扫描路径，并补充 sidecar 懒加载、缺失回退与 SQL 快路径测试。
+- **扩展聚合 block sketch 快路径**：为数值 block 写入 TDigest 与 HyperLogLog sketch，`percentile` / `p50` / `p90` / `p95` / `p99` / `tdigest_agg` / `distinct_count` 在全局聚合且无 tombstone/geo 过滤时可按 block 合并 sketch；v6 新段将 sketch section 内嵌到 `.SDBSEG`，旧 `.SDBAIDX` sidecar 仍可按需读取回退，损坏或缺失时自动回退旧解码扫描路径，并补充内嵌读取、legacy sidecar 回退与 SQL 快路径测试。
 - **窗口函数流式状态接口**：新增 `IWindowState` / `IWindowStreamingEvaluator`，流式窗口函数可通过 `Update(timestamp, value)` 按行推进；`DoubleWindowEvaluatorBase` 保留旧 `Compute` / `ComputeDouble` 适配层，`SelectExecutor` 在窗口 evaluator 全部支持流式状态时跳过 `long[]` / `FieldValue?[]` 对齐数组和预计算输出，仍对未迁移函数自动回退旧 materialized 路径。补充流式状态语义与大数据集内存占用回归测试。
 - **窗口函数 Span 批量路径**：`moving_average`、`running_sum` 及新增 `running_min` / `running_max` 的 typed/boxed 批量计算改为基于 `ReadOnlySpan` / `Span` 单遍填充输出；`moving_average` 小窗口使用栈上环形缓冲，减少临时数组，同时保持前 `n-1` 行 NULL、缺失值跳过/延续和时间顺序语义不变。补充空输入、全缺失、窗口大小 1 与累计极值边界测试。
 - **窗口函数 typed evaluator**：新增 `IWindowDoubleEvaluator` / `WindowDoubleOutput` 数值窗口函数输出接口，`SelectExecutor` 对 typed evaluator 优先复用 `double[] + bool[]`，避免 `Compute` 先生成 `object?[]` 导致每行提前装箱；`moving_average`、`ewma`、`holt_winters` 与累计求和路径已迁移，并新增 `running_sum` 作为 `cumulative_sum` 兼容别名。补充 typed 语义测试、SQL 兼容测试与 BenchmarkDotNet 分配基准。
 - **SegmentReader 可选 memory-mapped 读取路径**：新增 `SegmentReaderOptions.UseMemoryMappedFileForLargeSegments` 与 `MemoryMappedFileThresholdBytes`，大段文件可通过 safe-only `MemoryMappedViewAccessor` 按需读取 header/index/block payload，避免默认 `File.ReadAllBytes` 把整段放入 LOH；默认仍保留 `byte[]` reader，mmap 打开失败会回退。补充默认回退、阈值回退、mmap 解码与 Dispose 释放文件句柄测试。
-- **SegmentReader HNSW vector sidecar 懒加载**：`SegmentReader.Open` 不再 eager 反序列化 `.SDBVIDX` 中全部 HNSW 图，改为 `TryGetVectorIndex` 首次命中 VECTOR block 时按需读取，并通过进程内共享 LRU 预算 `SegmentReaderOptions.VectorIndexCacheMaxBytes` 控制常驻引用；冷段打开后不占用 HNSW 图内存，reader Dispose 会移除本段缓存。补充懒加载、预算淘汰、KNN 结果一致性与 compaction 后 sidecar 可加载测试。
+- **SegmentReader HNSW vector 索引懒加载**：`SegmentReader.Open` 不再 eager 反序列化 HNSW 图，改为 `TryGetVectorIndex` 首次命中 VECTOR block 时从 v6 内嵌 section 或旧 `.SDBVIDX` sidecar 按需读取，并通过进程内共享 LRU 预算 `SegmentReaderOptions.VectorIndexCacheMaxBytes` 控制常驻引用；冷段打开后不占用 HNSW 图内存，reader Dispose 会移除本段缓存。补充懒加载、预算淘汰、KNN 结果一致性与 compaction 后内嵌索引可加载测试。
 - **QueryEngine tombstone 过滤热路径优化**：`Execute(PointQuery)` 不再通过 LINQ `Where` 过滤墓碑，改为手写迭代器循环，并在查询前预筛与时间窗不相交的 tombstone；保持结果顺序、Limit 过滤后计数和墓碑闭区间覆盖语义不变，补充边界/Limit 与分配回归测试。
 - **SegmentReader block 解码缓存**：`SegmentReader` 新增按 `(SegmentId, BlockIndex, Crc32)` 标识的已解码 `DataPoint[]` LRU 缓存，默认单 reader 预算 16 MB，可通过 `SegmentReaderOptions.DecodeBlockCacheMaxBytes` 调整或禁用；`QueryEngine` 重复查询同一落盘 block 时复用解码结果，缓存受内存上限约束并在 reader Dispose 时清空引用。补充重复查询命中与预算淘汰测试。
 - **QueryEngine reader map 缓存**：`QueryEngine` 现在通过 `SegmentManager` 的绑定快照获取 `Index + Readers`，并在快照未变化时复用 `SegmentId -> SegmentReader` 映射，避免每次查询重复构建字典；`AddSegment` / `SwapSegments` / `Dispose` 发布新快照后会自动失效旧缓存，compaction swap 会延迟释放仍被查询快照租约持有的旧 reader，避免并发查询使用已 Dispose reader。
@@ -56,6 +66,7 @@
 - 新增 `docs/sql-cookbook.md`，把 `demo.sql` 中高频、当前真实支持的 `CREATE MEASUREMENT`、`INSERT`、`SELECT`、`GROUP BY time(...)`、窗口函数、PID、预测、向量检索、元数据与 `DELETE` 场景整理成可直接复制的 cookbook，并在 `docs/index.md` 与 `docs/sql-reference.md` 中加入入口。
 
 ### Fixed
+- **Tsdb.Dispose final flush 诊断**：关闭路径中的 final flush 失败仍保持 `Dispose` 不抛异常，但会写入 `Tsdb.LastError` 并触发 `Tsdb.DiagnosticEvent`，避免异常被静默吞掉；诊断事件订阅者自身抛错不会影响关闭语义。
 - 修复 Linux x64 C connector quickstart 运行时错误：CMake 现在在 Linux 下通过精确文件名链接 `SonnetDB.Native.so`，避免 Native AOT 共享库无 SONAME 时把构建目录写入 `DT_NEEDED`，并补充 WSL 开发环境与连接器验证文档。
 - **普通用户登录不再显示控制面虚拟库 `__control_plane__`**：Web Admin 会在普通用户进入后台时清理 SQL Console 与 Copilot 会话历史中残留的控制面本地状态；SQL Console 的新建标签、刷新数据库、运行 SQL 与待执行 SQL 注入路径也增加二次防护，避免同一浏览器先用 admin 打开 system tab 后再切换普通账号时暴露 `__control_plane__`。
 - **Copilot 会话历史补齐 assistant 回复与引用保存**：CopilotDock 现在按发起请求时的会话 ID 追加 user / assistant 消息，避免请求完成前切换或新建会话导致最终回复没有落盘；assistant 消息会连同 citations 一起写入本地历史，并在历史会话中渲染引用标题、来源与摘要。标题栏新增「+ 新会话」入口，历史弹层保留切换、重命名、删除与清空能力。
@@ -119,7 +130,7 @@
 
 ### Fixed
 - 回填 `ROADMAP.md` 的 PR #60 状态与 Milestone 13 进度，统一为与现有代码、测试和 `docs/vector-search.md` 一致的已实现状态。
-- 修正 `KnnExecutor` 在 HNSW + 时间范围过滤下“部分 ANN 命中后再精确补扫”时可能把同一点重复计入候选的问题，并补充 compaction 后 `.SDBVIDX` sidecar 仍可加载使用的回归测试。
+- 修正 `KnnExecutor` 在 HNSW + 时间范围过滤下“部分 ANN 命中后再精确补扫”时可能把同一点重复计入候选的问题，并补充 compaction 后 v6 内嵌索引 / legacy `.SDBVIDX` fallback 仍可加载使用的回归测试。
 - 回填 `ROADMAP.md` 的 PR #62 状态与 Milestone 13 里程碑进度：默认 `10k / 100k` 向量基准与 README 实测结果已闭环，`1M` 长测与外部库同机对比保留为显式 / 环境可选的后续补数项，不再阻塞 Milestone 14。
 
 ### Added

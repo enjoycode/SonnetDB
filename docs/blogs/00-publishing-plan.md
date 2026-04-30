@@ -1,6 +1,6 @@
 # SonnetDB 博客文章发布计划
 
-> 共 122 篇 · 按主题分组 · 建议发布节奏：每周 3-5 篇
+> 共 128 篇 · 按主题分组 · 建议发布节奏：每周 3-5 篇
 
 ---
 
@@ -172,3 +172,14 @@
 |---|------|---------|----------|
 | 121 | SonnetDB C 连接器：嵌入式时序数据库的原生接入 | C ABI 设计、17 个导出函数、构建与平台支持 | D241 |
 | 122 | SonnetDB Java 连接器：一套 API 双后端驱动 | JNI vs FFM 架构对比、多版本 JAR、Java 8/21 自适应 | D243 |
+
+## 第十阶段：性能与可靠性工程化（第 123-128 篇）
+
+| # | 标题 | 内容要点 | 建议日期 |
+|---|------|---------|----------|
+| 123 | Segment v6 与崩溃恢复：把可靠性做到文件尾部 | v6 extension section、mini-footer、v4/v5 兼容读取 | D245 |
+| 124 | 查询热路径优化：索引、缓存与少一点 LINQ | SegmentReader series/time index、reader map 缓存、tombstone 手写过滤、block 解码缓存 | D247 |
+| 125 | MemTable 优化：从热路径统计到快照并发 | 增量 EstimatedBytes、字符串 byte count、snapshot 缓存、range 二分裁剪 | D249 |
+| 126 | 窗口函数执行器：从 object 数组走向 typed streaming | typed evaluator、IWindowState、Span 批量路径、窗口函数降分配 | D251 |
+| 127 | 读多写少结构治理：FrozenDictionary、Lexer 快路径与 Analyzer | catalog/tag index 冻结快照、options record、SearchValues lexer、性能 analyzer | D253 |
+| 128 | Codec 专用化：BlockDecoder 为什么选择手写 fast path | source generator/泛型/手写方案评估、DecodeInto、BenchmarkDotNet 对比 | D255 |
