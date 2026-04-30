@@ -25,7 +25,7 @@ internal sealed class MovingAverageFunction : IWindowFunction
     }
 }
 
-internal sealed class MovingAverageEvaluator : IWindowEvaluator
+internal sealed class MovingAverageEvaluator : DoubleWindowEvaluatorBase
 {
     private readonly int _windowSize;
 
@@ -35,12 +35,13 @@ internal sealed class MovingAverageEvaluator : IWindowEvaluator
         _windowSize = windowSize;
     }
 
-    public string FieldName { get; }
+    public override string FieldName { get; }
 
-    public object?[] Compute(long[] timestamps, FieldValue?[] values)
+    public override WindowDoubleOutput ComputeDouble(long[] timestamps, FieldValue?[] values)
     {
         int n = timestamps.Length;
-        var output = new object?[n];
+        var output = new double[n];
+        var hasValue = new bool[n];
         var window = new double[_windowSize];
         var present = new bool[_windowSize];
         double sum = 0;
@@ -72,11 +73,13 @@ internal sealed class MovingAverageEvaluator : IWindowEvaluator
             filled++;
 
             // 至少累积 _windowSize 行后才输出（不足窗口大小返回 null）
-            output[i] = filled >= _windowSize && count > 0
-                ? (object)(sum / count)
-                : null;
+            if (filled >= _windowSize && count > 0)
+            {
+                output[i] = sum / count;
+                hasValue[i] = true;
+            }
         }
-        return output;
+        return new WindowDoubleOutput(output, hasValue);
     }
 }
 
@@ -101,7 +104,7 @@ internal sealed class EwmaFunction : IWindowFunction
     }
 }
 
-internal sealed class EwmaEvaluator : IWindowEvaluator
+internal sealed class EwmaEvaluator : DoubleWindowEvaluatorBase
 {
     private readonly double _alpha;
 
@@ -111,18 +114,23 @@ internal sealed class EwmaEvaluator : IWindowEvaluator
         _alpha = alpha;
     }
 
-    public string FieldName { get; }
+    public override string FieldName { get; }
 
-    public object?[] Compute(long[] timestamps, FieldValue?[] values)
+    public override WindowDoubleOutput ComputeDouble(long[] timestamps, FieldValue?[] values)
     {
-        var output = new object?[timestamps.Length];
+        var output = new double[timestamps.Length];
+        var hasValue = new bool[timestamps.Length];
         double s = 0;
         bool initialized = false;
         for (int i = 0; i < timestamps.Length; i++)
         {
             if (!WindowFunctionBinder.TryToDouble(values[i], out var v))
             {
-                output[i] = initialized ? (object)s : null;
+                if (initialized)
+                {
+                    output[i] = s;
+                    hasValue[i] = true;
+                }
                 continue;
             }
 
@@ -136,8 +144,9 @@ internal sealed class EwmaEvaluator : IWindowEvaluator
                 s = _alpha * v + (1 - _alpha) * s;
             }
             output[i] = s;
+            hasValue[i] = true;
         }
-        return output;
+        return new WindowDoubleOutput(output, hasValue);
     }
 }
 
@@ -166,7 +175,7 @@ internal sealed class HoltWintersFunction : IWindowFunction
     }
 }
 
-internal sealed class HoltWintersEvaluator : IWindowEvaluator
+internal sealed class HoltWintersEvaluator : DoubleWindowEvaluatorBase
 {
     private readonly double _alpha;
     private readonly double _beta;
@@ -178,12 +187,13 @@ internal sealed class HoltWintersEvaluator : IWindowEvaluator
         _beta = beta;
     }
 
-    public string FieldName { get; }
+    public override string FieldName { get; }
 
-    public object?[] Compute(long[] timestamps, FieldValue?[] values)
+    public override WindowDoubleOutput ComputeDouble(long[] timestamps, FieldValue?[] values)
     {
         int n = timestamps.Length;
-        var output = new object?[n];
+        var output = new double[n];
+        var hasValue = new bool[n];
         double level = 0;
         double trend = 0;
         bool haveLevel = false;
@@ -193,7 +203,11 @@ internal sealed class HoltWintersEvaluator : IWindowEvaluator
         {
             if (!WindowFunctionBinder.TryToDouble(values[i], out var x))
             {
-                output[i] = haveLevel ? (object)(level + (haveTrend ? trend : 0.0)) : null;
+                if (haveLevel)
+                {
+                    output[i] = level + (haveTrend ? trend : 0.0);
+                    hasValue[i] = true;
+                }
                 continue;
             }
 
@@ -202,6 +216,7 @@ internal sealed class HoltWintersEvaluator : IWindowEvaluator
                 level = x;
                 haveLevel = true;
                 output[i] = level;
+                hasValue[i] = true;
                 continue;
             }
 
@@ -219,7 +234,8 @@ internal sealed class HoltWintersEvaluator : IWindowEvaluator
                 trend = _beta * (level - prevLevel) + (1 - _beta) * trend;
             }
             output[i] = level + trend;
+            hasValue[i] = true;
         }
-        return output;
+        return new WindowDoubleOutput(output, hasValue);
     }
 }

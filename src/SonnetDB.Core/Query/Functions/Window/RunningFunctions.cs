@@ -21,15 +21,29 @@ internal sealed class CumulativeSumFunction : IWindowFunction
     }
 }
 
-internal sealed class CumulativeSumEvaluator : IWindowEvaluator
+/// <summary><c>running_sum(field)</c>：<see cref="CumulativeSumFunction"/> 的兼容别名。</summary>
+internal sealed class RunningSumFunction : IWindowFunction
+{
+    public string Name => "running_sum";
+
+    public IWindowEvaluator CreateEvaluator(FunctionCallExpression call, MeasurementSchema schema)
+    {
+        WindowFunctionBinder.RequireArgumentCount(call, Name, 1, 1);
+        var col = WindowFunctionBinder.ResolveFieldArgument(call, schema, Name, 0);
+        return new CumulativeSumEvaluator(col.Name);
+    }
+}
+
+internal sealed class CumulativeSumEvaluator : DoubleWindowEvaluatorBase
 {
     public CumulativeSumEvaluator(string fieldName) => FieldName = fieldName;
 
-    public string FieldName { get; }
+    public override string FieldName { get; }
 
-    public object?[] Compute(long[] timestamps, FieldValue?[] values)
+    public override WindowDoubleOutput ComputeDouble(long[] timestamps, FieldValue?[] values)
     {
-        var output = new object?[timestamps.Length];
+        var output = new double[timestamps.Length];
+        var hasValue = new bool[timestamps.Length];
         double sum = 0;
         bool seen = false;
         for (int i = 0; i < timestamps.Length; i++)
@@ -39,9 +53,13 @@ internal sealed class CumulativeSumEvaluator : IWindowEvaluator
                 sum += v;
                 seen = true;
             }
-            output[i] = seen ? sum : null;
+            if (seen)
+            {
+                output[i] = sum;
+                hasValue[i] = true;
+            }
         }
-        return output;
+        return new WindowDoubleOutput(output, hasValue);
     }
 }
 

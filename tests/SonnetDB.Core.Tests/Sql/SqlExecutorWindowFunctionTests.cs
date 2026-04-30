@@ -114,6 +114,20 @@ public sealed class SqlExecutorWindowFunctionTests : IDisposable
     }
 
     [Fact]
+    public void Select_RunningSumAlias_ReturnsSameOutputAsCumulativeSum()
+    {
+        using var db = OpenWithSchema(Options());
+        SqlExecutor.Execute(db,
+            "INSERT INTO cpu (time, host, usage) VALUES " +
+            "(0, 'h1', 1), (1, 'h1', 2), (2, 'h1', 3)");
+
+        var cumulative = Select(db, "SELECT cumulative_sum(usage) FROM cpu");
+        var running = Select(db, "SELECT running_sum(usage) FROM cpu");
+
+        Assert.Equal(cumulative.Rows.Select(static r => r[0]).ToArray(), running.Rows.Select(static r => r[0]).ToArray());
+    }
+
+    [Fact]
     public void Select_Integral_OnConstant_EqualsValueTimesSeconds()
     {
         using var db = OpenWithSchema(Options());

@@ -81,6 +81,21 @@ public sealed class WindowFunctionTests
     }
 
     [Fact]
+    public void CumulativeSumEvaluator_ComputeDouble_UsesTypedOutput()
+    {
+        var ev = new CumulativeSumEvaluator("x");
+        var result = ev.ComputeDouble(T(0, 1, 2, 3), D(null, 2, null, 3));
+
+        Assert.False(result.HasValue[0]);
+        Assert.True(result.HasValue[1]);
+        Assert.Equal(2.0, result.Values[1]);
+        Assert.True(result.HasValue[2]);
+        Assert.Equal(2.0, result.Values[2]);
+        Assert.True(result.HasValue[3]);
+        Assert.Equal(5.0, result.Values[3]);
+    }
+
+    [Fact]
     public void IntegralEvaluator_TrapezoidalRule_OnConstantValue()
     {
         // f=5 on [0, 1000ms] → 面积 = 5 * 1s = 5
@@ -116,6 +131,20 @@ public sealed class WindowFunctionTests
     }
 
     [Fact]
+    public void MovingAverageEvaluator_ComputeDouble_PreservesNullWindowSemantics()
+    {
+        var ev = new MovingAverageEvaluator("x", windowSize: 3);
+        var result = ev.ComputeDouble(T(0, 1, 2, 3), D(1, null, 3, 5));
+
+        Assert.False(result.HasValue[0]);
+        Assert.False(result.HasValue[1]);
+        Assert.True(result.HasValue[2]);
+        Assert.Equal(2.0, result.Values[2]); // (1 + 3) / 2
+        Assert.True(result.HasValue[3]);
+        Assert.Equal(4.0, result.Values[3]); // (3 + 5) / 2
+    }
+
+    [Fact]
     public void EwmaEvaluator_AlphaOne_IsIdentity()
     {
         var ev = new EwmaEvaluator("x", alpha: 1.0);
@@ -136,6 +165,21 @@ public sealed class WindowFunctionTests
         Assert.Equal(10.0, (double)result[0]!);
         Assert.Equal(15.0, (double)result[1]!, precision: 6);
         Assert.Equal(22.5, (double)result[2]!, precision: 6);
+    }
+
+    [Fact]
+    public void EwmaEvaluator_ComputeDouble_SkipsMissingAndCarriesState()
+    {
+        var ev = new EwmaEvaluator("x", alpha: 0.5);
+        var result = ev.ComputeDouble(T(0, 1, 2, 3), D(null, 10, null, 20));
+
+        Assert.False(result.HasValue[0]);
+        Assert.True(result.HasValue[1]);
+        Assert.Equal(10.0, result.Values[1]);
+        Assert.True(result.HasValue[2]);
+        Assert.Equal(10.0, result.Values[2]);
+        Assert.True(result.HasValue[3]);
+        Assert.Equal(15.0, result.Values[3], precision: 6);
     }
 
     // ── fill / locf / interpolate ────────────────────────────────────────
@@ -228,6 +272,25 @@ public sealed class WindowFunctionTests
         Assert.InRange((double)result[7]!, 7.0, 9.5);
     }
 
+    [Fact]
+    public void HoltWintersEvaluator_ComputeDouble_MatchesBoxedCompatibilityPath()
+    {
+        var ev = new HoltWintersEvaluator("x", alpha: 0.8, beta: 0.3);
+        long[] timestamps = T(0, 1, 2, 3, 4);
+        FieldValue?[] values = D(1, 2, null, 4, 5);
+
+        var typed = ev.ComputeDouble(timestamps, values);
+        var boxed = ev.Compute(timestamps, values);
+
+        for (int i = 0; i < typed.Length; i++)
+        {
+            if (typed.HasValue[i])
+                Assert.Equal(typed.Values[i], (double)boxed[i]!, precision: 6);
+            else
+                Assert.Null(boxed[i]);
+        }
+    }
+
     // ── FunctionRegistry 注册校验 ─────────────────────────────────────────
 
     [Theory]
@@ -239,6 +302,7 @@ public sealed class WindowFunctionTests
     [InlineData("irate")]
     [InlineData("increase")]
     [InlineData("cumulative_sum")]
+    [InlineData("running_sum")]
     [InlineData("integral")]
     [InlineData("moving_average")]
     [InlineData("ewma")]

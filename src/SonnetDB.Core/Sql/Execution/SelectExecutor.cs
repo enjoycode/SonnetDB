@@ -395,7 +395,8 @@ internal static class SelectExecutor
             }
 
             // 为每个窗口投影预计算输出（与 timestamps 数组同长度，逐行对齐）。
-            var windowOutputs = new object?[projections.Count][];
+            // 数值型 evaluator 优先走 double[] typed 输出，避免先构造 object?[] 造成每行装箱。
+            var windowOutputs = new WindowProjectionOutput?[projections.Count];
             for (int i = 0; i < projections.Count; i++)
             {
                 var evaluator = windowEvaluators[i];
@@ -411,7 +412,9 @@ internal static class SelectExecutor
                     }
                 }
 
-                windowOutputs[i] = evaluator.Compute(timestamps, alignedValues);
+                windowOutputs[i] = evaluator is IWindowDoubleEvaluator doubleEvaluator
+                    ? WindowProjectionOutput.FromDouble(doubleEvaluator.ComputeDouble(timestamps, alignedValues))
+                    : WindowProjectionOutput.FromObject(evaluator.Compute(timestamps, alignedValues));
             }
 
             for (int rowIdx = 0; rowIdx < timestamps.Length; rowIdx++)
@@ -430,7 +433,7 @@ internal static class SelectExecutor
                             : null,
                         ProjectionKind.Constant => p.ConstantValue,
                         ProjectionKind.Scalar => EvaluateScalarProjection(p, ts, series, fieldLookups),
-                        ProjectionKind.Window => windowOutputs[i]![rowIdx],
+                        ProjectionKind.Window => windowOutputs[i]!.GetValue(rowIdx),
                         _ => throw new InvalidOperationException("内部错误：不应在 raw 模式出现聚合投影。"),
                     };
                 }
@@ -440,6 +443,42 @@ internal static class SelectExecutor
 
         var columnNames = projections.Select(p => p.ColumnName).ToList();
         return new SelectExecutionResult(columnNames, rows);
+    }
+
+    private sealed class WindowProjectionOutput
+    {
+        private readonly object?[]? _objectValues;
+        private readonly WindowDoubleOutput? _doubleValues;
+
+        private WindowProjectionOutput(object?[] objectValues)
+        {
+            _objectValues = objectValues;
+        }
+
+        private WindowProjectionOutput(WindowDoubleOutput doubleValues)
+        {
+            _doubleValues = doubleValues;
+        }
+
+        public static WindowProjectionOutput FromObject(object?[] values)
+        {
+            ArgumentNullException.ThrowIfNull(values);
+            return new WindowProjectionOutput(values);
+        }
+
+        public static WindowProjectionOutput FromDouble(WindowDoubleOutput values)
+        {
+            ArgumentNullException.ThrowIfNull(values);
+            return new WindowProjectionOutput(values);
+        }
+
+        public object? GetValue(int rowIndex)
+        {
+            if (_doubleValues is { } typed)
+                return typed.TryGetValue(rowIndex, out double value) ? value : null;
+
+            return _objectValues![rowIndex];
+        }
     }
 
     private static IEnumerable<string> GetScalarFieldDependencies(IReadOnlyList<Projection> projections)

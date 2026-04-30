@@ -163,6 +163,7 @@ public static class FunctionRegistry
         new IrateFunction(),
         // Tier 3 — 累计 / 积分
         new CumulativeSumFunction(),
+        new RunningSumFunction(),
         new IntegralFunction(),
         // Tier 3 — 平滑 / 预测
         new MovingAverageFunction(),

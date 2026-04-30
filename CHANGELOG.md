@@ -35,6 +35,7 @@
 - **PR #77 — 地理空间基准 + 文档完善**：新增 `GeoQueryBenchmark`，覆盖 `100k` 默认轨迹点和可选 `1M` 档位下的 `geo_within`、`geo_bbox`、`trajectory_length` 与 `GEOPOINT` range scan；README 与 `docs/geo-spatial.md` 补齐地理空间功能矩阵、Web Admin / SQL Console 地图用法、基准运行方式和车辆追踪 / 户外运动 / IoT 地理围栏端到端示例。
 
 ### Changed
+- **窗口函数 typed evaluator**：新增 `IWindowDoubleEvaluator` / `WindowDoubleOutput` 数值窗口函数输出接口，`SelectExecutor` 对 typed evaluator 优先复用 `double[] + bool[]`，避免 `Compute` 先生成 `object?[]` 导致每行提前装箱；`moving_average`、`ewma`、`holt_winters` 与累计求和路径已迁移，并新增 `running_sum` 作为 `cumulative_sum` 兼容别名。补充 typed 语义测试、SQL 兼容测试与 BenchmarkDotNet 分配基准。
 - **SegmentReader 可选 memory-mapped 读取路径**：新增 `SegmentReaderOptions.UseMemoryMappedFileForLargeSegments` 与 `MemoryMappedFileThresholdBytes`，大段文件可通过 safe-only `MemoryMappedViewAccessor` 按需读取 header/index/block payload，避免默认 `File.ReadAllBytes` 把整段放入 LOH；默认仍保留 `byte[]` reader，mmap 打开失败会回退。补充默认回退、阈值回退、mmap 解码与 Dispose 释放文件句柄测试。
 - **SegmentReader HNSW vector sidecar 懒加载**：`SegmentReader.Open` 不再 eager 反序列化 `.SDBVIDX` 中全部 HNSW 图，改为 `TryGetVectorIndex` 首次命中 VECTOR block 时按需读取，并通过进程内共享 LRU 预算 `SegmentReaderOptions.VectorIndexCacheMaxBytes` 控制常驻引用；冷段打开后不占用 HNSW 图内存，reader Dispose 会移除本段缓存。补充懒加载、预算淘汰、KNN 结果一致性与 compaction 后 sidecar 可加载测试。
 - **QueryEngine tombstone 过滤热路径优化**：`Execute(PointQuery)` 不再通过 LINQ `Where` 过滤墓碑，改为手写迭代器循环，并在查询前预筛与时间窗不相交的 tombstone；保持结果顺序、Limit 过滤后计数和墓碑闭区间覆盖语义不变，补充边界/Limit 与分配回归测试。
