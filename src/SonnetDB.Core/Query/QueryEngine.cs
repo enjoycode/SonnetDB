@@ -104,33 +104,77 @@ public sealed class QueryEngine
         // 4. N 路有序合并
         var merged = BlockSourceMerger.Merge(memSlice, segmentSlices);
 
-        // 5. 应用墓碑过滤
-        IEnumerable<DataPoint> filtered = merged;
-        if (_tombstones != null)
+        // 5/6. 应用墓碑过滤与 Limit。Limit 必须在 tombstone 过滤之后计数。
+        IReadOnlyList<Tombstone> tombstones = Array.Empty<Tombstone>();
+        if (_tombstones is not null)
         {
             var tombstoneList = _tombstones.GetForSeriesField(query.SeriesId, query.FieldName);
             if (tombstoneList.Count > 0)
-                filtered = merged.Where(p => !IsCoveredByTombstones(p.Timestamp, tombstoneList));
+                tombstones = FilterTombstonesForQueryRange(tombstoneList, from, to);
         }
 
-        // 6. 应用 Limit
-        if (query.Limit.HasValue)
+        int emitted = 0;
+        int? limit = query.Limit;
+        foreach (var dp in merged)
         {
-            int limit = query.Limit.Value;
-            int count = 0;
-            foreach (var dp in filtered)
+            if (tombstones.Count > 0 && IsCoveredByTombstones(dp.Timestamp, tombstones))
+                continue;
+
+            if (limit.HasValue && emitted >= limit.Value)
+                yield break;
+
+            yield return dp;
+            emitted++;
+        }
+    }
+
+    private static IReadOnlyList<Tombstone> FilterTombstonesForQueryRange(
+        IReadOnlyList<Tombstone> tombstones,
+        long from,
+        long toInclusive)
+    {
+        int firstOverlap = -1;
+        for (int i = 0; i < tombstones.Count; i++)
+        {
+            if (Overlaps(tombstones[i], from, toInclusive))
             {
-                if (count >= limit)
-                    yield break;
-                yield return dp;
-                count++;
+                firstOverlap = i;
+                break;
             }
         }
-        else
+
+        if (firstOverlap < 0)
+            return Array.Empty<Tombstone>();
+
+        bool allOverlap = firstOverlap == 0;
+        if (allOverlap)
         {
-            foreach (var dp in filtered)
-                yield return dp;
+            for (int i = 1; i < tombstones.Count; i++)
+            {
+                if (!Overlaps(tombstones[i], from, toInclusive))
+                {
+                    allOverlap = false;
+                    break;
+                }
+            }
         }
+
+        if (allOverlap)
+            return tombstones;
+
+        var filtered = new List<Tombstone>(tombstones.Count - firstOverlap);
+        for (int i = firstOverlap; i < tombstones.Count; i++)
+        {
+            if (Overlaps(tombstones[i], from, toInclusive))
+                filtered.Add(tombstones[i]);
+        }
+
+        return filtered.Count == 0 ? Array.Empty<Tombstone>() : filtered;
+    }
+
+    private static bool Overlaps(in Tombstone tombstone, long from, long toInclusive)
+    {
+        return tombstone.FromTimestamp <= toInclusive && tombstone.ToTimestamp >= from;
     }
 
     /// <summary>

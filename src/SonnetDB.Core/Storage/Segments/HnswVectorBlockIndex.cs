@@ -29,6 +29,7 @@ internal sealed class HnswVectorBlockIndex
         EntryPoint = entryPoint;
         MaxLevel = maxLevel;
         _neighbors = neighbors;
+        EstimatedBytes = EstimateBytes(neighbors);
     }
 
     /// <summary>所属 block 的序号。</summary>
@@ -45,6 +46,9 @@ internal sealed class HnswVectorBlockIndex
 
     /// <summary>图中的节点数量。</summary>
     public int Count => _neighbors.Length;
+
+    /// <summary>索引在托管堆上的近似驻留字节数。</summary>
+    internal long EstimatedBytes { get; }
 
     /// <summary>当前图的入口点。</summary>
     public int EntryPoint { get; }
@@ -333,6 +337,28 @@ internal sealed class HnswVectorBlockIndex
     /// <returns>反序列化得到的索引。</returns>
     public static HnswVectorBlockIndex ReadFrom(Stream stream)
     {
+        var header = ReadSerializedHeader(stream);
+        var neighbors = ReadNeighbors(stream, header.Count);
+
+        return new HnswVectorBlockIndex(
+            header.BlockIndex,
+            header.Dimension,
+            header.M,
+            header.Ef,
+            header.EntryPoint,
+            header.MaxLevel,
+            neighbors);
+    }
+
+    internal static int ReadBlockIndexAndSkip(Stream stream)
+    {
+        var header = ReadSerializedHeader(stream);
+        SkipNeighbors(stream, header.Count);
+        return header.BlockIndex;
+    }
+
+    private static SerializedHeader ReadSerializedHeader(Stream stream)
+    {
         int blockIndex = ReadInt32(stream);
         int count = ReadInt32(stream);
         int dimension = ReadInt32(stream);
@@ -348,6 +374,11 @@ internal sealed class HnswVectorBlockIndex
         if (count > 0 && (entryPoint < 0 || entryPoint >= count))
             throw new InvalidDataException("HNSW sidecar 的 entryPoint 越界。");
 
+        return new SerializedHeader(blockIndex, count, dimension, m, ef, maxLevel, entryPoint);
+    }
+
+    private static int[][][] ReadNeighbors(Stream stream, int count)
+    {
         var neighbors = new int[count][][];
         for (int node = 0; node < count; node++)
         {
@@ -375,7 +406,45 @@ internal sealed class HnswVectorBlockIndex
             }
         }
 
-        return new HnswVectorBlockIndex(blockIndex, dimension, m, ef, entryPoint, maxLevel, neighbors);
+        return neighbors;
+    }
+
+    private static void SkipNeighbors(Stream stream, int count)
+    {
+        for (int node = 0; node < count; node++)
+        {
+            int levelCount = ReadInt32(stream);
+            if (levelCount <= 0)
+                throw new InvalidDataException("HNSW sidecar 的 levelCount 必须 > 0。");
+
+            for (int level = 0; level < levelCount; level++)
+            {
+                int neighborCount = ReadInt32(stream);
+                if (neighborCount < 0)
+                    throw new InvalidDataException("HNSW sidecar 的 neighborCount 不能为负。");
+
+                SkipBytes(stream, (long)neighborCount * sizeof(int));
+            }
+        }
+    }
+
+    private static long EstimateBytes(int[][][] neighbors)
+    {
+        const long ObjectBytes = 24L;
+        const long ReferenceBytes = 8L;
+        const long IndexObjectBytes = 64L;
+
+        long bytes = IndexObjectBytes + ObjectBytes + (long)neighbors.Length * ReferenceBytes;
+        for (int node = 0; node < neighbors.Length; node++)
+        {
+            var levels = neighbors[node];
+            bytes += ObjectBytes + (long)levels.Length * ReferenceBytes;
+
+            for (int level = 0; level < levels.Length; level++)
+                bytes += ObjectBytes + (long)levels[level].Length * sizeof(int);
+        }
+
+        return Math.Max(1L, bytes);
     }
 
     private static int GreedySearch(
@@ -771,6 +840,29 @@ internal sealed class HnswVectorBlockIndex
         return BinaryPrimitives.ReadInt32LittleEndian(buf);
     }
 
+    private static void SkipBytes(Stream stream, long byteCount)
+    {
+        if (byteCount <= 0)
+            return;
+
+        if (stream.CanSeek)
+        {
+            long remaining = stream.Length - stream.Position;
+            if (byteCount > remaining)
+                throw new InvalidDataException("HNSW sidecar 文件截断。");
+            stream.Seek(byteCount, SeekOrigin.Current);
+            return;
+        }
+
+        Span<byte> buf = stackalloc byte[256];
+        while (byteCount > 0)
+        {
+            int take = (int)Math.Min(buf.Length, byteCount);
+            FillBuffer(stream, buf[..take]);
+            byteCount -= take;
+        }
+    }
+
     private static void FillBuffer(Stream stream, Span<byte> buffer)
     {
         int readTotal = 0;
@@ -782,6 +874,15 @@ internal sealed class HnswVectorBlockIndex
             readTotal += read;
         }
     }
+
+    private readonly record struct SerializedHeader(
+        int BlockIndex,
+        int Count,
+        int Dimension,
+        int M,
+        int Ef,
+        int MaxLevel,
+        int EntryPoint);
 
     private readonly record struct NeighborCandidate(int Node, double Distance);
 }

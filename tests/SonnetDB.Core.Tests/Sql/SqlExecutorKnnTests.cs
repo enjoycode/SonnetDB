@@ -2,6 +2,7 @@ using SonnetDB.Engine;
 using SonnetDB.Query;
 using SonnetDB.Sql;
 using SonnetDB.Sql.Execution;
+using SonnetDB.Storage.Segments;
 using Xunit;
 
 namespace SonnetDB.Core.Tests.Sql;
@@ -206,6 +207,46 @@ public sealed class SqlExecutorKnnTests : IDisposable
         Assert.Single(result.Rows);
         Assert.Equal(3000L, (long)result.Rows[0][0]!);
         Assert.Equal("c", result.Rows[0][2]);
+    }
+
+    [Fact]
+    public void Knn_WithLazyVectorSidecarCache_ReturnsSameRowsWhenCacheDisabled()
+    {
+        using (var db = OpenDbWithHnsw())
+        {
+            SqlExecutor.Execute(db, "INSERT INTO docs (source, embedding, time) VALUES " +
+                "('a', [1, 0, 0], 1000), " +
+                "('b', [0.95, 0.05, 0], 2000), " +
+                "('c', [0.8, 0.2, 0], 3000), " +
+                "('d', [0, 1, 0], 4000), " +
+                "('e', [-1, 0, 0], 5000)");
+            Assert.NotNull(db.FlushNow());
+        }
+
+        List<(long Ts, string Source)> uncachedRows;
+        using (var uncached = Tsdb.Open(new TsdbOptions
+        {
+            RootDirectory = _root,
+            SegmentReaderOptions = new SegmentReaderOptions { VectorIndexCacheMaxBytes = 0 },
+        }))
+        {
+            var result = Select(uncached, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 3)");
+            uncachedRows = result.Rows
+                .Select(row => ((long)row[0]!, (string)row[2]!))
+                .ToList();
+        }
+
+        using var cached = Tsdb.Open(new TsdbOptions
+        {
+            RootDirectory = _root,
+            SegmentReaderOptions = new SegmentReaderOptions { VectorIndexCacheMaxBytes = 1024 * 1024 },
+        });
+        var cachedResult = Select(cached, "SELECT * FROM knn(docs, embedding, [1, 0, 0], 3)");
+        var cachedRows = cachedResult.Rows
+            .Select(row => ((long)row[0]!, (string)row[2]!))
+            .ToList();
+
+        Assert.Equal(uncachedRows, cachedRows);
     }
 
     [Fact]

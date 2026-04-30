@@ -1,4 +1,5 @@
 ﻿using SonnetDB.Engine;
+using SonnetDB.Catalog;
 using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Query;
@@ -208,5 +209,80 @@ public sealed class QueryEngineDeleteTests : IDisposable
         Assert.Equal(10, points.Count);
         Assert.All(points, p => Assert.True(p.Timestamp >= 50));
     }
-}
 
+    [Fact]
+    public void PointQuery_WithTombstoneBoundaries_LimitAppliedAfterInclusiveFilter()
+    {
+        using var db = Tsdb.Open(MakeOptions());
+
+        for (int i = 0; i < 10; i++)
+            db.Write(MakePoint(i, i));
+
+        var entry = db.Catalog.Snapshot().First();
+        ulong seriesId = entry.Id;
+
+        db.Delete(seriesId, "usage", 2L, 4L);
+
+        var q = new PointQuery(seriesId, "usage", TimeRange.All, Limit: 3);
+        var points = db.Query.Execute(q).ToArray();
+
+        Assert.Equal([0L, 1L, 5L], points.Select(static p => p.Timestamp).ToArray());
+    }
+
+    [Fact]
+    public void PointQuery_WithNonOverlappingTombstones_AllocationCloseToNoTombstones()
+    {
+        var memTable = new MemTable();
+        for (int i = 0; i < 64; i++)
+            memTable.Append(1UL, i, "usage", FieldValue.FromDouble(i), i + 1L);
+
+        using var segments = SegmentManager.Open(_tempDir);
+        var catalog = new SeriesCatalog();
+        var noTombstoneEngine = new QueryEngine(memTable, segments, catalog);
+        var tombstones = new TombstoneTable();
+        tombstones.Add(new Tombstone(1UL, "usage", 10_000L, 20_000L, CreatedLsn: 1L));
+        var tombstoneEngine = new QueryEngine(memTable, segments, catalog, tombstones);
+        var query = new PointQuery(1UL, "usage", new TimeRange(0L, 63L));
+
+        Assert.Equal(64, Count(noTombstoneEngine, query));
+        Assert.Equal(64, Count(tombstoneEngine, query));
+
+        const int Iterations = 256;
+        long noTombstoneAllocated = MeasureAllocatedBytes(() =>
+        {
+            for (int i = 0; i < Iterations; i++)
+                Assert.Equal(64, Count(noTombstoneEngine, query));
+        });
+        long tombstoneAllocated = MeasureAllocatedBytes(() =>
+        {
+            for (int i = 0; i < Iterations; i++)
+                Assert.Equal(64, Count(tombstoneEngine, query));
+        });
+
+        long extra = tombstoneAllocated - noTombstoneAllocated;
+        Assert.True(
+            extra < 64 * 1024,
+            $"Non-overlapping tombstones should not add per-point filter allocations. " +
+            $"NoTombstone={noTombstoneAllocated}, Tombstone={tombstoneAllocated}, Extra={extra}.");
+    }
+
+    private static int Count(QueryEngine engine, PointQuery query)
+    {
+        int count = 0;
+        foreach (var _ in engine.Execute(query))
+            count++;
+        return count;
+    }
+
+    private static long MeasureAllocatedBytes(Action action)
+    {
+        action();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        action();
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+}

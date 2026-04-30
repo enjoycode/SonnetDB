@@ -21,6 +21,12 @@ public sealed class SegmentReaderOptions
     /// </summary>
     public long DecodeBlockCacheMaxBytes { get; init; } = 16L * 1024L * 1024L;
 
+    /// <summary>
+    /// 进程内 HNSW vector sidecar 索引缓存的最大字节数；小于等于 0 表示不缓存。
+    /// SegmentReader.Open 不会加载 sidecar，首次 <c>TryGetVectorIndex</c> 时按需读取，缓存以 LRU 策略淘汰。
+    /// </summary>
+    public long VectorIndexCacheMaxBytes { get; init; } = 16L * 1024L * 1024L;
+
     /// <summary>使用默认选项（两项校验均启用）的共享实例。</summary>
     public static SegmentReaderOptions Default { get; } = new();
 }

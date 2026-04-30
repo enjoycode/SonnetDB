@@ -267,8 +267,13 @@ public sealed class SegmentCompactorTests : IDisposable
 
         using var merged = SegmentReader.Open(outPath, _readerOpts);
         var block = Assert.Single(merged.Blocks);
+        Assert.False(merged.VectorIndexOffsetsLoaded);
+        Assert.Equal(0, merged.VectorIndexCacheEntryCountForSegment);
+
         Assert.True(merged.TryGetVectorIndex(block, out var vectorIndex));
         Assert.Equal(block.Count, vectorIndex.Count);
+        Assert.True(merged.VectorIndexOffsetsLoaded);
+        Assert.Equal(1, merged.VectorIndexCacheEntryCountForSegment);
 
         var data = merged.ReadBlock(block);
         var timestamps = BlockDecoder.DecodeTimestamps(block, data.TimestampPayload);

@@ -152,6 +152,91 @@ public sealed class VectorSegmentTests : IDisposable
         Assert.Equal(3, vectorIndex.Dimension);
     }
 
+    [Fact]
+    public void SegmentReader_Open_WithHnswSidecar_DoesNotLoadVectorIndexUntilTryGet()
+    {
+        ulong seriesId = 5252UL;
+        const string fieldName = "embedding";
+
+        var mt = new MemTable();
+        long lsn = 1L;
+        for (int i = 0; i < 10; i++)
+            mt.Append(seriesId, 2_000L + i, fieldName, FieldValue.FromVector(new[] { (float)i, 1f, 0f }), lsn++);
+
+        string path = Path.Combine(_tempDir, "vector-index-lazy.SDBSEG");
+        var vectorIndexes = new Dictionary<SeriesFieldKey, VectorIndexDefinition>
+        {
+            [new SeriesFieldKey(seriesId, fieldName)] = VectorIndexDefinition.CreateHnsw(4, 8),
+        };
+
+        var writer = new SegmentWriter(new SegmentWriterOptions { FsyncOnCommit = false });
+        writer.WriteFrom(mt, segmentId: 8L, path, vectorIndexes);
+
+        using var reader = SegmentReader.Open(path, new SegmentReaderOptions
+        {
+            VectorIndexCacheMaxBytes = 1024 * 1024,
+        });
+
+        Assert.True(File.Exists(TsdbPaths.VectorIndexPathForSegment(path)));
+        Assert.False(reader.VectorIndexOffsetsLoaded);
+        Assert.Equal(0, reader.VectorIndexCacheEntryCountForSegment);
+        Assert.Equal(0L, reader.VectorIndexCacheCurrentBytesForSegment);
+
+        var block = Assert.Single(reader.FindBySeries(seriesId));
+        Assert.True(reader.TryGetVectorIndex(block, out var vectorIndex));
+
+        Assert.True(reader.VectorIndexOffsetsLoaded);
+        Assert.Equal(block.Index, vectorIndex.BlockIndex);
+        Assert.Equal(1, reader.VectorIndexCacheEntryCountForSegment);
+        Assert.True(reader.VectorIndexCacheCurrentBytesForSegment > 0);
+    }
+
+    [Fact]
+    public void TryGetVectorIndex_WithManyBlocks_EvictsWithinMemoryBudget()
+    {
+        const string fieldName = "embedding";
+        const long BudgetBytes = 8192L;
+
+        var mt = new MemTable();
+        var vectorIndexes = new Dictionary<SeriesFieldKey, VectorIndexDefinition>();
+        long lsn = 1L;
+        for (int series = 0; series < 12; series++)
+        {
+            ulong seriesId = (ulong)(10_000 + series);
+            vectorIndexes[new SeriesFieldKey(seriesId, fieldName)] = VectorIndexDefinition.CreateHnsw(4, 8);
+            for (int point = 0; point < 24; point++)
+            {
+                mt.Append(
+                    seriesId,
+                    3_000L + point,
+                    fieldName,
+                    FieldValue.FromVector(new[] { (float)series, (float)point, 1f }),
+                    lsn++);
+            }
+        }
+
+        string path = Path.Combine(_tempDir, "vector-index-budget.SDBSEG");
+        var writer = new SegmentWriter(new SegmentWriterOptions { FsyncOnCommit = false });
+        writer.WriteFrom(mt, segmentId: 9L, path, vectorIndexes);
+
+        using var reader = SegmentReader.Open(path, new SegmentReaderOptions
+        {
+            VectorIndexCacheMaxBytes = BudgetBytes,
+        });
+
+        foreach (var block in reader.Blocks)
+        {
+            Assert.True(reader.TryGetVectorIndex(block, out _));
+            Assert.True(
+                reader.VectorIndexCacheCurrentBytesForSegment <= BudgetBytes,
+                $"Vector index cache exceeded budget: {reader.VectorIndexCacheCurrentBytesForSegment} > {BudgetBytes}.");
+        }
+
+        Assert.True(reader.VectorIndexCacheEntryCountForSegment > 0);
+        Assert.True(reader.VectorIndexCacheEntryCountForSegment < reader.BlockCount);
+        Assert.True(reader.VectorIndexCacheCurrentBytesForSegment <= BudgetBytes);
+    }
+
     // ── Segment 文件头：版本号升级到 v3 + v2 只读兼容 ──────────────────────
 
     [Fact]

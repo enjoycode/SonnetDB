@@ -27,13 +27,19 @@ namespace SonnetDB.Storage.Segments;
 /// </summary>
 public sealed class SegmentReader : IDisposable
 {
+    private static readonly HnswVectorIndexCache SharedVectorIndexCache = new();
+    private static readonly IReadOnlyDictionary<int, long> EmptyVectorIndexOffsets = new Dictionary<int, long>();
+
     private byte[]? _bytes;
     private readonly SegmentReaderOptions _options;
     private readonly BlockDescriptor[] _blocks;
     private readonly FrozenDictionary<ulong, BlockDescriptor[]> _blocksBySeries;
     private readonly BlockTimeRangeIndex _blocksByTimeRange;
-    private readonly IReadOnlyDictionary<int, HnswVectorBlockIndex> _vectorIndexesByBlock;
     private readonly BlockDecodeCache? _decodeCache;
+    private readonly HnswVectorIndexCache? _vectorIndexCache;
+    private readonly object _vectorIndexLoadLock = new();
+    private IReadOnlyDictionary<int, long>? _vectorIndexOffsetsByBlock;
+    private volatile bool _vectorIndexOffsetsLoaded;
 
     /// <summary>段文件路径。</summary>
     public string Path { get; }
@@ -123,7 +129,6 @@ public sealed class SegmentReader : IDisposable
         BlockDescriptor[] blocks,
         FrozenDictionary<ulong, BlockDescriptor[]> blocksBySeries,
         BlockTimeRangeIndex blocksByTimeRange,
-        IReadOnlyDictionary<int, HnswVectorBlockIndex> vectorIndexesByBlock,
         SegmentReaderOptions options)
     {
         Path = path;
@@ -133,12 +138,15 @@ public sealed class SegmentReader : IDisposable
         _blocks = blocks;
         _blocksBySeries = blocksBySeries;
         _blocksByTimeRange = blocksByTimeRange;
-        _vectorIndexesByBlock = vectorIndexesByBlock;
         FileLength = bytes.Length;
         _options = options;
         _decodeCache = options.DecodeBlockCacheMaxBytes > 0
             ? new BlockDecodeCache(options.DecodeBlockCacheMaxBytes)
             : null;
+        _vectorIndexCache = options.VectorIndexCacheMaxBytes > 0
+            ? SharedVectorIndexCache
+            : null;
+        _vectorIndexCache?.TrimToBudget(options.VectorIndexCacheMaxBytes);
 
         long minTs = long.MaxValue;
         long maxTs = long.MinValue;
@@ -313,10 +321,9 @@ public sealed class SegmentReader : IDisposable
             };
         }
 
-        var vectorIndexes = SegmentVectorIndexFile.TryLoad(path, blocks);
         var blocksBySeries = BuildBlocksBySeriesIndex(blocks);
         var blocksByTimeRange = BlockTimeRangeIndex.Build(blocks);
-        return new SegmentReader(path, bytes, header, footer, blocks, blocksBySeries, blocksByTimeRange, vectorIndexes, options);
+        return new SegmentReader(path, bytes, header, footer, blocks, blocksBySeries, blocksByTimeRange, options);
     }
 
     /// <summary>
@@ -479,7 +486,49 @@ public sealed class SegmentReader : IDisposable
     /// <param name="index">命中时返回的索引实例。</param>
     /// <returns>存在索引返回 true，否则返回 false。</returns>
     internal bool TryGetVectorIndex(in BlockDescriptor descriptor, out HnswVectorBlockIndex index)
-        => _vectorIndexesByBlock.TryGetValue(descriptor.Index, out index!);
+    {
+        ThrowIfDisposed();
+
+        index = null!;
+        if (descriptor.FieldType != FieldType.Vector
+            || descriptor.Index < 0
+            || descriptor.Index >= _blocks.Length)
+        {
+            return false;
+        }
+
+        var key = CreateVectorIndexCacheKey(descriptor);
+        if (_vectorIndexCache is not null && _vectorIndexCache.TryGet(key, out index))
+            return true;
+
+        lock (_vectorIndexLoadLock)
+        {
+            if (_vectorIndexCache is not null && _vectorIndexCache.TryGet(key, out index))
+                return true;
+
+            var offsets = EnsureVectorIndexOffsetsLoaded();
+            if (!offsets.TryGetValue(descriptor.Index, out long offset))
+                return false;
+
+            if (!SegmentVectorIndexFile.TryLoadBlockAt(
+                Path,
+                offset,
+                _blocks,
+                descriptor.Index,
+                out var loaded))
+            {
+                return false;
+            }
+
+            _vectorIndexCache?.TryAdd(
+                key,
+                loaded,
+                loaded.EstimatedBytes,
+                _options.VectorIndexCacheMaxBytes);
+            index = loaded;
+            return true;
+        }
+    }
 
     /// <summary>
     /// 释放内部 <c>byte[]</c> 引用以便 GC 回收。调用后不可再调用其他方法。
@@ -488,6 +537,7 @@ public sealed class SegmentReader : IDisposable
     {
         _bytes = null;
         _decodeCache?.Clear();
+        _vectorIndexCache?.RemoveSegment(Header.SegmentId);
     }
 
     internal long DecodeCacheHitCount => _decodeCache?.HitCount ?? 0L;
@@ -497,6 +547,22 @@ public sealed class SegmentReader : IDisposable
     internal long DecodeCacheCurrentBytes => _decodeCache?.CurrentBytes ?? 0L;
 
     internal int DecodeCacheEntryCount => _decodeCache?.Count ?? 0;
+
+    internal long VectorIndexCacheHitCount => _vectorIndexCache?.HitCount ?? 0L;
+
+    internal long VectorIndexCacheMissCount => _vectorIndexCache?.MissCount ?? 0L;
+
+    internal long VectorIndexCacheCurrentBytes => _vectorIndexCache?.CurrentBytes ?? 0L;
+
+    internal int VectorIndexCacheEntryCount => _vectorIndexCache?.Count ?? 0;
+
+    internal long VectorIndexCacheCurrentBytesForSegment
+        => _vectorIndexCache?.GetSegmentBytes(Header.SegmentId) ?? 0L;
+
+    internal int VectorIndexCacheEntryCountForSegment
+        => _vectorIndexCache?.GetSegmentCount(Header.SegmentId) ?? 0;
+
+    internal bool VectorIndexOffsetsLoaded => _vectorIndexOffsetsLoaded;
 
     // ── 受保护虚方法（供测试或未来 mmap 派生类替换） ──────────────────────────
 
@@ -531,6 +597,26 @@ public sealed class SegmentReader : IDisposable
 
     private BlockDecodeCacheKey CreateDecodeCacheKey(in BlockDescriptor descriptor)
         => new(Header.SegmentId, descriptor.Index, descriptor.Crc32);
+
+    private HnswVectorIndexCacheKey CreateVectorIndexCacheKey(in BlockDescriptor descriptor)
+        => new(Header.SegmentId, descriptor.Index, descriptor.Crc32);
+
+    private IReadOnlyDictionary<int, long> EnsureVectorIndexOffsetsLoaded()
+    {
+        if (_vectorIndexOffsetsLoaded)
+            return _vectorIndexOffsetsByBlock ?? EmptyVectorIndexOffsets;
+
+        lock (_vectorIndexLoadLock)
+        {
+            if (!_vectorIndexOffsetsLoaded)
+            {
+                _vectorIndexOffsetsByBlock = SegmentVectorIndexFile.TryLoadOffsets(Path, _blocks);
+                _vectorIndexOffsetsLoaded = true;
+            }
+
+            return _vectorIndexOffsetsByBlock ?? EmptyVectorIndexOffsets;
+        }
+    }
 
     private static long EstimateDecodedBlockBytes(in BlockDescriptor descriptor)
     {

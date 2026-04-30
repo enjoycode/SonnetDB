@@ -35,6 +35,8 @@
 - **PR #77 — 地理空间基准 + 文档完善**：新增 `GeoQueryBenchmark`，覆盖 `100k` 默认轨迹点和可选 `1M` 档位下的 `geo_within`、`geo_bbox`、`trajectory_length` 与 `GEOPOINT` range scan；README 与 `docs/geo-spatial.md` 补齐地理空间功能矩阵、Web Admin / SQL Console 地图用法、基准运行方式和车辆追踪 / 户外运动 / IoT 地理围栏端到端示例。
 
 ### Changed
+- **SegmentReader HNSW vector sidecar 懒加载**：`SegmentReader.Open` 不再 eager 反序列化 `.SDBVIDX` 中全部 HNSW 图，改为 `TryGetVectorIndex` 首次命中 VECTOR block 时按需读取，并通过进程内共享 LRU 预算 `SegmentReaderOptions.VectorIndexCacheMaxBytes` 控制常驻引用；冷段打开后不占用 HNSW 图内存，reader Dispose 会移除本段缓存。补充懒加载、预算淘汰、KNN 结果一致性与 compaction 后 sidecar 可加载测试。
+- **QueryEngine tombstone 过滤热路径优化**：`Execute(PointQuery)` 不再通过 LINQ `Where` 过滤墓碑，改为手写迭代器循环，并在查询前预筛与时间窗不相交的 tombstone；保持结果顺序、Limit 过滤后计数和墓碑闭区间覆盖语义不变，补充边界/Limit 与分配回归测试。
 - **SegmentReader block 解码缓存**：`SegmentReader` 新增按 `(SegmentId, BlockIndex, Crc32)` 标识的已解码 `DataPoint[]` LRU 缓存，默认单 reader 预算 16 MB，可通过 `SegmentReaderOptions.DecodeBlockCacheMaxBytes` 调整或禁用；`QueryEngine` 重复查询同一落盘 block 时复用解码结果，缓存受内存上限约束并在 reader Dispose 时清空引用。补充重复查询命中与预算淘汰测试。
 - **QueryEngine reader map 缓存**：`QueryEngine` 现在通过 `SegmentManager` 的绑定快照获取 `Index + Readers`，并在快照未变化时复用 `SegmentId -> SegmentReader` 映射，避免每次查询重复构建字典；`AddSegment` / `SwapSegments` / `Dispose` 发布新快照后会自动失效旧缓存，compaction swap 会延迟释放仍被查询快照租约持有的旧 reader，避免并发查询使用已 Dispose reader。
 - **SegmentReader 时间范围索引优化**：`SegmentReader.Open` 现在会构建仅驻留内存的 block 时间范围索引，`FindByTimeRange` 通过 MinTimestamp/MaxTimestamp 双排序数组二分并扫描较小候选集，避免按时间范围查找时线性遍历全部 block；保持 block 区间重叠、边界 inclusive 与段内 `BlockDescriptor` 顺序稳定，补充乱序 block、多重重叠边界和大 block 列表性能回归测试。
