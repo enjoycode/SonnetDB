@@ -149,7 +149,12 @@ public sealed class Tsdb : IDisposable
         Segments = segmentManager;
         _flushCoordinator = new FlushCoordinator(options);
         _walGroupCommit = new WalGroupCommitCoordinator(options.WalGroupCommit);
-        Query = new QueryEngine(memTable, segmentManager, catalog, Tombstones);
+        Query = new QueryEngine(
+            memTable,
+            segmentManager,
+            catalog,
+            Tombstones,
+            options.UseSimdNumericAggregates);
         Functions = new UserFunctionRegistry(options.AllowUserFunctions);
         _checkpointLsn = checkpointLsn;
     }

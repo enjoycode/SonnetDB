@@ -34,6 +34,12 @@ public sealed class TsdbOptions
     /// <summary>段读取选项（默认两项校验均启用）。</summary>
     public SegmentReaderOptions SegmentReaderOptions { get; init; } = SegmentReaderOptions.Default;
 
+    /// <summary>
+    /// 是否允许数值聚合在适合的落盘 block 范围上使用 <c>System.Numerics.Vector&lt;T&gt;</c> SIMD 快路径。
+    /// 默认开启；不支持硬件加速、遇到 NaN 或不适合的编码时会自动回退到标量实现。
+    /// </summary>
+    public bool UseSimdNumericAggregates { get; init; } = true;
+
     /// <summary>后台 Flush 线程选项（默认启用，轮询间隔 1s，关闭超时 30s）。</summary>
     public BackgroundFlushOptions BackgroundFlush { get; init; } = BackgroundFlushOptions.Default;
 

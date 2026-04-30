@@ -27,6 +27,7 @@ public sealed class QueryEngine
     private readonly SegmentManager _segments;
     private readonly SeriesCatalog _catalog;
     private readonly TombstoneTable? _tombstones;
+    private readonly bool _useSimdNumericAggregates;
     private ReaderMapCache? _readerMapCache;
 
     /// <summary>
@@ -38,6 +39,16 @@ public sealed class QueryEngine
     /// <param name="tombstones">可选的墓碑集合，用于查询时过滤被删除的数据点；为 null 时不过滤。</param>
     /// <exception cref="ArgumentNullException"><paramref name="memTable"/>、<paramref name="segments"/> 或 <paramref name="catalog"/> 为 null 时抛出。</exception>
     public QueryEngine(MemTable memTable, SegmentManager segments, SeriesCatalog catalog, TombstoneTable? tombstones = null)
+        : this(memTable, segments, catalog, tombstones, useSimdNumericAggregates: true)
+    {
+    }
+
+    internal QueryEngine(
+        MemTable memTable,
+        SegmentManager segments,
+        SeriesCatalog catalog,
+        TombstoneTable? tombstones,
+        bool useSimdNumericAggregates)
     {
         ArgumentNullException.ThrowIfNull(memTable);
         ArgumentNullException.ThrowIfNull(segments);
@@ -47,6 +58,7 @@ public sealed class QueryEngine
         _segments = segments;
         _catalog = catalog;
         _tombstones = tombstones;
+        _useSimdNumericAggregates = useSimdNumericAggregates;
     }
 
     /// <summary>
@@ -392,7 +404,14 @@ public sealed class QueryEngine
                 AddDecodedPointsToGlobal(memSlice, ref state, useObservedStart);
             }
             AddSegmentBlocksToGlobal(
-                candidates, readers, memFieldType, query.Range, query.Aggregator, ref state, useObservedStart);
+                candidates,
+                readers,
+                memFieldType,
+                query.Range,
+                query.Aggregator,
+                _useSimdNumericAggregates,
+                ref state,
+                useObservedStart);
 
             if (!state.HasData)
                 return Array.Empty<AggregateBucket>();
@@ -670,12 +689,51 @@ public sealed class QueryEngine
         return AddDecodedPointsToAccumulator(points.AsSpan(), accumulator);
     }
 
+    private static bool TryAddContiguousRangeAggregate(
+        FieldType fieldType,
+        ReadOnlySpan<byte> valPayload,
+        int start,
+        int end,
+        long firstTimestamp,
+        Aggregator aggregator,
+        bool useSimdNumericAggregates,
+        ref AggregateState state,
+        bool useObservedStart)
+    {
+        if (aggregator == Aggregator.Count)
+        {
+            state.AddCountRange(firstTimestamp, end - start, useObservedStart);
+            return true;
+        }
+
+        if (!useSimdNumericAggregates
+            || aggregator is not (Aggregator.Sum or Aggregator.Avg or Aggregator.Min or Aggregator.Max)
+            || fieldType is not (FieldType.Float64 or FieldType.Int64))
+        {
+            return false;
+        }
+
+        var aggregate = NumericAggregateVector.Aggregate(
+            fieldType,
+            valPayload,
+            start,
+            end,
+            useSimd: true);
+
+        if (aggregate.Count == 0)
+            return true;
+
+        state.AddAggregateRange(firstTimestamp, aggregate, useObservedStart);
+        return true;
+    }
+
     private static void AddSegmentBlocksToGlobal(
         IReadOnlyList<SegmentBlockRef> candidates,
         Dictionary<long, SegmentReader> readers,
         FieldType? memFieldType,
         TimeRange range,
         Aggregator aggregator,
+        bool useSimdNumericAggregates,
         ref AggregateState state,
         bool useObservedStart)
     {
@@ -698,6 +756,8 @@ public sealed class QueryEngine
                 data.TimestampPayload,
                 data.ValuePayload,
                 range,
+                aggregator,
+                useSimdNumericAggregates,
                 ref state,
                 useObservedStart);
         }
@@ -750,6 +810,8 @@ public sealed class QueryEngine
         ReadOnlySpan<byte> tsPayload,
         ReadOnlySpan<byte> valPayload,
         TimeRange range,
+        Aggregator aggregator,
+        bool useSimdNumericAggregates,
         ref AggregateState state,
         bool useObservedStart)
     {
@@ -761,6 +823,21 @@ public sealed class QueryEngine
                 return;
 
             ThrowIfString(descriptor.FieldType);
+            long firstTimestamp = ReadRawTimestamp(tsPayload, start);
+            if (TryAddContiguousRangeAggregate(
+                    descriptor.FieldType,
+                    valPayload,
+                    start,
+                    end,
+                    firstTimestamp,
+                    aggregator,
+                    useSimdNumericAggregates,
+                    ref state,
+                    useObservedStart))
+            {
+                return;
+            }
+
             for (int i = start; i < end; i++)
             {
                 long timestamp = ReadRawTimestamp(tsPayload, i);
@@ -775,7 +852,15 @@ public sealed class QueryEngine
         // 避免 BlockDecoder.DecodeRange 分配 DataPoint[]。
         if (CanFuseDeltaTimestampInline(descriptor))
         {
-            FuseDeltaBlockToGlobal(descriptor, tsPayload, valPayload, range, ref state, useObservedStart);
+            FuseDeltaBlockToGlobal(
+                descriptor,
+                tsPayload,
+                valPayload,
+                range,
+                aggregator,
+                useSimdNumericAggregates,
+                ref state,
+                useObservedStart);
             return;
         }
 
@@ -849,6 +934,8 @@ public sealed class QueryEngine
         ReadOnlySpan<byte> tsPayload,
         ReadOnlySpan<byte> valPayload,
         TimeRange range,
+        Aggregator aggregator,
+        bool useSimdNumericAggregates,
         ref AggregateState state,
         bool useObservedStart)
     {
@@ -866,6 +953,20 @@ public sealed class QueryEngine
             if (start >= end) return;
 
             FieldType fieldType = descriptor.FieldType;
+            if (TryAddContiguousRangeAggregate(
+                    fieldType,
+                    valPayload,
+                    start,
+                    end,
+                    timestamps[start],
+                    aggregator,
+                    useSimdNumericAggregates,
+                    ref state,
+                    useObservedStart))
+            {
+                return;
+            }
+
             for (int i = start; i < end; i++)
             {
                 double value = ReadRawNumericValue(fieldType, valPayload, i);
