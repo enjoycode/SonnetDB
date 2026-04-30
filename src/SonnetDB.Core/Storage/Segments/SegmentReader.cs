@@ -12,15 +12,15 @@ namespace SonnetDB.Storage.Segments;
 /// <summary>
 /// 不可变 Segment 文件的只读访问器。
 /// <para>
-/// Open 时一次性加载并解析索引；Block payload 解码按需进行，零拷贝优先。
-/// 线程安全（实例共享只读 <c>byte[]</c>）。
+/// Open 时解析索引；Block payload 解码按需进行。默认路径保留整段 <c>byte[]</c> 读取，
+/// 可通过 <see cref="SegmentReaderOptions.UseMemoryMappedFileForLargeSegments"/> 对大段启用 safe-only mmap 读取路径。
 /// </para>
 /// <para>
-/// v1 选择 <see cref="File.ReadAllBytes"/> 整段加载策略，原因：
+/// 默认仍选择 <see cref="File.ReadAllBytes"/> 整段加载策略，原因：
 /// <list type="bullet">
 ///   <item><description><c>.SDBSEG</c> 体量 v1 通常 &lt; 16 MB（受 MemTableFlushPolicy.MaxBytes 限制）。</description></item>
-///   <item><description>完全 Safe-only，无需 <c>MemoryMappedFile</c> + unsafe 指针。</description></item>
-///   <item><description>后续 PR 可加 <c>MemoryMappedSegmentReader</c> 走 SafeMemoryMappedViewHandle 路径，本 PR 不做。</description></item>
+///   <item><description><c>byte[]</c> reader 可为 <see cref="ReadBlock"/> 提供零拷贝 span。</description></item>
+///   <item><description>mmap 路径完全通过 <c>MemoryMappedViewAccessor</c> 安全复制，不使用 unsafe 指针。</description></item>
 /// </list>
 /// 注意：v1 仅支持 little-endian 主机字节序。
 /// </para>
@@ -30,7 +30,7 @@ public sealed class SegmentReader : IDisposable
     private static readonly HnswVectorIndexCache SharedVectorIndexCache = new();
     private static readonly IReadOnlyDictionary<int, long> EmptyVectorIndexOffsets = new Dictionary<int, long>();
 
-    private byte[]? _bytes;
+    private SegmentByteSource? _source;
     private readonly SegmentReaderOptions _options;
     private readonly BlockDescriptor[] _blocks;
     private readonly FrozenDictionary<ulong, BlockDescriptor[]> _blocksBySeries;
@@ -123,7 +123,7 @@ public sealed class SegmentReader : IDisposable
 
     private SegmentReader(
         string path,
-        byte[] bytes,
+        SegmentByteSource source,
         SegmentHeader header,
         SegmentFooter footer,
         BlockDescriptor[] blocks,
@@ -132,13 +132,13 @@ public sealed class SegmentReader : IDisposable
         SegmentReaderOptions options)
     {
         Path = path;
-        _bytes = bytes;
+        _source = source;
         Header = header;
         Footer = footer;
         _blocks = blocks;
         _blocksBySeries = blocksBySeries;
         _blocksByTimeRange = blocksByTimeRange;
-        FileLength = bytes.Length;
+        FileLength = source.Length;
         _options = options;
         _decodeCache = options.DecodeBlockCacheMaxBytes > 0
             ? new BlockDecodeCache(options.DecodeBlockCacheMaxBytes)
@@ -173,15 +173,32 @@ public sealed class SegmentReader : IDisposable
         ArgumentNullException.ThrowIfNull(path);
         options ??= SegmentReaderOptions.Default;
 
-        byte[] bytes = LoadAll(path);
+        var source = OpenByteSource(path, options);
+        try
+        {
+            return OpenCore(path, source, options);
+        }
+        catch
+        {
+            source.Dispose();
+            throw;
+        }
+    }
+
+    private static SegmentReader OpenCore(
+        string path,
+        SegmentByteSource source,
+        SegmentReaderOptions options)
+    {
+        long length = source.Length;
         int minLen = FormatSizes.SegmentHeaderSize + FormatSizes.SegmentFooterSize;
 
-        if (bytes.Length < minLen)
+        if (length < minLen)
             throw new SegmentCorruptedException(path, 0,
-                $"文件过短（{bytes.Length} 字节），最小需要 {minLen} 字节。");
+                $"文件过短（{length} 字节），最小需要 {minLen} 字节。");
 
         // 读 SegmentHeader（offset 0）
-        var header = MemoryMarshal.Read<SegmentHeader>(bytes.AsSpan(0, FormatSizes.SegmentHeaderSize));
+        var header = MemoryMarshal.Read<SegmentHeader>(source.ReadSpan(0, FormatSizes.SegmentHeaderSize));
 
         if (!header.IsCompatibleForRead())
             throw new SegmentCorruptedException(path, 0,
@@ -198,8 +215,8 @@ public sealed class SegmentReader : IDisposable
                 $"SegmentHeader.HeaderSize={header.HeaderSize} 不等于预期值 {FormatSizes.SegmentHeaderSize}。");
 
         // 读 SegmentFooter（文件末尾 64 字节）
-        int footerStart = bytes.Length - FormatSizes.SegmentFooterSize;
-        var footer = MemoryMarshal.Read<SegmentFooter>(bytes.AsSpan(footerStart, FormatSizes.SegmentFooterSize));
+        long footerStart = length - FormatSizes.SegmentFooterSize;
+        var footer = MemoryMarshal.Read<SegmentFooter>(source.ReadSpan(footerStart, FormatSizes.SegmentFooterSize));
 
         if (!footer.IsCompatibleForRead())
             throw new SegmentCorruptedException(path, footerStart,
@@ -212,9 +229,9 @@ public sealed class SegmentReader : IDisposable
                 $"SegmentFooter 位置不一致：IndexOffset({footer.IndexOffset}) + IndexCount({footer.IndexCount}) * {FormatSizes.BlockIndexEntrySize} = {expectedFooterStart}，但实际 FooterOffset = {footerStart}。");
 
         // 校验 FileLength 字段
-        if (footer.FileLength != bytes.Length)
+        if (footer.FileLength != length)
             throw new SegmentCorruptedException(path, footerStart,
-                $"SegmentFooter.FileLength={footer.FileLength} 与实际文件长度 {bytes.Length} 不一致。");
+                $"SegmentFooter.FileLength={footer.FileLength} 与实际文件长度 {length} 不一致。");
 
         // 校验 IndexEntrySize（必须等于 48）
         long expectedIndexEnd = footer.IndexOffset + (long)footer.IndexCount * FormatSizes.BlockIndexEntrySize;
@@ -223,8 +240,13 @@ public sealed class SegmentReader : IDisposable
                 $"BlockIndexEntry 区域越界：IndexOffset({footer.IndexOffset}) + IndexCount({footer.IndexCount}) * {FormatSizes.BlockIndexEntrySize} = {expectedIndexEnd} > FooterOffset({footerStart})。");
 
         // 读 BlockIndexEntry[]
-        int indexByteLen = footer.IndexCount * FormatSizes.BlockIndexEntrySize;
-        ReadOnlySpan<byte> indexBytes = bytes.AsSpan((int)footer.IndexOffset, indexByteLen);
+        long indexByteLenLong = (long)footer.IndexCount * FormatSizes.BlockIndexEntrySize;
+        if (indexByteLenLong > int.MaxValue)
+            throw new SegmentCorruptedException(path, (long)footer.IndexOffset,
+                $"BlockIndexEntry 区域过大：{indexByteLenLong} 字节，超过单次安全读取上限 {int.MaxValue}。");
+
+        int indexByteLen = (int)indexByteLenLong;
+        ReadOnlySpan<byte> indexBytes = source.ReadSpan(footer.IndexOffset, indexByteLen);
         ReadOnlySpan<BlockIndexEntry> indexEntries = MemoryMarshal.Cast<byte, BlockIndexEntry>(indexBytes);
 
         // 校验 IndexCrc32
@@ -247,11 +269,11 @@ public sealed class SegmentReader : IDisposable
                 ? FormatSizes.BlockHeaderSize
                 : FormatSizes.LegacyBlockHeaderSizeV4;
 
-            if (headerStart + blockHeaderSize > bytes.Length)
+            if (headerStart + blockHeaderSize > length)
                 throw new SegmentCorruptedException(path, headerStart,
                     $"BlockIndexEntry[{i}].FileOffset={headerStart} 指向越界区域。");
 
-            var bh = ReadBlockHeader(bytes.AsSpan((int)headerStart, blockHeaderSize), blockHeaderSize);
+            var bh = ReadBlockHeader(source.ReadSpan(headerStart, blockHeaderSize), blockHeaderSize);
 
             // 校验 BlockHeader 与 IndexEntry 一致性
             if (bh.SeriesId != entry.SeriesId)
@@ -277,13 +299,13 @@ public sealed class SegmentReader : IDisposable
                     $"Block[{i}] BlockLength 不一致：根据 BlockHeader 计算 {expectedBlockLen}，IndexEntry={entry.BlockLength}。");
 
             // 读字段名
-            int fieldNameStart = (int)headerStart + blockHeaderSize;
-            if (fieldNameStart + bh.FieldNameUtf8Length > bytes.Length)
+            long fieldNameStart = headerStart + blockHeaderSize;
+            if (fieldNameStart + bh.FieldNameUtf8Length > length)
                 throw new SegmentCorruptedException(path, fieldNameStart,
                     $"Block[{i}] FieldName 区域越界。");
 
             string fieldName = Encoding.UTF8.GetString(
-                bytes.AsSpan(fieldNameStart, bh.FieldNameUtf8Length));
+                source.ReadSpan(fieldNameStart, bh.FieldNameUtf8Length));
 
             blocks[i] = new BlockDescriptor
             {
@@ -323,7 +345,7 @@ public sealed class SegmentReader : IDisposable
 
         var blocksBySeries = BuildBlocksBySeriesIndex(blocks);
         var blocksByTimeRange = BlockTimeRangeIndex.Build(blocks);
-        return new SegmentReader(path, bytes, header, footer, blocks, blocksBySeries, blocksByTimeRange, options);
+        return new SegmentReader(path, source, header, footer, blocks, blocksBySeries, blocksByTimeRange, options);
     }
 
     /// <summary>
@@ -389,16 +411,16 @@ public sealed class SegmentReader : IDisposable
     {
         ThrowIfDisposed();
 
-        var bytes = _bytes!.AsSpan();
+        var source = _source!;
 
         int headerSize = descriptor.HeaderSize == 0 ? FormatSizes.BlockHeaderSize : descriptor.HeaderSize;
-        int nameOff = (int)descriptor.FileOffset + headerSize;
-        int tsOff = nameOff + descriptor.FieldNameUtf8Length;
-        int valOff = tsOff + descriptor.TimestampPayloadLength;
+        long nameOff = descriptor.FileOffset + headerSize;
+        long tsOff = nameOff + descriptor.FieldNameUtf8Length;
+        long valOff = tsOff + descriptor.TimestampPayloadLength;
 
-        ReadOnlySpan<byte> fieldNameUtf8 = bytes.Slice(nameOff, descriptor.FieldNameUtf8Length);
-        ReadOnlySpan<byte> tsPayload = bytes.Slice(tsOff, descriptor.TimestampPayloadLength);
-        ReadOnlySpan<byte> valPayload = bytes.Slice(valOff, descriptor.ValuePayloadLength);
+        ReadOnlySpan<byte> fieldNameUtf8 = source.ReadSpan(nameOff, descriptor.FieldNameUtf8Length);
+        ReadOnlySpan<byte> tsPayload = source.ReadSpan(tsOff, descriptor.TimestampPayloadLength);
+        ReadOnlySpan<byte> valPayload = source.ReadSpan(valOff, descriptor.ValuePayloadLength);
 
         if (_options.VerifyBlockCrc)
         {
@@ -535,7 +557,8 @@ public sealed class SegmentReader : IDisposable
     /// </summary>
     public void Dispose()
     {
-        _bytes = null;
+        _source?.Dispose();
+        _source = null;
         _decodeCache?.Clear();
         _vectorIndexCache?.RemoveSegment(Header.SegmentId);
     }
@@ -564,6 +587,8 @@ public sealed class SegmentReader : IDisposable
 
     internal bool VectorIndexOffsetsLoaded => _vectorIndexOffsetsLoaded;
 
+    internal bool UsesMemoryMappedStorage => _source?.IsMemoryMapped == true;
+
     // ── 受保护虚方法（供测试或未来 mmap 派生类替换） ──────────────────────────
 
     /// <summary>
@@ -572,6 +597,47 @@ public sealed class SegmentReader : IDisposable
     /// <param name="path">段文件路径。</param>
     /// <returns>文件的全部字节。</returns>
     internal static byte[] LoadAll(string path) => File.ReadAllBytes(path);
+
+    private static SegmentByteSource OpenByteSource(string path, SegmentReaderOptions options)
+    {
+        long fileLength = new FileInfo(path).Length;
+        if (ShouldUseMemoryMappedSource(fileLength, options)
+            && TryOpenMemoryMappedSource(path, fileLength, out var memoryMappedSource))
+        {
+            return memoryMappedSource;
+        }
+
+        return new ByteArraySegmentByteSource(LoadAll(path));
+    }
+
+    private static bool ShouldUseMemoryMappedSource(long fileLength, SegmentReaderOptions options)
+    {
+        if (!options.UseMemoryMappedFileForLargeSegments)
+            return false;
+
+        long threshold = options.MemoryMappedFileThresholdBytes;
+        return threshold <= 0 || fileLength >= threshold;
+    }
+
+    private static bool TryOpenMemoryMappedSource(
+        string path,
+        long fileLength,
+        out SegmentByteSource source)
+    {
+        try
+        {
+            source = MemoryMappedSegmentByteSource.Open(path, fileLength);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or PlatformNotSupportedException)
+        {
+            source = null!;
+            return false;
+        }
+    }
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
 
@@ -817,7 +883,7 @@ public sealed class SegmentReader : IDisposable
 
     private void ThrowIfDisposed()
     {
-        if (_bytes is null)
+        if (_source is null)
             throw new ObjectDisposedException(nameof(SegmentReader));
     }
 

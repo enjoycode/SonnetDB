@@ -27,6 +27,18 @@ public sealed class SegmentReaderOptions
     /// </summary>
     public long VectorIndexCacheMaxBytes { get; init; } = 16L * 1024L * 1024L;
 
+    /// <summary>
+    /// 是否允许对达到阈值的大段文件使用安全的 memory-mapped 读取路径；默认 false，继续使用 <c>byte[]</c> reader。
+    /// mmap 路径不会把整个段文件读入托管堆，读取 block payload 时按需复制所需字节。
+    /// </summary>
+    public bool UseMemoryMappedFileForLargeSegments { get; init; }
+
+    /// <summary>
+    /// 启用 memory-mapped 读取路径的文件大小阈值；小于等于 0 表示只要启用选项就尝试 mmap。
+    /// 若 mmap 打开失败，会自动回退到默认 <c>byte[]</c> reader。
+    /// </summary>
+    public long MemoryMappedFileThresholdBytes { get; init; } = 64L * 1024L * 1024L;
+
     /// <summary>使用默认选项（两项校验均启用）的共享实例。</summary>
     public static SegmentReaderOptions Default { get; } = new();
 }
