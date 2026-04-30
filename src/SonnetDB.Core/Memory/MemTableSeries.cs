@@ -1,6 +1,7 @@
 ﻿using SonnetDB.Model;
 using SonnetDB.Storage.Format;
 using System.Buffers;
+using System.Threading;
 
 namespace SonnetDB.Memory;
 
@@ -18,8 +19,8 @@ public sealed class MemTableSeries
     private long _minTimestamp = long.MaxValue;
     private long _maxTimestamp = long.MinValue;
     private long _estimatedBytes;
-    private ReadOnlyMemory<DataPoint> _snapshotCache;
-    private int _snapshotCacheCount = -1;
+    private long _version;
+    private SnapshotCache? _snapshotCache;
     // 数值字段的运行期增量聚合（Float64/Int64/Boolean），用于范围全覆盖时的查询快路径。
     // 非数值字段始终保持 _hasNumericAggregates = false。
     private bool _hasNumericAggregates;
@@ -195,6 +196,7 @@ public sealed class MemTableSeries
             }
 
             _points.Add(new DataPoint(timestamp, value));
+            _version++;
             InvalidateSnapshotCache();
             return addedBytes;
         }
@@ -223,17 +225,32 @@ public sealed class MemTableSeries
     /// <returns>按时间戳升序排列的数据点只读内存。</returns>
     public ReadOnlyMemory<DataPoint> Snapshot()
     {
+        var cached = Volatile.Read(ref _snapshotCache);
+        if (cached != null && cached.Version == Volatile.Read(ref _version))
+            return cached.Memory;
+
+        long version;
+        DataPoint[] snapshot;
+        bool requiresSort;
         lock (_sync)
         {
+            cached = _snapshotCache;
+            version = _version;
+            if (cached != null && cached.Version == version)
+                return cached.Memory;
+
             int count = _points.Count;
-            if (_snapshotCacheCount == count)
-                return _snapshotCache;
-
             if (count == 0)
-                return CacheSnapshot([]);
+                return PublishSnapshot(version, ReadOnlyMemory<DataPoint>.Empty);
 
-            return CacheSnapshot(_isSorted ? _points.ToArray() : StableSorted());
+            snapshot = _points.ToArray();
+            requiresSort = !_isSorted;
         }
+
+        if (requiresSort)
+            snapshot = StableSorted(snapshot);
+
+        return TryPublishSnapshot(version, WrapSnapshot(snapshot));
     }
 
     /// <summary>
@@ -244,61 +261,101 @@ public sealed class MemTableSeries
     /// <returns>在指定时间范围内的按时间戳升序排列的数据点只读内存。</returns>
     public ReadOnlyMemory<DataPoint> SnapshotRange(long fromInclusive, long toInclusive)
     {
-        var sorted = Snapshot();
-        var span = sorted.Span;
+        var cached = Volatile.Read(ref _snapshotCache);
+        if (cached != null && cached.Version == Volatile.Read(ref _version))
+            return CopyRange(cached.Memory.Span, fromInclusive, toInclusive);
 
-        int start = 0;
-        int end = span.Length;
-
-        // 找到 fromInclusive 的起始位置（binary search）
-        int lo = 0, hi = span.Length - 1;
-        while (lo <= hi)
+        long version;
+        DataPoint[] snapshot;
+        lock (_sync)
         {
-            int mid = lo + (hi - lo) / 2;
-            if (span[mid].Timestamp < fromInclusive)
-                lo = mid + 1;
-            else
-                hi = mid - 1;
-        }
-        start = lo;
+            int count = _points.Count;
+            if (count == 0 || fromInclusive > toInclusive)
+                return ReadOnlyMemory<DataPoint>.Empty;
 
-        // 找到 toInclusive 的结束位置（binary search）
-        lo = start;
-        hi = span.Length - 1;
-        while (lo <= hi)
-        {
-            int mid = lo + (hi - lo) / 2;
-            if (span[mid].Timestamp <= toInclusive)
-                lo = mid + 1;
-            else
-                hi = mid - 1;
-        }
-        end = lo;
+            cached = _snapshotCache;
+            version = _version;
+            if (cached != null && cached.Version == version)
+                return CopyRange(cached.Memory.Span, fromInclusive, toInclusive);
 
-        return sorted.Slice(start, end - start);
+            if (_isSorted)
+                return CopyRange(_points, fromInclusive, toInclusive);
+
+            snapshot = _points.ToArray();
+        }
+
+        var sorted = WrapSnapshot(StableSorted(snapshot));
+        var published = TryPublishSnapshot(version, sorted);
+        return CopyRange(published.Span, fromInclusive, toInclusive);
+    }
+
+    private static ReadOnlyMemory<DataPoint> CopyRange(
+        IReadOnlyList<DataPoint> sorted, long fromInclusive, long toInclusive)
+    {
+        int start = LowerBound(sorted, fromInclusive);
+        int end = UpperBound(sorted, toInclusive, start);
+        int length = end - start;
+        if (length <= 0)
+            return ReadOnlyMemory<DataPoint>.Empty;
+
+        var result = new DataPoint[length];
+        for (int i = 0; i < length; i++)
+            result[i] = sorted[start + i];
+        return WrapSnapshot(result);
+    }
+
+    private static ReadOnlyMemory<DataPoint> CopyRange(
+        ReadOnlySpan<DataPoint> sorted, long fromInclusive, long toInclusive)
+    {
+        int start = LowerBound(sorted, fromInclusive);
+        int end = UpperBound(sorted, toInclusive, start);
+        int length = end - start;
+        if (length <= 0)
+            return ReadOnlyMemory<DataPoint>.Empty;
+
+        var result = new DataPoint[length];
+        sorted.Slice(start, length).CopyTo(result);
+        return WrapSnapshot(result);
     }
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
 
-    private ReadOnlyMemory<DataPoint> CacheSnapshot(DataPoint[] snapshot)
+    private static ReadOnlyMemory<DataPoint> WrapSnapshot(DataPoint[] snapshot)
+        => new SnapshotMemoryManager(snapshot).Memory.Slice(0, snapshot.Length);
+
+    private ReadOnlyMemory<DataPoint> PublishSnapshot(long version, ReadOnlyMemory<DataPoint> memory)
     {
-        _snapshotCache = new SnapshotMemoryManager(snapshot).Memory.Slice(0, snapshot.Length);
-        _snapshotCacheCount = snapshot.Length;
-        return _snapshotCache;
+        var cache = new SnapshotCache(version, memory);
+        Volatile.Write(ref _snapshotCache, cache);
+        return memory;
+    }
+
+    private ReadOnlyMemory<DataPoint> TryPublishSnapshot(long version, ReadOnlyMemory<DataPoint> memory)
+    {
+        lock (_sync)
+        {
+            var cached = _snapshotCache;
+            if (cached != null && cached.Version == version)
+                return cached.Memory;
+
+            if (_version == version)
+                return PublishSnapshot(version, memory);
+
+            return memory;
+        }
     }
 
     private void InvalidateSnapshotCache()
     {
-        _snapshotCache = default;
-        _snapshotCacheCount = -1;
+        Volatile.Write(ref _snapshotCache, null);
     }
 
-    private DataPoint[] StableSorted()
+    private static DataPoint[] StableSorted(DataPoint[] appendOrderSnapshot)
     {
         // 稳定排序：通过 (index, point) 对保证同 timestamp 保留追加顺序
-        var indexed = new (int Index, DataPoint Point)[_points.Count];
-        for (int i = 0; i < _points.Count; i++)
-            indexed[i] = (i, _points[i]);
+        var indexed = new (int Index, DataPoint Point)[appendOrderSnapshot.Length];
+        for (int i = 0; i < appendOrderSnapshot.Length; i++)
+            indexed[i] = (i, appendOrderSnapshot[i]);
 
         Array.Sort(indexed, static (a, b) =>
         {
@@ -311,6 +368,66 @@ public sealed class MemTableSeries
             result[i] = indexed[i].Point;
 
         return result;
+    }
+
+    private static int LowerBound(IReadOnlyList<DataPoint> sorted, long timestamp)
+    {
+        int lo = 0;
+        int hi = sorted.Count;
+        while (lo < hi)
+        {
+            int mid = lo + ((hi - lo) / 2);
+            if (sorted[mid].Timestamp < timestamp)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
+    }
+
+    private static int UpperBound(IReadOnlyList<DataPoint> sorted, long timestamp, int start)
+    {
+        int lo = start;
+        int hi = sorted.Count;
+        while (lo < hi)
+        {
+            int mid = lo + ((hi - lo) / 2);
+            if (sorted[mid].Timestamp <= timestamp)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
+    }
+
+    private static int LowerBound(ReadOnlySpan<DataPoint> sorted, long timestamp)
+    {
+        int lo = 0;
+        int hi = sorted.Length;
+        while (lo < hi)
+        {
+            int mid = lo + ((hi - lo) / 2);
+            if (sorted[mid].Timestamp < timestamp)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
+    }
+
+    private static int UpperBound(ReadOnlySpan<DataPoint> sorted, long timestamp, int start)
+    {
+        int lo = start;
+        int hi = sorted.Length;
+        while (lo < hi)
+        {
+            int mid = lo + ((hi - lo) / 2);
+            if (sorted[mid].Timestamp <= timestamp)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
     }
 
     private sealed class SnapshotMemoryManager : MemoryManager<DataPoint>

@@ -139,6 +139,54 @@ public sealed class MemTableSeriesTests
     }
 
     [Fact]
+    public void SnapshotRange_EmptyRanges_ReturnsEmpty()
+    {
+        var series = new MemTableSeries(MakeKey(), FieldType.Float64);
+
+        series.Append(1000L, FieldValue.FromDouble(1.0));
+        series.Append(2000L, FieldValue.FromDouble(2.0));
+
+        Assert.Equal(0, series.SnapshotRange(0L, 999L).Length);
+        Assert.Equal(0, series.SnapshotRange(1001L, 1999L).Length);
+        Assert.Equal(0, series.SnapshotRange(3000L, 1000L).Length);
+    }
+
+    [Fact]
+    public void SnapshotRange_DuplicateBoundaryTimestamps_IncludesAllMatchingPoints()
+    {
+        var series = new MemTableSeries(MakeKey(), FieldType.Float64);
+
+        series.Append(1000L, FieldValue.FromDouble(1.0));
+        series.Append(2000L, FieldValue.FromDouble(2.0));
+        series.Append(2000L, FieldValue.FromDouble(3.0));
+        series.Append(3000L, FieldValue.FromDouble(4.0));
+
+        var slice = series.SnapshotRange(2000L, 2000L);
+
+        Assert.Equal(2, slice.Length);
+        Assert.Equal(2000L, slice.Span[0].Timestamp);
+        Assert.Equal(2.0, slice.Span[0].Value.AsDouble());
+        Assert.Equal(2000L, slice.Span[1].Timestamp);
+        Assert.Equal(3.0, slice.Span[1].Value.AsDouble());
+    }
+
+    [Fact]
+    public void SnapshotRange_UnorderedData_ReturnsSortedInclusiveRange()
+    {
+        var series = new MemTableSeries(MakeKey(), FieldType.Float64);
+
+        series.Append(3000L, FieldValue.FromDouble(3.0));
+        series.Append(1000L, FieldValue.FromDouble(1.0));
+        series.Append(2000L, FieldValue.FromDouble(2.0));
+
+        var slice = series.SnapshotRange(1000L, 2000L);
+
+        Assert.Equal(2, slice.Length);
+        Assert.Equal(1000L, slice.Span[0].Timestamp);
+        Assert.Equal(2000L, slice.Span[1].Timestamp);
+    }
+
+    [Fact]
     public void Snapshot_RepeatedQueries_ReusesCachedReadOnlySnapshot()
     {
         var series = new MemTableSeries(MakeKey(), FieldType.Float64);
@@ -146,25 +194,42 @@ public sealed class MemTableSeriesTests
             series.Append(i, FieldValue.FromDouble(i));
 
         var snapshot = series.Snapshot();
-        var range = series.SnapshotRange(10L, 20L);
         Assert.False(MemoryMarshal.TryGetArray(snapshot, out ArraySegment<DataPoint> _));
-        Assert.False(MemoryMarshal.TryGetArray(range, out ArraySegment<DataPoint> _));
 
         long before = GC.GetAllocatedBytesForCurrentThread();
         long checksum = 0;
         for (int i = 0; i < 1_000; i++)
         {
             var snap = series.Snapshot();
-            var slice = series.SnapshotRange(10L, 20L);
             checksum += snap.Length;
-            checksum += slice.Length;
             checksum += snap.Span[0].Timestamp;
-            checksum += slice.Span[0].Timestamp;
         }
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.True(checksum > 0);
-        Assert.True(allocated < 1024, $"重复 Snapshot/SnapshotRange 不应分配新数组，实际分配 {allocated} bytes。");
+        Assert.True(allocated < 1024, $"重复 Snapshot 不应分配新数组，实际分配 {allocated} bytes。");
+    }
+
+    [Fact]
+    public void SnapshotRange_SmallRange_DoesNotAllocateFullSnapshotOnSortedData()
+    {
+        var warmup = new MemTableSeries(MakeKey("warmup"), FieldType.Float64);
+        warmup.Append(1L, FieldValue.FromDouble(1.0));
+        _ = warmup.SnapshotRange(1L, 1L);
+
+        var series = new MemTableSeries(MakeKey(), FieldType.Float64);
+        const int count = 4096;
+        for (int i = 0; i < count; i++)
+            series.Append(i, FieldValue.FromDouble(i));
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        var slice = series.SnapshotRange(2048L, 2048L);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(1, slice.Length);
+        Assert.Equal(2048L, slice.Span[0].Timestamp);
+        Assert.False(MemoryMarshal.TryGetArray(slice, out ArraySegment<DataPoint> _));
+        Assert.True(allocated < 32 * 1024, $"小范围查询应只复制命中区间，实际分配 {allocated} bytes。");
     }
 
     [Fact]
