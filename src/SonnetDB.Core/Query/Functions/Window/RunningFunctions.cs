@@ -34,32 +34,197 @@ internal sealed class RunningSumFunction : IWindowFunction
     }
 }
 
+/// <summary><c>running_min(field)</c>：从首个有效值开始的累计最小值；缺失值保留前一累计值。</summary>
+internal sealed class RunningMinFunction : IWindowFunction
+{
+    public string Name => "running_min";
+
+    public IWindowEvaluator CreateEvaluator(FunctionCallExpression call, MeasurementSchema schema)
+    {
+        WindowFunctionBinder.RequireArgumentCount(call, Name, 1, 1);
+        var col = WindowFunctionBinder.ResolveFieldArgument(call, schema, Name, 0);
+        return new RunningExtremeEvaluator(col.Name, isMin: true);
+    }
+}
+
+/// <summary><c>running_max(field)</c>：从首个有效值开始的累计最大值；缺失值保留前一累计值。</summary>
+internal sealed class RunningMaxFunction : IWindowFunction
+{
+    public string Name => "running_max";
+
+    public IWindowEvaluator CreateEvaluator(FunctionCallExpression call, MeasurementSchema schema)
+    {
+        WindowFunctionBinder.RequireArgumentCount(call, Name, 1, 1);
+        var col = WindowFunctionBinder.ResolveFieldArgument(call, schema, Name, 0);
+        return new RunningExtremeEvaluator(col.Name, isMin: false);
+    }
+}
+
 internal sealed class CumulativeSumEvaluator : DoubleWindowEvaluatorBase
 {
     public CumulativeSumEvaluator(string fieldName) => FieldName = fieldName;
 
     public override string FieldName { get; }
 
-    public override WindowDoubleOutput ComputeDouble(long[] timestamps, FieldValue?[] values)
+    public override IWindowState CreateState()
+        => new CumulativeSumState();
+
+    protected override void ComputeDoubleCore(
+        ReadOnlySpan<long> timestamps,
+        ReadOnlySpan<FieldValue?> values,
+        Span<double> output,
+        Span<bool> hasValue)
     {
-        var output = new double[timestamps.Length];
-        var hasValue = new bool[timestamps.Length];
+        hasValue.Clear();
         double sum = 0;
         bool seen = false;
-        for (int i = 0; i < timestamps.Length; i++)
+        for (int i = 0; i < values.Length; i++)
         {
             if (WindowFunctionBinder.TryToDouble(values[i], out var v))
             {
                 sum += v;
                 seen = true;
             }
+
             if (seen)
             {
                 output[i] = sum;
                 hasValue[i] = true;
             }
         }
-        return new WindowDoubleOutput(output, hasValue);
+    }
+
+    protected override void ComputeObjectCore(
+        ReadOnlySpan<long> timestamps,
+        ReadOnlySpan<FieldValue?> values,
+        Span<object?> output)
+    {
+        output.Clear();
+        double sum = 0;
+        bool seen = false;
+        for (int i = 0; i < values.Length; i++)
+        {
+            if (WindowFunctionBinder.TryToDouble(values[i], out var v))
+            {
+                sum += v;
+                seen = true;
+            }
+
+            if (seen)
+                output[i] = sum;
+        }
+    }
+}
+
+internal sealed class CumulativeSumState : IWindowState
+{
+    private double _sum;
+    private bool _seen;
+
+    public WindowStateOutput Update(long timestamp, FieldValue? value)
+    {
+        if (WindowFunctionBinder.TryToDouble(value, out var v))
+        {
+            _sum += v;
+            _seen = true;
+        }
+
+        return _seen
+            ? WindowStateOutput.FromDouble(_sum)
+            : WindowStateOutput.Null();
+    }
+}
+
+internal sealed class RunningExtremeEvaluator : DoubleWindowEvaluatorBase
+{
+    private readonly bool _isMin;
+
+    public RunningExtremeEvaluator(string fieldName, bool isMin)
+    {
+        FieldName = fieldName;
+        _isMin = isMin;
+    }
+
+    public override string FieldName { get; }
+
+    public override IWindowState CreateState()
+        => new RunningExtremeState(_isMin);
+
+    protected override void ComputeDoubleCore(
+        ReadOnlySpan<long> timestamps,
+        ReadOnlySpan<FieldValue?> values,
+        Span<double> output,
+        Span<bool> hasValue)
+    {
+        hasValue.Clear();
+        double current = 0;
+        bool seen = false;
+        for (int i = 0; i < values.Length; i++)
+        {
+            if (WindowFunctionBinder.TryToDouble(values[i], out var v))
+            {
+                current = !seen
+                    ? v
+                    : _isMin ? Math.Min(current, v) : Math.Max(current, v);
+                seen = true;
+            }
+
+            if (seen)
+            {
+                output[i] = current;
+                hasValue[i] = true;
+            }
+        }
+    }
+
+    protected override void ComputeObjectCore(
+        ReadOnlySpan<long> timestamps,
+        ReadOnlySpan<FieldValue?> values,
+        Span<object?> output)
+    {
+        output.Clear();
+        double current = 0;
+        bool seen = false;
+        for (int i = 0; i < values.Length; i++)
+        {
+            if (WindowFunctionBinder.TryToDouble(values[i], out var v))
+            {
+                current = !seen
+                    ? v
+                    : _isMin ? Math.Min(current, v) : Math.Max(current, v);
+                seen = true;
+            }
+
+            if (seen)
+                output[i] = current;
+        }
+    }
+}
+
+internal sealed class RunningExtremeState : IWindowState
+{
+    private readonly bool _isMin;
+    private double _current;
+    private bool _seen;
+
+    public RunningExtremeState(bool isMin)
+    {
+        _isMin = isMin;
+    }
+
+    public WindowStateOutput Update(long timestamp, FieldValue? value)
+    {
+        if (WindowFunctionBinder.TryToDouble(value, out var v))
+        {
+            _current = !_seen
+                ? v
+                : _isMin ? Math.Min(_current, v) : Math.Max(_current, v);
+            _seen = true;
+        }
+
+        return _seen
+            ? WindowStateOutput.FromDouble(_current)
+            : WindowStateOutput.Null();
     }
 }
 

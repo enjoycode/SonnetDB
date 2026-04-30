@@ -343,6 +343,7 @@ internal static class SelectExecutor
                     projections[i].Function!, schema);
             }
         }
+        bool useStreamingWindowPath = CanUseStreamingWindowPath(windowEvaluators);
 
         // 收集 raw 模式中所有需要查询的 field 列
         var fieldCols = projections
@@ -383,7 +384,6 @@ internal static class SelectExecutor
             foreach (var (_, list) in fieldData)
                 foreach (var dp in list) timestampSet.Add(dp.Timestamp);
             if (timestampSet.Count == 0) continue;
-            var timestamps = timestampSet.ToArray();
 
             // 每个 field 的 ts→value 字典（按需）
             var fieldLookups = new Dictionary<string, Dictionary<long, FieldValue>>(StringComparer.Ordinal);
@@ -394,55 +394,139 @@ internal static class SelectExecutor
                 fieldLookups[fname] = dict;
             }
 
-            // 为每个窗口投影预计算输出（与 timestamps 数组同长度，逐行对齐）。
-            // 数值型 evaluator 优先走 double[] typed 输出，避免先构造 object?[] 造成每行装箱。
-            var windowOutputs = new WindowProjectionOutput?[projections.Count];
-            for (int i = 0; i < projections.Count; i++)
+            if (useStreamingWindowPath)
             {
-                var evaluator = windowEvaluators[i];
-                if (evaluator is null) continue;
-
-                var alignedValues = new FieldValue?[timestamps.Length];
-                if (fieldLookups.TryGetValue(evaluator.FieldName, out var lookup))
-                {
-                    for (int row = 0; row < timestamps.Length; row++)
-                    {
-                        if (lookup.TryGetValue(timestamps[row], out var v))
-                            alignedValues[row] = v;
-                    }
-                }
-
-                windowOutputs[i] = evaluator is IWindowDoubleEvaluator doubleEvaluator
-                    ? WindowProjectionOutput.FromDouble(doubleEvaluator.ComputeDouble(timestamps, alignedValues))
-                    : WindowProjectionOutput.FromObject(evaluator.Compute(timestamps, alignedValues));
+                AppendStreamingRawRows(rows, projections, windowEvaluators, timestampSet, series, fieldLookups);
             }
-
-            for (int rowIdx = 0; rowIdx < timestamps.Length; rowIdx++)
+            else
             {
-                long ts = timestamps[rowIdx];
-                var row = new object?[projections.Count];
-                for (int i = 0; i < projections.Count; i++)
-                {
-                    var p = projections[i];
-                    row[i] = p.Kind switch
-                    {
-                        ProjectionKind.Time => ts,
-                        ProjectionKind.Tag => series.Tags.TryGetValue(p.Column!.Name, out var tagVal) ? tagVal : null,
-                        ProjectionKind.Field => fieldLookups[p.Column!.Name].TryGetValue(ts, out var v)
-                            ? UnboxFieldValue(p.Column, v)
-                            : null,
-                        ProjectionKind.Constant => p.ConstantValue,
-                        ProjectionKind.Scalar => EvaluateScalarProjection(p, ts, series, fieldLookups),
-                        ProjectionKind.Window => windowOutputs[i]!.GetValue(rowIdx),
-                        _ => throw new InvalidOperationException("内部错误：不应在 raw 模式出现聚合投影。"),
-                    };
-                }
-                rows.Add(row);
+                AppendMaterializedRawRows(rows, projections, windowEvaluators, timestampSet, series, fieldLookups);
             }
         }
 
         var columnNames = projections.Select(p => p.ColumnName).ToList();
         return new SelectExecutionResult(columnNames, rows);
+    }
+
+    private static bool CanUseStreamingWindowPath(IReadOnlyList<IWindowEvaluator?> windowEvaluators)
+    {
+        for (int i = 0; i < windowEvaluators.Count; i++)
+        {
+            if (windowEvaluators[i] is not null and not IWindowStreamingEvaluator)
+                return false;
+        }
+
+        return true;
+    }
+
+    private static void AppendStreamingRawRows(
+        List<IReadOnlyList<object?>> rows,
+        IReadOnlyList<Projection> projections,
+        IReadOnlyList<IWindowEvaluator?> windowEvaluators,
+        SortedSet<long> timestampSet,
+        SeriesEntry series,
+        Dictionary<string, Dictionary<long, FieldValue>> fieldLookups)
+    {
+        var windowStates = new IWindowState?[windowEvaluators.Count];
+        for (int i = 0; i < windowEvaluators.Count; i++)
+        {
+            if (windowEvaluators[i] is IWindowStreamingEvaluator streaming)
+                windowStates[i] = streaming.CreateState();
+        }
+
+        foreach (long ts in timestampSet)
+        {
+            var row = new object?[projections.Count];
+            for (int i = 0; i < projections.Count; i++)
+            {
+                var p = projections[i];
+                row[i] = p.Kind switch
+                {
+                    ProjectionKind.Time => ts,
+                    ProjectionKind.Tag => series.Tags.TryGetValue(p.Column!.Name, out var tagVal) ? tagVal : null,
+                    ProjectionKind.Field => fieldLookups[p.Column!.Name].TryGetValue(ts, out var v)
+                        ? UnboxFieldValue(p.Column, v)
+                        : null,
+                    ProjectionKind.Constant => p.ConstantValue,
+                    ProjectionKind.Scalar => EvaluateScalarProjection(p, ts, series, fieldLookups),
+                    ProjectionKind.Window => EvaluateStreamingWindowProjection(
+                        windowEvaluators[i]!, windowStates[i]!, ts, fieldLookups),
+                    _ => throw new InvalidOperationException("内部错误：不应在 raw 模式出现聚合投影。"),
+                };
+            }
+            rows.Add(row);
+        }
+    }
+
+    private static object? EvaluateStreamingWindowProjection(
+        IWindowEvaluator evaluator,
+        IWindowState state,
+        long timestamp,
+        IReadOnlyDictionary<string, Dictionary<long, FieldValue>> fieldLookups)
+    {
+        FieldValue? input = fieldLookups.TryGetValue(evaluator.FieldName, out var lookup)
+            && lookup.TryGetValue(timestamp, out var value)
+                ? value
+                : null;
+
+        return state.Update(timestamp, input).ToObject();
+    }
+
+    private static void AppendMaterializedRawRows(
+        List<IReadOnlyList<object?>> rows,
+        IReadOnlyList<Projection> projections,
+        IReadOnlyList<IWindowEvaluator?> windowEvaluators,
+        SortedSet<long> timestampSet,
+        SeriesEntry series,
+        Dictionary<string, Dictionary<long, FieldValue>> fieldLookups)
+    {
+        var timestamps = timestampSet.ToArray();
+
+        // 为每个窗口投影预计算输出（与 timestamps 数组同长度，逐行对齐）。
+        // 数值型 evaluator 优先走 double[] typed 输出，避免先构造 object?[] 造成每行装箱。
+        var windowOutputs = new WindowProjectionOutput?[projections.Count];
+        for (int i = 0; i < projections.Count; i++)
+        {
+            var evaluator = windowEvaluators[i];
+            if (evaluator is null) continue;
+
+            var alignedValues = new FieldValue?[timestamps.Length];
+            if (fieldLookups.TryGetValue(evaluator.FieldName, out var lookup))
+            {
+                for (int row = 0; row < timestamps.Length; row++)
+                {
+                    if (lookup.TryGetValue(timestamps[row], out var v))
+                        alignedValues[row] = v;
+                }
+            }
+
+            windowOutputs[i] = evaluator is IWindowDoubleEvaluator doubleEvaluator
+                ? WindowProjectionOutput.FromDouble(doubleEvaluator.ComputeDouble(timestamps, alignedValues))
+                : WindowProjectionOutput.FromObject(evaluator.Compute(timestamps, alignedValues));
+        }
+
+        for (int rowIdx = 0; rowIdx < timestamps.Length; rowIdx++)
+        {
+            long ts = timestamps[rowIdx];
+            var row = new object?[projections.Count];
+            for (int i = 0; i < projections.Count; i++)
+            {
+                var p = projections[i];
+                row[i] = p.Kind switch
+                {
+                    ProjectionKind.Time => ts,
+                    ProjectionKind.Tag => series.Tags.TryGetValue(p.Column!.Name, out var tagVal) ? tagVal : null,
+                    ProjectionKind.Field => fieldLookups[p.Column!.Name].TryGetValue(ts, out var v)
+                        ? UnboxFieldValue(p.Column, v)
+                        : null,
+                    ProjectionKind.Constant => p.ConstantValue,
+                    ProjectionKind.Scalar => EvaluateScalarProjection(p, ts, series, fieldLookups),
+                    ProjectionKind.Window => windowOutputs[i]!.GetValue(rowIdx),
+                    _ => throw new InvalidOperationException("内部错误：不应在 raw 模式出现聚合投影。"),
+                };
+            }
+            rows.Add(row);
+        }
     }
 
     private sealed class WindowProjectionOutput

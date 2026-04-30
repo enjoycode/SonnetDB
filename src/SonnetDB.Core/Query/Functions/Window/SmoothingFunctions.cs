@@ -27,6 +27,7 @@ internal sealed class MovingAverageFunction : IWindowFunction
 
 internal sealed class MovingAverageEvaluator : DoubleWindowEvaluatorBase
 {
+    private const int MaxStackWindowSize = 256;
     private readonly int _windowSize;
 
     public MovingAverageEvaluator(string fieldName, int windowSize)
@@ -37,22 +38,69 @@ internal sealed class MovingAverageEvaluator : DoubleWindowEvaluatorBase
 
     public override string FieldName { get; }
 
-    public override WindowDoubleOutput ComputeDouble(long[] timestamps, FieldValue?[] values)
+    public override IWindowState CreateState()
+        => new MovingAverageState(_windowSize);
+
+    protected override void ComputeDoubleCore(
+        ReadOnlySpan<long> timestamps,
+        ReadOnlySpan<FieldValue?> values,
+        Span<double> output,
+        Span<bool> hasValue)
     {
-        int n = timestamps.Length;
-        var output = new double[n];
-        var hasValue = new bool[n];
-        var window = new double[_windowSize];
-        var present = new bool[_windowSize];
+        hasValue.Clear();
+        if (_windowSize <= MaxStackWindowSize)
+        {
+            Span<double> window = stackalloc double[_windowSize];
+            Span<bool> present = stackalloc bool[_windowSize];
+            ComputeMovingAverage(values, _windowSize, window, present, output, hasValue);
+            return;
+        }
+
+        ComputeMovingAverage(
+            values,
+            _windowSize,
+            new double[_windowSize],
+            new bool[_windowSize],
+            output,
+            hasValue);
+    }
+
+    protected override void ComputeObjectCore(
+        ReadOnlySpan<long> timestamps,
+        ReadOnlySpan<FieldValue?> values,
+        Span<object?> output)
+    {
+        output.Clear();
+        if (_windowSize <= MaxStackWindowSize)
+        {
+            Span<double> window = stackalloc double[_windowSize];
+            Span<bool> present = stackalloc bool[_windowSize];
+            ComputeMovingAverage(values, _windowSize, window, present, output);
+            return;
+        }
+
+        ComputeMovingAverage(
+            values,
+            _windowSize,
+            new double[_windowSize],
+            new bool[_windowSize],
+            output);
+    }
+
+    private static void ComputeMovingAverage(
+        ReadOnlySpan<FieldValue?> values,
+        int windowSize,
+        Span<double> window,
+        Span<bool> present,
+        Span<double> output,
+        Span<bool> hasValue)
+    {
         double sum = 0;
         int count = 0;
-        int filled = 0; // 已经累积的输入点数
-
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < values.Length; i++)
         {
-            int slot = filled % _windowSize;
-            // 从窗口中弹出旧值
-            if (filled >= _windowSize && present[slot])
+            int slot = i % windowSize;
+            if (i >= windowSize && present[slot])
             {
                 sum -= window[slot];
                 count--;
@@ -70,16 +118,96 @@ internal sealed class MovingAverageEvaluator : DoubleWindowEvaluatorBase
                 window[slot] = 0;
                 present[slot] = false;
             }
-            filled++;
 
-            // 至少累积 _windowSize 行后才输出（不足窗口大小返回 null）
-            if (filled >= _windowSize && count > 0)
+            if (i + 1 >= windowSize && count > 0)
             {
                 output[i] = sum / count;
                 hasValue[i] = true;
             }
         }
-        return new WindowDoubleOutput(output, hasValue);
+    }
+
+    private static void ComputeMovingAverage(
+        ReadOnlySpan<FieldValue?> values,
+        int windowSize,
+        Span<double> window,
+        Span<bool> present,
+        Span<object?> output)
+    {
+        double sum = 0;
+        int count = 0;
+        for (int i = 0; i < values.Length; i++)
+        {
+            int slot = i % windowSize;
+            if (i >= windowSize && present[slot])
+            {
+                sum -= window[slot];
+                count--;
+            }
+
+            if (WindowFunctionBinder.TryToDouble(values[i], out var v))
+            {
+                window[slot] = v;
+                present[slot] = true;
+                sum += v;
+                count++;
+            }
+            else
+            {
+                window[slot] = 0;
+                present[slot] = false;
+            }
+
+            if (i + 1 >= windowSize && count > 0)
+                output[i] = sum / count;
+        }
+    }
+}
+
+internal sealed class MovingAverageState : IWindowState
+{
+    private readonly int _windowSize;
+    private readonly double[] _window;
+    private readonly bool[] _present;
+    private double _sum;
+    private int _count;
+    private int _filled;
+
+    public MovingAverageState(int windowSize)
+    {
+        _windowSize = windowSize;
+        _window = new double[windowSize];
+        _present = new bool[windowSize];
+    }
+
+    public WindowStateOutput Update(long timestamp, FieldValue? value)
+    {
+        int slot = _filled % _windowSize;
+        // 从窗口中弹出旧值
+        if (_filled >= _windowSize && _present[slot])
+        {
+            _sum -= _window[slot];
+            _count--;
+        }
+
+        if (WindowFunctionBinder.TryToDouble(value, out var v))
+        {
+            _window[slot] = v;
+            _present[slot] = true;
+            _sum += v;
+            _count++;
+        }
+        else
+        {
+            _window[slot] = 0;
+            _present[slot] = false;
+        }
+        _filled++;
+
+        // 至少累积 _windowSize 行后才输出（不足窗口大小返回 null）
+        return _filled >= _windowSize && _count > 0
+            ? WindowStateOutput.FromDouble(_sum / _count)
+            : WindowStateOutput.Null();
     }
 }
 
@@ -116,37 +244,37 @@ internal sealed class EwmaEvaluator : DoubleWindowEvaluatorBase
 
     public override string FieldName { get; }
 
-    public override WindowDoubleOutput ComputeDouble(long[] timestamps, FieldValue?[] values)
-    {
-        var output = new double[timestamps.Length];
-        var hasValue = new bool[timestamps.Length];
-        double s = 0;
-        bool initialized = false;
-        for (int i = 0; i < timestamps.Length; i++)
-        {
-            if (!WindowFunctionBinder.TryToDouble(values[i], out var v))
-            {
-                if (initialized)
-                {
-                    output[i] = s;
-                    hasValue[i] = true;
-                }
-                continue;
-            }
+    public override IWindowState CreateState()
+        => new EwmaState(_alpha);
+}
 
-            if (!initialized)
-            {
-                s = v;
-                initialized = true;
-            }
-            else
-            {
-                s = _alpha * v + (1 - _alpha) * s;
-            }
-            output[i] = s;
-            hasValue[i] = true;
+internal sealed class EwmaState : IWindowState
+{
+    private readonly double _alpha;
+    private double _s;
+    private bool _initialized;
+
+    public EwmaState(double alpha)
+    {
+        _alpha = alpha;
+    }
+
+    public WindowStateOutput Update(long timestamp, FieldValue? value)
+    {
+        if (!WindowFunctionBinder.TryToDouble(value, out var v))
+            return _initialized ? WindowStateOutput.FromDouble(_s) : WindowStateOutput.Null();
+
+        if (!_initialized)
+        {
+            _s = v;
+            _initialized = true;
         }
-        return new WindowDoubleOutput(output, hasValue);
+        else
+        {
+            _s = _alpha * v + (1 - _alpha) * _s;
+        }
+
+        return WindowStateOutput.FromDouble(_s);
     }
 }
 
@@ -189,53 +317,55 @@ internal sealed class HoltWintersEvaluator : DoubleWindowEvaluatorBase
 
     public override string FieldName { get; }
 
-    public override WindowDoubleOutput ComputeDouble(long[] timestamps, FieldValue?[] values)
+    public override IWindowState CreateState()
+        => new HoltWintersState(_alpha, _beta);
+}
+
+internal sealed class HoltWintersState : IWindowState
+{
+    private readonly double _alpha;
+    private readonly double _beta;
+    private double _level;
+    private double _trend;
+    private bool _haveLevel;
+    private bool _haveTrend;
+
+    public HoltWintersState(double alpha, double beta)
     {
-        int n = timestamps.Length;
-        var output = new double[n];
-        var hasValue = new bool[n];
-        double level = 0;
-        double trend = 0;
-        bool haveLevel = false;
-        bool haveTrend = false;
+        _alpha = alpha;
+        _beta = beta;
+    }
 
-        for (int i = 0; i < n; i++)
+    public WindowStateOutput Update(long timestamp, FieldValue? value)
+    {
+        if (!WindowFunctionBinder.TryToDouble(value, out var x))
         {
-            if (!WindowFunctionBinder.TryToDouble(values[i], out var x))
-            {
-                if (haveLevel)
-                {
-                    output[i] = level + (haveTrend ? trend : 0.0);
-                    hasValue[i] = true;
-                }
-                continue;
-            }
-
-            if (!haveLevel)
-            {
-                level = x;
-                haveLevel = true;
-                output[i] = level;
-                hasValue[i] = true;
-                continue;
-            }
-
-            double prevLevel = level;
-            if (!haveTrend)
-            {
-                // 初始 trend 用首两点差
-                trend = x - level;
-                haveTrend = true;
-                level = x;
-            }
-            else
-            {
-                level = _alpha * x + (1 - _alpha) * (level + trend);
-                trend = _beta * (level - prevLevel) + (1 - _beta) * trend;
-            }
-            output[i] = level + trend;
-            hasValue[i] = true;
+            return _haveLevel
+                ? WindowStateOutput.FromDouble(_level + (_haveTrend ? _trend : 0.0))
+                : WindowStateOutput.Null();
         }
-        return new WindowDoubleOutput(output, hasValue);
+
+        if (!_haveLevel)
+        {
+            _level = x;
+            _haveLevel = true;
+            return WindowStateOutput.FromDouble(_level);
+        }
+
+        double prevLevel = _level;
+        if (!_haveTrend)
+        {
+            // 初始 trend 用首两点差
+            _trend = x - _level;
+            _haveTrend = true;
+            _level = x;
+        }
+        else
+        {
+            _level = _alpha * x + (1 - _alpha) * (_level + _trend);
+            _trend = _beta * (_level - prevLevel) + (1 - _beta) * _trend;
+        }
+
+        return WindowStateOutput.FromDouble(_level + _trend);
     }
 }

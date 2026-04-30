@@ -20,6 +20,33 @@ public sealed class WindowFunctionTests
 
     private static long[] T(params long[] timestamps) => timestamps;
 
+    private static void AssertStreamingMatchesCompatibility(
+        IWindowEvaluator evaluator,
+        long[] timestamps,
+        FieldValue?[] values)
+    {
+        var streaming = Assert.IsAssignableFrom<IWindowStreamingEvaluator>(evaluator);
+        var state = streaming.CreateState();
+        var expected = evaluator.Compute(timestamps, values);
+
+        for (int i = 0; i < timestamps.Length; i++)
+        {
+            var actual = state.Update(timestamps[i], values[i]).ToObject();
+            AssertWindowValueEqual(expected[i], actual);
+        }
+    }
+
+    private static void AssertWindowValueEqual(object? expected, object? actual)
+    {
+        if (expected is double expectedDouble && actual is double actualDouble)
+        {
+            Assert.Equal(expectedDouble, actualDouble, precision: 6);
+            return;
+        }
+
+        Assert.Equal(expected, actual);
+    }
+
     // ── difference / delta / increase ────────────────────────────────────
 
     [Fact]
@@ -96,6 +123,16 @@ public sealed class WindowFunctionTests
     }
 
     [Fact]
+    public void CumulativeSumEvaluator_Update_MatchesCompatibilityCompute()
+    {
+        var ev = new CumulativeSumEvaluator("x");
+        AssertStreamingMatchesCompatibility(
+            ev,
+            T(0, 1, 2, 3),
+            D(null, 2, null, 3));
+    }
+
+    [Fact]
     public void IntegralEvaluator_TrapezoidalRule_OnConstantValue()
     {
         // f=5 on [0, 1000ms] → 面积 = 5 * 1s = 5
@@ -145,6 +182,47 @@ public sealed class WindowFunctionTests
     }
 
     [Fact]
+    public void MovingAverageEvaluator_Update_MatchesCompatibilityCompute()
+    {
+        var ev = new MovingAverageEvaluator("x", windowSize: 3);
+        AssertStreamingMatchesCompatibility(
+            ev,
+            T(0, 1, 2, 3, 4),
+            D(1, null, 3, 5, 7));
+    }
+
+    [Fact]
+    public void MovingAverageEvaluator_Update_LargeDataset_DoesNotAllocatePerRow()
+    {
+        const int PointCount = 50_000;
+        var timestamps = new long[PointCount];
+        var values = new FieldValue?[PointCount];
+        for (int i = 0; i < PointCount; i++)
+        {
+            timestamps[i] = i;
+            values[i] = FieldValue.FromDouble(i);
+        }
+
+        var ev = new MovingAverageEvaluator("x", windowSize: 60);
+        long allocated = MeasureAllocatedBytes(() =>
+        {
+            var state = ((IWindowStreamingEvaluator)ev).CreateState();
+            double checksum = 0;
+            for (int i = 0; i < PointCount; i++)
+            {
+                if (state.Update(timestamps[i], values[i]).TryGetDouble(out var value))
+                    checksum += value;
+            }
+
+            Assert.True(checksum > 0);
+        });
+
+        Assert.True(
+            allocated < 16 * 1024,
+            $"Streaming state should not allocate per row. Allocated={allocated} bytes.");
+    }
+
+    [Fact]
     public void EwmaEvaluator_AlphaOne_IsIdentity()
     {
         var ev = new EwmaEvaluator("x", alpha: 1.0);
@@ -180,6 +258,16 @@ public sealed class WindowFunctionTests
         Assert.Equal(10.0, result.Values[2]);
         Assert.True(result.HasValue[3]);
         Assert.Equal(15.0, result.Values[3], precision: 6);
+    }
+
+    [Fact]
+    public void EwmaEvaluator_Update_MatchesCompatibilityCompute()
+    {
+        var ev = new EwmaEvaluator("x", alpha: 0.5);
+        AssertStreamingMatchesCompatibility(
+            ev,
+            T(0, 1, 2, 3),
+            D(null, 10, null, 20));
     }
 
     // ── fill / locf / interpolate ────────────────────────────────────────
@@ -291,6 +379,16 @@ public sealed class WindowFunctionTests
         }
     }
 
+    [Fact]
+    public void HoltWintersEvaluator_Update_MatchesCompatibilityCompute()
+    {
+        var ev = new HoltWintersEvaluator("x", alpha: 0.8, beta: 0.3);
+        AssertStreamingMatchesCompatibility(
+            ev,
+            T(0, 1, 2, 3, 4),
+            D(1, 2, null, 4, 5));
+    }
+
     // ── FunctionRegistry 注册校验 ─────────────────────────────────────────
 
     [Theory]
@@ -317,5 +415,17 @@ public sealed class WindowFunctionTests
         Assert.Equal(FunctionKind.Window, FunctionRegistry.GetFunctionKind(name));
         Assert.True(FunctionRegistry.TryGetWindow(name, out var fn));
         Assert.Equal(name, fn!.Name);
+    }
+
+    private static long MeasureAllocatedBytes(Action action)
+    {
+        action();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        action();
+        return GC.GetAllocatedBytesForCurrentThread() - before;
     }
 }

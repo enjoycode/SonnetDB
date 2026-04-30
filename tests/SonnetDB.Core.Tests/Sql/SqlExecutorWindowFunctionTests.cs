@@ -1,4 +1,6 @@
 ﻿using SonnetDB.Engine;
+using SonnetDB.Engine.Compaction;
+using SonnetDB.Model;
 using SonnetDB.Sql;
 using SonnetDB.Sql.Execution;
 using Xunit;
@@ -26,6 +28,13 @@ public sealed class SqlExecutorWindowFunctionTests : IDisposable
     }
 
     private TsdbOptions Options() => new() { RootDirectory = _root };
+
+    private TsdbOptions OptionsWithoutBackgroundWorkers() => new()
+    {
+        RootDirectory = _root,
+        BackgroundFlush = new BackgroundFlushOptions { Enabled = false },
+        Compaction = new CompactionPolicy { Enabled = false },
+    };
 
     private static Tsdb OpenWithSchema(TsdbOptions options)
     {
@@ -171,6 +180,41 @@ public sealed class SqlExecutorWindowFunctionTests : IDisposable
         Assert.Equal(10.0, (double)r.Rows[0][0]!);
         Assert.Equal(15.0, (double)r.Rows[1][0]!, precision: 6);
         Assert.Equal(22.5, (double)r.Rows[2][0]!, precision: 6);
+    }
+
+    [Fact]
+    public void Select_MovingAverage_LargeDataset_StreamingPathKeepsAllocationBudget()
+    {
+        const int PointCount = 30_000;
+        using var db = OpenWithSchema(OptionsWithoutBackgroundWorkers());
+        var tags = new Dictionary<string, string> { ["host"] = "h1" };
+        var points = new Point[PointCount];
+        for (int i = 0; i < points.Length; i++)
+        {
+            points[i] = Point.Create(
+                "cpu",
+                i,
+                tags,
+                new Dictionary<string, FieldValue> { ["usage"] = FieldValue.FromDouble(i) });
+        }
+
+        Assert.Equal(PointCount, db.WriteMany(points));
+
+        var warmup = Select(db, "SELECT moving_average(usage, 60) FROM cpu");
+        Assert.Equal(PointCount, warmup.Rows.Count);
+
+        long allocated = MeasureAllocatedBytes(() =>
+        {
+            var result = Select(db, "SELECT moving_average(usage, 60) FROM cpu");
+            Assert.Equal(PointCount, result.Rows.Count);
+            Assert.Null(result.Rows[0][0]);
+            Assert.Equal(29.5, (double)result.Rows[59][0]!);
+        });
+
+        const long BudgetBytes = 32L * 1024 * 1024;
+        Assert.True(
+            allocated < BudgetBytes,
+            $"Streaming window query allocated too much memory: {allocated} bytes.");
     }
 
     // ── fill / locf / interpolate ────────────────────────────────────────
@@ -341,5 +385,17 @@ public sealed class SqlExecutorWindowFunctionTests : IDisposable
 
         Assert.Throws<InvalidOperationException>(() =>
             Select(db, "SELECT difference(label) FROM cpu"));
+    }
+
+    private static long MeasureAllocatedBytes(Action action)
+    {
+        action();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        action();
+        return GC.GetAllocatedBytesForCurrentThread() - before;
     }
 }
