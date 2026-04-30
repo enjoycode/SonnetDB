@@ -108,13 +108,17 @@ public sealed class WalReader : IDisposable
                 if (headerRead < FormatSizes.WalRecordHeaderSize)
                     yield break;
 
-                var headerReader = new SpanReader(headerBuf.AsSpan(0, FormatSizes.WalRecordHeaderSize));
+                ReadOnlySpan<byte> headerSpan = headerBuf.AsSpan(0, FormatSizes.WalRecordHeaderSize);
+                var headerReader = new SpanReader(headerSpan);
                 var header = headerReader.ReadStruct<WalRecordHeader>();
 
-                if (!header.IsMagicValid())
+                if (!header.IsShapeValid(headerSpan))
                     yield break;
 
                 if (header.PayloadLength < 0)
+                    yield break;
+
+                if (header.PayloadLength > _fileStream.Length - _fileStream.Position)
                     yield break;
 
                 byte[] payloadBuf = ArrayPool<byte>.Shared.Rent(Math.Max(header.PayloadLength, 1));

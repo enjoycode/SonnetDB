@@ -306,8 +306,14 @@ public sealed class WalWriter : IDisposable
 
         uint crc32 = Crc32.HashToUInt32(payloadBuffer);
 
-        var headerWriter = new SpanWriter(recordBuffer[..FormatSizes.WalRecordHeaderSize]);
+        Span<byte> headerBuffer = recordBuffer[..FormatSizes.WalRecordHeaderSize];
         var header = WalRecordHeader.CreateNew(recordType, payloadSize, crc32, timestamp, lsn);
+        header.Flags = WalRecordHeader.HeaderChecksumFlag;
+
+        var headerWriter = new SpanWriter(headerBuffer);
+        headerWriter.WriteStruct(in header);
+        header.Reserved = WalRecordHeader.ComputeHeaderChecksum(headerBuffer);
+        headerWriter = new SpanWriter(headerBuffer);
         headerWriter.WriteStruct(in header);
     }
 
@@ -412,39 +418,20 @@ public sealed class WalWriter : IDisposable
                 if (headerRead < FormatSizes.WalRecordHeaderSize)
                     break;
 
-                var headerReader = new SpanReader(headerBuf.AsSpan(0, FormatSizes.WalRecordHeaderSize));
+                ReadOnlySpan<byte> headerSpan = headerBuf.AsSpan(0, FormatSizes.WalRecordHeaderSize);
+                var headerReader = new SpanReader(headerSpan);
                 var header = headerReader.ReadStruct<WalRecordHeader>();
 
-                if (!header.IsMagicValid())
+                if (!header.IsShapeValid(headerSpan))
                     break;
 
                 if (header.PayloadLength < 0)
                     break;
 
-                // Skip payload
-                long remaining = header.PayloadLength;
-                bool truncated = false;
-                while (remaining > 0)
-                {
-                    byte[] skipBuf = ArrayPool<byte>.Shared.Rent((int)Math.Min(remaining, 4096));
-                    try
-                    {
-                        int toRead = (int)Math.Min(remaining, skipBuf.Length);
-                        int read = ReadExact(fs, skipBuf, 0, toRead);
-                        if (read < toRead)
-                        {
-                            truncated = true;
-                            break;
-                        }
-                        remaining -= read;
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(skipBuf);
-                    }
-                }
+                if (header.PayloadLength > fs.Length - fs.Position)
+                    break;
 
-                if (truncated)
+                if (!ReadAndVerifyPayloadCrc32(fs, header.PayloadLength, header.PayloadCrc32))
                     break;
 
                 lastLsn = header.Lsn;
@@ -456,6 +443,26 @@ public sealed class WalWriter : IDisposable
             ArrayPool<byte>.Shared.Return(headerBuf);
         }
         return lastLsn;
+    }
+
+    private static bool ReadAndVerifyPayloadCrc32(Stream stream, int payloadLength, uint expectedCrc32)
+    {
+        var crc32 = new Crc32();
+        Span<byte> buffer = stackalloc byte[4096];
+        int remaining = payloadLength;
+
+        while (remaining > 0)
+        {
+            int toRead = Math.Min(remaining, buffer.Length);
+            int read = ReadExact(stream, buffer[..toRead]);
+            if (read < toRead)
+                return false;
+
+            crc32.Append(buffer[..read]);
+            remaining -= read;
+        }
+
+        return crc32.GetCurrentHashAsUInt32() == expectedCrc32;
     }
 
     private static int ReadExact(Stream stream, byte[] buffer, int offset, int count)

@@ -24,6 +24,8 @@ public sealed class WalRecordHeaderTests
         WalRecordHeader h = default;
         Assert.Equal(0u, h.Magic);
         Assert.Equal(WalRecordType.Unknown, h.RecordType);
+        Assert.Equal(0, h.Flags);
+        Assert.Equal(0, h.Reserved);
         Assert.Equal(0, h.PayloadLength);
         Assert.Equal(0u, h.PayloadCrc32);
         Assert.Equal(0L, h.Timestamp);
@@ -50,6 +52,8 @@ public sealed class WalRecordHeaderTests
 
         Assert.Equal(WalRecordHeader.MagicValue, h.Magic);
         Assert.Equal(WalRecordType.WritePoint, h.RecordType);
+        Assert.Equal(0, h.Flags);
+        Assert.Equal(0, h.Reserved);
         Assert.Equal(16, h.PayloadLength);
         Assert.Equal(0xDEADBEEFu, h.PayloadCrc32);
         Assert.Equal(1_000_000L, h.Timestamp);
@@ -94,6 +98,8 @@ public sealed class WalRecordHeaderTests
 
         Assert.Equal(original.Magic, read.Magic);
         Assert.Equal(original.RecordType, read.RecordType);
+        Assert.Equal(original.Flags, read.Flags);
+        Assert.Equal(original.Reserved, read.Reserved);
         Assert.Equal(original.PayloadLength, read.PayloadLength);
         Assert.Equal(original.PayloadCrc32, read.PayloadCrc32);
         Assert.Equal(original.Timestamp, read.Timestamp);
@@ -126,5 +132,33 @@ public sealed class WalRecordHeaderTests
             WalRecordHeader read = reader.ReadStruct<WalRecordHeader>();
             Assert.Equal(type, read.RecordType);
         }
+    }
+
+    [Fact]
+    public void IsShapeValid_WithHeaderChecksum_DetectsHeaderDamage()
+    {
+        WalRecordHeader original = WalRecordHeader.CreateNew(
+            recordType: WalRecordType.WritePoint,
+            payloadLength: 16,
+            payloadCrc32: 0x12345678u,
+            timestampUtcTicks: 9_999_999L,
+            lsn: 99L);
+        original.Flags = WalRecordHeader.HeaderChecksumFlag;
+
+        Span<byte> buffer = stackalloc byte[FormatSizes.WalRecordHeaderSize];
+        var writer = new SpanWriter(buffer);
+        writer.WriteStruct(in original);
+        original.Reserved = WalRecordHeader.ComputeHeaderChecksum(buffer);
+        writer = new SpanWriter(buffer);
+        writer.WriteStruct(in original);
+
+        var reader = new SpanReader(buffer);
+        WalRecordHeader read = reader.ReadStruct<WalRecordHeader>();
+        Assert.True(read.IsShapeValid(buffer));
+
+        buffer[8] ^= 0x01;
+        reader = new SpanReader(buffer);
+        read = reader.ReadStruct<WalRecordHeader>();
+        Assert.False(read.IsShapeValid(buffer));
     }
 }

@@ -1,5 +1,6 @@
 ﻿using SonnetDB.Catalog;
 using SonnetDB.Model;
+using SonnetDB.Storage.Format;
 using SonnetDB.Wal;
 using Xunit;
 
@@ -25,6 +26,13 @@ public sealed class WalSegmentSetTests : IDisposable
 
     private WalSegmentSet OpenSet(WalRollingPolicy? policy = null, long initialStartLsn = 1) =>
         WalSegmentSet.Open(_tempDir, policy, bufferSize: 4 * 1024, initialStartLsn: initialStartLsn);
+
+    private static void RemoveLastLsnFooter(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
+        if (fs.Length >= FormatSizes.WalFileHeaderSize + FormatSizes.WalLastLsnFooterSize)
+            fs.SetLength(fs.Length - FormatSizes.WalLastLsnFooterSize);
+    }
 
     // ── Open / 基本属性 ─────────────────────────────────────────────────────
 
@@ -342,6 +350,100 @@ public sealed class WalSegmentSetTests : IDisposable
         // 验证时间顺序
         for (int i = 1; i < result.WritePoints.Count; i++)
             Assert.True(result.WritePoints[i].Lsn > result.WritePoints[i - 1].Lsn);
+    }
+
+    [Fact]
+    public void ReplayWithCheckpoint_MultipleSegmentsWithDurableCheckpoint_ReturnsOnlyLaterPoints()
+    {
+        var tags = new Dictionary<string, string> { ["host"] = "h1" };
+        var preCatalog = new SeriesCatalog();
+        var entry = preCatalog.GetOrAdd("cpu", tags);
+
+        using var set = OpenSet(new WalRollingPolicy { Enabled = false });
+        set.AppendCreateSeries(entry.Id, "cpu", tags);
+        for (int i = 0; i < 3; i++)
+            set.AppendWritePoint(entry.Id, 1000L + i, "usage", FieldValue.FromDouble(i));
+
+        set.Roll();
+        var firstSegment = set.Segments[0];
+        Assert.True(firstSegment.HasLastLsn);
+        Assert.Equal(4L, firstSegment.LastLsn);
+
+        for (int i = 3; i < 6; i++)
+            set.AppendWritePoint(entry.Id, 1000L + i, "usage", FieldValue.FromDouble(i));
+        set.Sync();
+
+        var catalog = new SeriesCatalog();
+        catalog.GetOrAdd("cpu", tags);
+
+        var result = set.ReplayWithCheckpoint(catalog, firstSegment.LastLsn);
+
+        Assert.Equal(firstSegment.LastLsn, result.CheckpointLsn);
+        Assert.Equal(7L, result.LastLsn);
+        Assert.Equal(3, result.WritePoints.Count);
+        Assert.All(result.WritePoints, wp => Assert.True(wp.Lsn > firstSegment.LastLsn));
+    }
+
+    [Fact]
+    public void ReplayWithCheckpoint_CheckpointCoversWholeSegment_SkipsByLastLsnMetadata()
+    {
+        var tags = new Dictionary<string, string> { ["host"] = "bad" };
+        Assert.NotEqual(123UL, new SeriesCatalog().GetOrAdd("bad_series", tags).Id);
+
+        using var set = OpenSet(new WalRollingPolicy { Enabled = false });
+        set.AppendCreateSeries(123UL, "bad_series", tags);
+        set.AppendWritePoint(123UL, 1000L, "v", FieldValue.FromDouble(1.0));
+        set.Roll();
+
+        var checkpointedSegment = set.Segments[0];
+        Assert.True(checkpointedSegment.HasLastLsn);
+
+        set.AppendWritePoint(123UL, 2000L, "v", FieldValue.FromDouble(2.0));
+        set.Sync();
+
+        var catalog = new SeriesCatalog();
+        var result = set.ReplayWithCheckpoint(catalog, checkpointedSegment.LastLsn);
+
+        Assert.Equal(checkpointedSegment.LastLsn, result.CheckpointLsn);
+        Assert.Single(result.WritePoints);
+        Assert.Equal(2000L, result.WritePoints[0].PointTimestamp);
+        Assert.Equal(0, catalog.Count);
+    }
+
+    [Fact]
+    public void ReplayWithCheckpoint_LegacyActiveWalUpgraded_ReplaysCorrectly()
+    {
+        string legacyPath = Path.Combine(_tempDir, WalSegmentLayout.LegacyActiveFileName);
+        var tags = new Dictionary<string, string> { ["host"] = "legacy" };
+        var preCatalog = new SeriesCatalog();
+        var entry = preCatalog.GetOrAdd("legacy_cpu", tags);
+
+        using (var writer = WalWriter.Open(legacyPath, startLsn: 42L))
+        {
+            writer.AppendCreateSeries(entry.Id, "legacy_cpu", tags);
+            writer.AppendWritePoint(entry.Id, 1000L, "usage", FieldValue.FromDouble(1.0));
+            writer.AppendWritePoint(entry.Id, 2000L, "usage", FieldValue.FromDouble(2.0));
+            writer.Sync();
+        }
+        RemoveLastLsnFooter(legacyPath);
+
+        using var set = OpenSet(new WalRollingPolicy { Enabled = false });
+
+        string upgradedPath = WalSegmentLayout.SegmentPath(_tempDir, 42L);
+        Assert.False(File.Exists(legacyPath));
+        Assert.True(File.Exists(upgradedPath));
+        Assert.Equal(42L, set.ActiveStartLsn);
+        Assert.Single(set.Segments);
+        Assert.True(set.Segments[0].HasLastLsn);
+        Assert.Equal(44L, set.Segments[0].LastLsn);
+
+        var catalog = new SeriesCatalog();
+        var result = set.ReplayWithCheckpoint(catalog);
+
+        Assert.Equal(0L, result.CheckpointLsn);
+        Assert.Equal(44L, result.LastLsn);
+        Assert.Equal(2, result.WritePoints.Count);
+        Assert.Equal(1, catalog.Count);
     }
 
     [Fact]

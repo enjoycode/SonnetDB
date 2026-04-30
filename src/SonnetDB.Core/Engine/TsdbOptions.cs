@@ -9,7 +9,7 @@ namespace SonnetDB.Engine;
 /// <summary>
 /// SonnetDB 引擎全局配置选项。
 /// </summary>
-public sealed class TsdbOptions
+public sealed record TsdbOptions
 {
     /// <summary>数据库根目录路径（默认为当前工作目录 "."）。</summary>
     public string RootDirectory { get; init; } = ".";
@@ -51,6 +51,9 @@ public sealed class TsdbOptions
 
     /// <summary>Retention TTL 策略（默认禁用，保持向后兼容）。</summary>
     public RetentionPolicy Retention { get; init; } = RetentionPolicy.Default;
+
+    /// <summary>Tombstone manifest 周期性 checkpoint 选项。</summary>
+    public TombstoneCheckpointOptions TombstoneCheckpoint { get; init; } = TombstoneCheckpointOptions.Default;
 
     /// <summary>
     /// 是否允许通过 <c>Tsdb.Functions</c> 注册用户自定义函数（UDF）。

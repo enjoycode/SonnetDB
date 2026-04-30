@@ -37,6 +37,9 @@ public sealed class Tsdb : IDisposable
     private CompactionWorker? _compactionWorker;
     private RetentionWorker? _retentionWorker;
     private long _checkpointLsn;
+    private long _tombstoneDeletesSinceCheckpoint;
+    private long _lastTombstoneCheckpointUtcTicks;
+    private Exception? _lastError;
 
     /// <summary>数据库根目录路径。</summary>
     public string RootDirectory => _options.RootDirectory;
@@ -72,6 +75,16 @@ public sealed class Tsdb : IDisposable
     /// </summary>
     public RetentionWorker? Retention { get; private set; }
 
+    /// <summary>
+    /// 最近一次被引擎内部捕获但未向调用方抛出的异常；当前主要用于 <see cref="Dispose"/> final flush 诊断。
+    /// </summary>
+    public Exception? LastError => Volatile.Read(ref _lastError);
+
+    /// <summary>
+    /// 引擎内部捕获到可诊断异常时触发的事件。事件处理器抛出的异常会被忽略，以保持调用方语义稳定。
+    /// </summary>
+    public event EventHandler<TsdbDiagnosticEvent>? DiagnosticEvent;
+
     /// <summary>下一个将分配的 SegmentId（线程安全读取）。</summary>
     public long NextSegmentId
     {
@@ -82,7 +95,7 @@ public sealed class Tsdb : IDisposable
         }
     }
 
-    /// <summary>最近一次 WAL Checkpoint 的 LSN（启动时从 WAL replay 获得；仅诊断/测试用）。</summary>
+    /// <summary>最近一次 WAL Checkpoint 的 LSN（启动时从 durable checkpoint 文件与 WAL replay 合并获得；仅诊断/测试用）。</summary>
     public long CheckpointLsn
     {
         get
@@ -157,6 +170,7 @@ public sealed class Tsdb : IDisposable
             options.UseSimdNumericAggregates);
         Functions = new UserFunctionRegistry(options.AllowUserFunctions);
         _checkpointLsn = checkpointLsn;
+        _lastTombstoneCheckpointUtcTicks = DateTime.UtcNow.Ticks;
     }
 
     /// <summary>
@@ -192,11 +206,19 @@ public sealed class Tsdb : IDisposable
         // 打开 WAL segment 集合（自动升级 legacy active.SDBWAL）
         string walDir = TsdbPaths.WalDir(root);
         var walSet = WalSegmentSet.Open(walDir, options.WalRolling, options.WalBufferSize, initialStartLsn: 1);
+        long durableCheckpointLsn = WalCheckpointFile
+            .TryLoad(
+                WalSegmentLayout.CheckpointPath(walDir),
+                state => IsCheckpointSegmentPresent(root, state))
+            ?.CheckpointLsn ?? 0L;
 
         // 回放全部 WAL segment，使用 Checkpoint LSN 跳过已落盘记录
         var memTable = new MemTable();
         int catalogCountBeforeReplay = catalog.Count;
-        var result = walSet.ReplayWithCheckpoint(catalog);
+        string tombstoneManifestPath = TsdbPaths.TombstoneManifestPath(root);
+        IReadOnlyList<Tombstone> manifestTombstones = TombstoneManifestCodec.Load(tombstoneManifestPath);
+        long durableTombstoneCheckpointLsn = GetMaxTombstoneLsn(manifestTombstones);
+        var result = walSet.ReplayWithCheckpoint(catalog, durableCheckpointLsn, durableTombstoneCheckpointLsn);
         memTable.ReplayFrom(result.WritePoints);
         long checkpointLsn = result.CheckpointLsn;
         bool catalogDirty = catalog.Count != catalogCountBeforeReplay;
@@ -208,14 +230,14 @@ public sealed class Tsdb : IDisposable
         var tsdb = new Tsdb(options, catalog, measurements, memTable, walSet, nextSegmentId, seriesWithWalRecord, segmentManager, checkpointLsn, catalogDirty);
 
         // 加载墓碑清单（文件不存在时返回空集合）
-        tsdb.Tombstones.LoadFrom(TombstoneManifestCodec.Load(TsdbPaths.TombstoneManifestPath(root)));
+        tsdb.Tombstones.LoadFrom(manifestTombstones);
 
         // 追加 WAL replay 中 checkpoint 之后的 Delete 记录
         foreach (var del in result.DeleteRecords)
             tsdb.Tombstones.Add(new Tombstone(del.SeriesId, del.FieldName, del.FromTimestamp, del.ToTimestamp, del.Lsn));
 
         // 重写一遍 manifest（合并 manifest + WAL replay 的结果）
-        TombstoneManifestCodec.Save(TsdbPaths.TombstoneManifestPath(root), tsdb.Tombstones.All);
+        TombstoneManifestCodec.Save(tombstoneManifestPath, tsdb.Tombstones.All);
 
         // 启动后台 Flush 线程
         if (options.BackgroundFlush.Enabled)
@@ -393,6 +415,8 @@ public sealed class Tsdb : IDisposable
             long lsn = _walSet!.AppendDelete(seriesId, fieldName, fromTimestamp, toTimestamp);
             var tomb = new Tombstone(seriesId, fieldName, fromTimestamp, toTimestamp, lsn);
             Tombstones.Add(tomb);
+            _tombstoneDeletesSinceCheckpoint++;
+            MaybeCheckpointTombstoneManifestLocked(DateTime.UtcNow.Ticks);
 
             if (_options.SyncWalOnEveryWrite)
                 walSync = _walGroupCommit.Prepare(_walSet!);
@@ -548,9 +572,14 @@ public sealed class Tsdb : IDisposable
                             if (result != null)
                                 _checkpointLsn = MemTable.LastLsn;
                         }
-                        catch
+                        catch (Exception ex)
                         {
                             // Flush 失败不应阻止 catalog 保存和 WAL 关闭
+                            ReportDiagnostic(
+                                "Dispose.FinalFlush",
+                                TsdbDiagnosticSeverity.Error,
+                                "Dispose final flush 失败；异常已被捕获，WAL 将保留为恢复来源。",
+                                ex);
                         }
                     }
                     else
@@ -629,6 +658,9 @@ public sealed class Tsdb : IDisposable
         // Flush 成功后旧 WAL segment 可能已回收；完整 catalog 已在回收前持久化。
         if (result != null)
         {
+            if (Tombstones.Count > 0)
+                MarkTombstoneManifestCheckpointedLocked(DateTime.UtcNow.Ticks);
+
             // 更新 CheckpointLsn（在锁内完成）
             if (lsnBeforeFlush != long.MinValue)
                 _checkpointLsn = lsnBeforeFlush;
@@ -848,6 +880,76 @@ public sealed class Tsdb : IDisposable
         }
     }
 
+    private static bool IsCheckpointSegmentPresent(string root, WalCheckpointState state)
+    {
+        string segmentPath = TsdbPaths.SegmentPath(root, state.SegmentId);
+        if (!File.Exists(segmentPath))
+            return false;
+
+        try
+        {
+            return new FileInfo(segmentPath).Length == state.SegmentLength;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static long GetMaxTombstoneLsn(IReadOnlyList<Tombstone> tombstones)
+    {
+        long max = 0;
+        for (int i = 0; i < tombstones.Count; i++)
+        {
+            long lsn = tombstones[i].CreatedLsn;
+            if (lsn > max)
+                max = lsn;
+        }
+
+        return max;
+    }
+
+    private void MaybeCheckpointTombstoneManifestLocked(long nowUtcTicks)
+    {
+        var checkpoint = _options.TombstoneCheckpoint;
+        if (!checkpoint.Enabled || _tombstoneDeletesSinceCheckpoint <= 0)
+            return;
+
+        bool countDue = checkpoint.MaxDeletesSinceCheckpoint > 0
+            && _tombstoneDeletesSinceCheckpoint >= checkpoint.MaxDeletesSinceCheckpoint;
+        bool timeDue = checkpoint.MaxInterval > TimeSpan.Zero
+            && nowUtcTicks - _lastTombstoneCheckpointUtcTicks >= checkpoint.MaxInterval.Ticks;
+
+        if (!countDue && !timeDue)
+            return;
+
+        try
+        {
+            TombstoneManifestCodec.Save(
+                TsdbPaths.TombstoneManifestPath(RootDirectory),
+                Tombstones.All);
+            MarkTombstoneManifestCheckpointedLocked(nowUtcTicks);
+        }
+        catch (IOException)
+        {
+            // 周期性 checkpoint 是恢复加速路径；失败时仍保留 WAL 作为权威恢复来源。
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // 同上：不改变 Delete 已写 WAL + 内存 tombstone 的语义。
+        }
+    }
+
+    private void MarkTombstoneManifestCheckpointedLocked(long nowUtcTicks)
+    {
+        _tombstoneDeletesSinceCheckpoint = 0;
+        _lastTombstoneCheckpointUtcTicks = nowUtcTicks;
+    }
+
     private void PersistMeasurementSchemasLocked()
     {
         if (!_measurementSchemaDirty)
@@ -862,6 +964,33 @@ public sealed class Tsdb : IDisposable
 
     private void MarkMeasurementSchemasDirty()
         => _measurementSchemaDirty = true;
+
+    private void ReportDiagnostic(
+        string operation,
+        TsdbDiagnosticSeverity severity,
+        string message,
+        Exception? exception)
+    {
+        if (exception is not null)
+            Volatile.Write(ref _lastError, exception);
+
+        var diagnostic = new TsdbDiagnosticEvent(operation, severity, message, exception);
+        var handlers = DiagnosticEvent;
+        if (handlers is null)
+            return;
+
+        foreach (EventHandler<TsdbDiagnosticEvent> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, diagnostic);
+            }
+            catch
+            {
+                // 诊断通道不能改变 Dispose / 后台任务的外部语义。
+            }
+        }
+    }
 
     private void PersistCatalogCheckpointLocked()
     {

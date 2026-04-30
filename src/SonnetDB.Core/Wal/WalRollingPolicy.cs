@@ -3,7 +3,7 @@
 /// <summary>
 /// WAL segment 滚动策略配置。
 /// </summary>
-public sealed class WalRollingPolicy
+public sealed record WalRollingPolicy
 {
     /// <summary>
     /// 是否启用多 segment 滚动。默认 <c>true</c>；设为 <c>false</c> 时退化为单文件模式（兼容旧行为）。

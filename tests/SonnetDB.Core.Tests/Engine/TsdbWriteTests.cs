@@ -308,6 +308,48 @@ public sealed class TsdbWriteTests : IDisposable
     }
 
     [Fact]
+    public void Dispose_FinalFlushFailure_RecordsDiagnosticAndDoesNotThrow()
+    {
+        var expected = new IOException("final flush boom");
+        var options = new TsdbOptions
+        {
+            RootDirectory = _tempDir,
+            WalBufferSize = 64 * 1024,
+            FlushPolicy = new MemTableFlushPolicy
+            {
+                MaxPoints = 1_000_000,
+                MaxBytes = 64 * 1024 * 1024,
+            },
+            SegmentWriterOptions = new SegmentWriterOptions
+            {
+                FsyncOnCommit = false,
+                FailAt = _ => throw expected,
+            },
+        };
+
+        var db = Tsdb.Open(options);
+        TsdbDiagnosticEvent? diagnostic = null;
+        db.DiagnosticEvent += (_, e) => diagnostic = e;
+        db.DiagnosticEvent += (_, _) => throw new InvalidOperationException("subscriber failure");
+
+        db.Write(Point.Create("cpu", 1000L,
+            new Dictionary<string, string> { ["host"] = "h" },
+            new Dictionary<string, FieldValue> { ["v"] = FieldValue.FromDouble(1.0) }));
+
+        var disposeException = Record.Exception(() => db.Dispose());
+
+        Assert.Null(disposeException);
+        Assert.Same(expected, db.LastError);
+        Assert.NotNull(diagnostic);
+        Assert.Equal("Dispose.FinalFlush", diagnostic!.Operation);
+        Assert.Equal(TsdbDiagnosticSeverity.Error, diagnostic.Severity);
+        Assert.Same(expected, diagnostic.Exception);
+        Assert.True(
+            diagnostic.Message.Contains("final flush", StringComparison.OrdinalIgnoreCase),
+            diagnostic.Message);
+    }
+
+    [Fact]
     public void Dispose_ThenOpen_CatalogAndSegmentsPreserved()
     {
         // First session: write + flush

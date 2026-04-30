@@ -97,6 +97,7 @@ public static class TombstoneManifestCodec
         }
 
         File.Move(tmpPath, path, overwrite: true);
+        WalCheckpointFile.FlushDirectoryBestEffort(Path.GetDirectoryName(path) ?? string.Empty);
     }
 
     // ── 私有实现 ──────────────────────────────────────────────────────────────

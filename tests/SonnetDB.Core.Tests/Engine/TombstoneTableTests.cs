@@ -70,6 +70,20 @@ public sealed class TombstoneTableTests
     }
 
     [Fact]
+    public void Add_DuplicateTombstone_IgnoresDuplicate()
+    {
+        var table = new TombstoneTable();
+        var tombstone = MakeTombstone(1UL, "f", 1, 10, 42);
+
+        table.Add(tombstone);
+        table.Add(tombstone);
+        table.LoadFrom([tombstone]);
+
+        Assert.Equal(1, table.Count);
+        Assert.Single(table.All);
+    }
+
+    [Fact]
     public void All_ReturnsSnapshot()
     {
         var table = new TombstoneTable();

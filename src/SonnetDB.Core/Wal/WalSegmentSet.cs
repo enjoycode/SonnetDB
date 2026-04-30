@@ -61,7 +61,7 @@ public sealed class WalSegmentSet : IDisposable
         get
         {
             lock (_sync)
-                return _segments.ToList().AsReadOnly();
+                return CreateSegmentSnapshotLocked();
         }
     }
 
@@ -124,16 +124,27 @@ public sealed class WalSegmentSet : IDisposable
             // 3. 空目录：创建第一个 segment
             string path = WalSegmentLayout.SegmentPath(walDirectory, initialStartLsn);
             activeWriter = WalWriter.Open(path, startLsn: initialStartLsn, bufferSize: bufferSize);
-            segments.Add(new WalSegmentInfo(initialStartLsn, path, 0));
+            segments.Add(new WalSegmentInfo(initialStartLsn, path, 0)
+            {
+                HasLastLsn = true,
+                LastLsn = initialStartLsn - 1,
+            });
         }
         else
         {
+            PopulateDerivedLastLsns(segments);
+
             // 4. 选 startLsn 最大的 segment 为 active，续写
             var activeInfo = segments[^1];
             // WalWriter.Open 会扫描已有记录并续写，起始 LSN 由文件内容决定
             activeWriter = WalWriter.Open(activeInfo.Path, startLsn: activeInfo.StartLsn, bufferSize: bufferSize);
             // 更新最后一条（active）的文件长度
-            segments[^1] = new WalSegmentInfo(activeInfo.StartLsn, activeInfo.Path, activeWriter.BytesWritten);
+            segments[^1] = activeInfo with
+            {
+                FileLength = activeWriter.BytesWritten,
+                HasLastLsn = true,
+                LastLsn = activeWriter.NextLsn - 1,
+            };
         }
 
         return new WalSegmentSet(walDirectory, policy, bufferSize, segments, activeWriter);
@@ -155,6 +166,7 @@ public sealed class WalSegmentSet : IDisposable
             ThrowIfDisposed();
             long lsn = _activeWriter!.AppendWritePoint(seriesId, pointTimestamp, fieldName, value);
             _activeRecordCount++;
+            UpdateActiveSegmentInfoLocked();
             RollIfNeeded();
             return lsn;
         }
@@ -175,6 +187,7 @@ public sealed class WalSegmentSet : IDisposable
             ThrowIfDisposed();
             long lsn = _activeWriter!.AppendCreateSeries(seriesId, measurement, tags);
             _activeRecordCount++;
+            UpdateActiveSegmentInfoLocked();
             RollIfNeeded();
             return lsn;
         }
@@ -193,6 +206,7 @@ public sealed class WalSegmentSet : IDisposable
             ThrowIfDisposed();
             long lsn = _activeWriter!.AppendCheckpoint(checkpointLsn);
             _activeRecordCount++;
+            UpdateActiveSegmentInfoLocked();
             return lsn;
         }
     }
@@ -213,6 +227,7 @@ public sealed class WalSegmentSet : IDisposable
             ThrowIfDisposed();
             long lsn = _activeWriter!.AppendDelete(seriesId, fieldName, fromTimestamp, toTimestamp);
             _activeRecordCount++;
+            UpdateActiveSegmentInfoLocked();
             RollIfNeeded();
             return lsn;
         }
@@ -285,52 +300,65 @@ public sealed class WalSegmentSet : IDisposable
     }
 
     /// <summary>
-    /// 顺序回放全部 segment（含 active），使用与 PR #17 同语义的两遍扫描策略：
-    /// 第一遍获取最大 CheckpointLsn 和最后 LSN，第二遍按 LSN 过滤 WritePoint。
+    /// 顺序回放全部 segment（含 active），单次扫描记录并按 checkpoint LSN 过滤 WritePoint。
     /// </summary>
     /// <param name="catalog">目标序列目录；CreateSeries 记录将被幂等应用到此 catalog。</param>
     /// <returns>包含 CheckpointLsn、LastLsn 及过滤后写入点列表的 <see cref="WalReplayResult"/>。</returns>
     /// <exception cref="ArgumentNullException"><paramref name="catalog"/> 为 null 时抛出。</exception>
     /// <exception cref="ObjectDisposedException">实例已关闭时抛出。</exception>
     public WalReplayResult ReplayWithCheckpoint(SeriesCatalog catalog)
+        => ReplayWithCheckpoint(catalog, durableCheckpointLsn: 0);
+
+    /// <summary>
+    /// 顺序回放全部 segment（含 active），并把已独立持久化的 checkpoint LSN 纳入过滤下界。
+    /// </summary>
+    /// <param name="catalog">目标序列目录；CreateSeries 记录将被幂等应用到此 catalog。</param>
+    /// <param name="durableCheckpointLsn">已通过独立 checkpoint 元数据确认持久化的 LSN；0 表示不存在。</param>
+    /// <returns>包含 CheckpointLsn、LastLsn 及过滤后写入点列表的 <see cref="WalReplayResult"/>。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="catalog"/> 为 null 时抛出。</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="durableCheckpointLsn"/> 小于 0 时抛出。</exception>
+    /// <exception cref="ObjectDisposedException">实例已关闭时抛出。</exception>
+    public WalReplayResult ReplayWithCheckpoint(SeriesCatalog catalog, long durableCheckpointLsn)
+        => ReplayWithCheckpoint(catalog, durableCheckpointLsn, durableTombstoneCheckpointLsn: 0);
+
+    internal WalReplayResult ReplayWithCheckpoint(
+        SeriesCatalog catalog,
+        long durableCheckpointLsn,
+        long durableTombstoneCheckpointLsn)
     {
         ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentOutOfRangeException.ThrowIfNegative(durableCheckpointLsn);
+        ArgumentOutOfRangeException.ThrowIfNegative(durableTombstoneCheckpointLsn);
 
         IReadOnlyList<WalSegmentInfo> snapshot;
         lock (_sync)
         {
             ThrowIfDisposed();
-            snapshot = _segments.ToList().AsReadOnly();
+            snapshot = CreateSegmentSnapshotLocked();
         }
 
-        // 第一遍：累计最大 CheckpointLsn 和最后 LSN
-        long checkpointLsn = 0;
+        long checkpointLsn = durableCheckpointLsn;
         long lastLsn = 0;
+        var writePoints = new List<WritePointRecord>();
+        var deleteRecords = new List<DeleteRecord>();
+        long deleteCheckpointLsn = Math.Max(checkpointLsn, durableTombstoneCheckpointLsn);
 
         foreach (var seg in snapshot)
         {
             if (!File.Exists(seg.Path))
                 continue;
+
+            if (seg.HasLastLsn && seg.LastLsn <= checkpointLsn)
+            {
+                if (seg.LastLsn > lastLsn)
+                    lastLsn = seg.LastLsn;
+                continue;
+            }
+
             using var reader = WalReader.Open(seg.Path);
             foreach (var record in reader.Replay())
             {
                 lastLsn = record.Lsn;
-                if (record is CheckpointRecord cp && cp.CheckpointLsn > checkpointLsn)
-                    checkpointLsn = cp.CheckpointLsn;
-            }
-        }
-
-        // 第二遍：应用 catalog + 按 checkpointLsn 过滤 WritePoint
-        var writePoints = new List<WritePointRecord>();
-        var deleteRecords = new List<DeleteRecord>();
-
-        foreach (var seg in snapshot)
-        {
-            if (!File.Exists(seg.Path))
-                continue;
-            using var reader = WalReader.Open(seg.Path);
-            foreach (var record in reader.Replay())
-            {
                 switch (record)
                 {
                     case CreateSeriesRecord cs:
@@ -341,13 +369,23 @@ public sealed class WalSegmentSet : IDisposable
                                 $"WAL={cs.SeriesId}, computed={entry.Id}.");
                         break;
 
+                    case CheckpointRecord cp:
+                        if (cp.CheckpointLsn > checkpointLsn)
+                        {
+                            checkpointLsn = cp.CheckpointLsn;
+                            deleteCheckpointLsn = Math.Max(checkpointLsn, durableTombstoneCheckpointLsn);
+                            RemoveCheckpointedWritePoints(writePoints, checkpointLsn);
+                            RemoveCheckpointedDeleteRecords(deleteRecords, deleteCheckpointLsn);
+                        }
+                        break;
+
                     case WritePointRecord wp:
                         if (wp.Lsn > checkpointLsn)
                             writePoints.Add(wp);
                         break;
 
                     case DeleteRecord del:
-                        if (del.Lsn > checkpointLsn)
+                        if (del.Lsn > deleteCheckpointLsn)
                             deleteRecords.Add(del);
                         break;
                 }
@@ -380,6 +418,62 @@ public sealed class WalSegmentSet : IDisposable
     }
 
     // ── 私有辅助 ─────────────────────────────────────────────────────────────
+
+    private static void PopulateDerivedLastLsns(List<WalSegmentInfo> segments)
+    {
+        for (int i = 0; i < segments.Count - 1; i++)
+        {
+            if (!segments[i].HasLastLsn)
+            {
+                segments[i] = segments[i] with
+                {
+                    HasLastLsn = true,
+                    LastLsn = segments[i + 1].StartLsn - 1,
+                };
+            }
+        }
+    }
+
+    private IReadOnlyList<WalSegmentInfo> CreateSegmentSnapshotLocked()
+    {
+        var snapshot = _segments.ToList();
+        PopulateDerivedLastLsns(snapshot);
+        return snapshot.AsReadOnly();
+    }
+
+    private void UpdateActiveSegmentInfoLocked()
+    {
+        if (_activeWriter is null || _segments.Count == 0)
+            return;
+
+        var active = _segments[^1];
+        _segments[^1] = active with
+        {
+            FileLength = _activeWriter.BytesWritten,
+            HasLastLsn = true,
+            LastLsn = _activeWriter.NextLsn - 1,
+        };
+    }
+
+    private static void RemoveCheckpointedWritePoints(List<WritePointRecord> records, long checkpointLsn)
+    {
+        int removeCount = 0;
+        while (removeCount < records.Count && records[removeCount].Lsn <= checkpointLsn)
+            removeCount++;
+
+        if (removeCount > 0)
+            records.RemoveRange(0, removeCount);
+    }
+
+    private static void RemoveCheckpointedDeleteRecords(List<DeleteRecord> records, long checkpointLsn)
+    {
+        int removeCount = 0;
+        while (removeCount < records.Count && records[removeCount].Lsn <= checkpointLsn)
+            removeCount++;
+
+        if (removeCount > 0)
+            records.RemoveRange(0, removeCount);
+    }
 
     /// <summary>
     /// 若当前 active segment 超过滚动阈值，在锁内执行 Roll。
@@ -418,7 +512,11 @@ public sealed class WalSegmentSet : IDisposable
 
         string newPath = WalSegmentLayout.SegmentPath(WalDirectory, newStartLsn);
         _activeWriter = WalWriter.Open(newPath, startLsn: newStartLsn, bufferSize: _bufferSize);
-        _segments.Add(new WalSegmentInfo(newStartLsn, newPath, 0));
+        _segments.Add(new WalSegmentInfo(newStartLsn, newPath, 0)
+        {
+            HasLastLsn = true,
+            LastLsn = newStartLsn - 1,
+        });
         _activeRecordCount = 0;
     }
 
@@ -426,6 +524,7 @@ public sealed class WalSegmentSet : IDisposable
     {
         _activeWriter!.Sync();
         _syncCount++;
+        UpdateActiveSegmentInfoLocked();
     }
 
     private void ThrowIfDisposed()

@@ -3,6 +3,7 @@ using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Query;
 using SonnetDB.Storage.Segments;
+using SonnetDB.Wal;
 using Xunit;
 
 namespace SonnetDB.Core.Tests.Engine;
@@ -161,5 +162,63 @@ public sealed class TsdbCheckpointReplayTests : IDisposable
 
         Assert.True(db.CheckpointLsn > 0);
         Assert.Equal(lsnBefore, db.CheckpointLsn);
+    }
+
+    [Fact]
+    public void Reopen_AfterFlushAndWalRecycle_LoadsDurableCheckpointLsn()
+    {
+        long expectedCheckpointLsn;
+        {
+            var db = Tsdb.Open(MakeOptions());
+            for (int i = 0; i < 10; i++)
+                db.Write(MakePoint("cpu", 1000L + i, i));
+
+            expectedCheckpointLsn = db.MemTable.LastLsn;
+            db.FlushNow();
+            Assert.True(File.Exists(WalSegmentLayout.CheckpointPath(TsdbPaths.WalDir(_tempDir))));
+            db.CrashSimulationCloseWal();
+        }
+
+        using var reopened = Tsdb.Open(MakeOptions());
+        Assert.Equal(expectedCheckpointLsn, reopened.CheckpointLsn);
+        Assert.Equal(0L, reopened.MemTable.PointCount);
+    }
+
+    [Fact]
+    public void Reopen_WithCheckpointTempFileOnly_ReplaysUnflushedWal()
+    {
+        var db = Tsdb.Open(MakeOptions());
+        for (int i = 0; i < 3; i++)
+            db.Write(MakePoint("cpu", 1000L + i, i));
+
+        db.CrashSimulationCloseWal();
+
+        string checkpointPath = WalSegmentLayout.CheckpointPath(TsdbPaths.WalDir(_tempDir));
+        WalCheckpointFile.Save(
+            checkpointPath,
+            new WalCheckpointState(100L, 1L, 1L, DateTime.UtcNow.Ticks));
+        File.Move(checkpointPath, checkpointPath + WalCheckpointFile.TempSuffix, overwrite: true);
+
+        using var reopened = Tsdb.Open(MakeOptions());
+        Assert.Equal(0L, reopened.CheckpointLsn);
+        Assert.Equal(3L, reopened.MemTable.PointCount);
+    }
+
+    [Fact]
+    public void Reopen_WithCheckpointForMissingSegment_ReplaysUnflushedWal()
+    {
+        var db = Tsdb.Open(MakeOptions());
+        for (int i = 0; i < 3; i++)
+            db.Write(MakePoint("cpu", 1000L + i, i));
+
+        db.CrashSimulationCloseWal();
+
+        WalCheckpointFile.Save(
+            WalSegmentLayout.CheckpointPath(TsdbPaths.WalDir(_tempDir)),
+            new WalCheckpointState(100L, 42L, 4096L, DateTime.UtcNow.Ticks));
+
+        using var reopened = Tsdb.Open(MakeOptions());
+        Assert.Equal(0L, reopened.CheckpointLsn);
+        Assert.Equal(3L, reopened.MemTable.PointCount);
     }
 }

@@ -33,14 +33,8 @@ public sealed class TombstoneTable
     {
         lock (_lock)
         {
-            var key = (tombstone.SeriesId, tombstone.FieldName);
-            if (!_byKey.TryGetValue(key, out var list))
-            {
-                list = new List<Tombstone>();
-                _byKey[key] = list;
-            }
-            list.Add(tombstone);
-            RebuildSnapshot();
+            if (AddLocked(tombstone))
+                RebuildSnapshot();
         }
     }
 
@@ -58,17 +52,12 @@ public sealed class TombstoneTable
 
         lock (_lock)
         {
+            bool changed = false;
             foreach (var tomb in tombstones)
-            {
-                var key = (tomb.SeriesId, tomb.FieldName);
-                if (!_byKey.TryGetValue(key, out var list))
-                {
-                    list = new List<Tombstone>();
-                    _byKey[key] = list;
-                }
-                list.Add(tomb);
-            }
-            RebuildSnapshot();
+                changed |= AddLocked(tomb);
+
+            if (changed)
+                RebuildSnapshot();
         }
     }
 
@@ -139,6 +128,22 @@ public sealed class TombstoneTable
     }
 
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
+
+    private bool AddLocked(in Tombstone tombstone)
+    {
+        var key = (tombstone.SeriesId, tombstone.FieldName);
+        if (!_byKey.TryGetValue(key, out var list))
+        {
+            list = new List<Tombstone>();
+            _byKey[key] = list;
+        }
+
+        if (list.Contains(tombstone))
+            return false;
+
+        list.Add(tombstone);
+        return true;
+    }
 
     /// <summary>
     /// 判定 timestamp 是否被数组中任意墓碑覆盖。

@@ -1,4 +1,5 @@
 ﻿using System.Buffers;
+using System.IO.Hashing;
 using SonnetDB.IO;
 using SonnetDB.Storage.Format;
 
@@ -14,6 +15,9 @@ public static class WalSegmentLayout
 
     /// <summary>旧版（PR #13）单文件 WAL 的文件名。</summary>
     public const string LegacyActiveFileName = "active.SDBWAL";
+
+    /// <summary>WAL checkpoint LSN 元数据文件名。</summary>
+    public const string CheckpointFileName = "checkpoint.SDBWCKP";
 
     /// <summary>
     /// 根据 startLsn 生成 segment 文件名（不含目录）：<c>{startLsn:X16}.SDBWAL</c>。
@@ -31,6 +35,14 @@ public static class WalSegmentLayout
     /// <returns>segment 文件完整路径。</returns>
     public static string SegmentPath(string walDir, long startLsn) =>
         Path.Combine(walDir, SegmentFileName(startLsn));
+
+    /// <summary>
+    /// 根据 walDir 生成 checkpoint LSN 元数据文件完整路径。
+    /// </summary>
+    /// <param name="walDir">WAL 子目录路径。</param>
+    /// <returns>checkpoint 元数据文件完整路径。</returns>
+    public static string CheckpointPath(string walDir) =>
+        Path.Combine(walDir, CheckpointFileName);
 
     /// <summary>
     /// 尝试从文件名中解析 segment 的 startLsn。
@@ -73,7 +85,10 @@ public static class WalSegmentLayout
             {
                 long len = 0;
                 try { len = new FileInfo(file).Length; } catch { }
-                list.Add(new WalSegmentInfo(lsn, file, len));
+                var info = new WalSegmentInfo(lsn, file, len);
+                if (TryReadLastLsnFooter(file, out long lastLsn))
+                    info = info with { HasLastLsn = true, LastLsn = lastLsn };
+                list.Add(info);
             }
         }
 
@@ -133,5 +148,78 @@ public static class WalSegmentLayout
         {
             ArrayPool<byte>.Shared.Return(buf);
         }
+    }
+
+    private static bool TryReadLastLsnFooter(string path, out long lastLsn)
+    {
+        lastLsn = 0;
+
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (fs.Length < FormatSizes.WalFileHeaderSize + FormatSizes.WalLastLsnFooterSize)
+                return false;
+
+            Span<byte> fileHeaderBuffer = stackalloc byte[FormatSizes.WalFileHeaderSize];
+            if (ReadExact(fs, fileHeaderBuffer) < FormatSizes.WalFileHeaderSize)
+                return false;
+
+            var fileHeaderReader = new SpanReader(fileHeaderBuffer);
+            var fileHeader = fileHeaderReader.ReadStruct<WalFileHeader>();
+            if (!fileHeader.IsValid())
+                return false;
+
+            Span<byte> footerBuffer = stackalloc byte[FormatSizes.WalLastLsnFooterSize];
+            fs.Position = fs.Length - FormatSizes.WalLastLsnFooterSize;
+            if (ReadExact(fs, footerBuffer) < FormatSizes.WalLastLsnFooterSize)
+                return false;
+
+            var footerReader = new SpanReader(footerBuffer);
+            var footer = footerReader.ReadStruct<WalLastLsnFooter>();
+            if (!footer.IsShapeValid())
+                return false;
+
+            if (footer.RecordsEndOffset != fs.Length - FormatSizes.WalLastLsnFooterSize)
+                return false;
+
+            if (footer.RecordsEndOffset < FormatSizes.WalFileHeaderSize)
+                return false;
+
+            if (footer.LastLsn < fileHeader.FirstLsn - 1 || footer.LastLsn == long.MaxValue)
+                return false;
+
+            uint expectedCrc = Crc32.HashToUInt32(footerBuffer[..WalLastLsnFooter.CrcCoveredLength]);
+            if (footer.Crc32 != expectedCrc)
+                return false;
+
+            lastLsn = footer.LastLsn;
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private static int ReadExact(Stream stream, Span<byte> buffer)
+    {
+        int total = 0;
+        while (total < buffer.Length)
+        {
+            int read = stream.Read(buffer[total..]);
+            if (read == 0)
+                break;
+            total += read;
+        }
+
+        return total;
     }
 }

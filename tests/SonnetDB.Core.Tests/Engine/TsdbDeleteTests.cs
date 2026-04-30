@@ -3,6 +3,7 @@ using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Query;
 using SonnetDB.Storage.Segments;
+using SonnetDB.Wal;
 using Xunit;
 
 namespace SonnetDB.Core.Tests.Engine;
@@ -36,7 +37,9 @@ public sealed class TsdbDeleteTests : IDisposable
         return db.Query.Execute(q).ToList().AsReadOnly();
     }
 
-    private static TsdbOptions MakeOptions(string dir) =>
+    private static TsdbOptions MakeOptions(
+        string dir,
+        TombstoneCheckpointOptions? tombstoneCheckpoint = null) =>
         new TsdbOptions
         {
             RootDirectory = dir,
@@ -44,6 +47,7 @@ public sealed class TsdbDeleteTests : IDisposable
             FlushPolicy = new MemTableFlushPolicy { MaxPoints = 10_000_000, MaxBytes = 256 * 1024 * 1024 },
             SegmentWriterOptions = new SegmentWriterOptions { FsyncOnCommit = false },
             SyncWalOnEveryWrite = false,
+            TombstoneCheckpoint = tombstoneCheckpoint ?? TombstoneCheckpointOptions.Default,
         };
 
     [Fact]
@@ -253,6 +257,48 @@ public sealed class TsdbDeleteTests : IDisposable
             Assert.Equal(1, db.Tombstones.Count);
             Assert.True(db.Tombstones.IsCovered(seriesId, "usage", 75L));
         }
+    }
+
+    [Fact]
+    public void CrashRecovery_PeriodicTombstoneCheckpointAfterManyDeletes_RestoresWithoutWalReplay()
+    {
+        ulong seriesId;
+        var checkpoint = new TombstoneCheckpointOptions
+        {
+            Enabled = true,
+            MaxDeletesSinceCheckpoint = 10,
+            MaxInterval = TimeSpan.FromDays(1),
+        };
+
+        {
+            using var db = Tsdb.Open(MakeOptions(_tempDir, checkpoint));
+
+            for (int i = 0; i < 100; i++)
+                db.Write(MakePoint("cpu", i, "usage", i));
+
+            seriesId = db.Catalog.Snapshot().First().Id;
+            db.FlushNow();
+
+            for (int i = 0; i < 50; i++)
+                db.Delete(seriesId, "usage", i, i);
+
+            var manifest = TombstoneManifestCodec.Load(TsdbPaths.TombstoneManifestPath(_tempDir));
+            Assert.Equal(50, manifest.Count);
+
+            db.CrashSimulationCloseWal();
+        }
+
+        string walDir = TsdbPaths.WalDir(_tempDir);
+        foreach (string file in Directory.GetFiles(walDir, "*.SDBWAL"))
+            File.Delete(file);
+
+        using var reopened = Tsdb.Open(MakeOptions(_tempDir, checkpoint));
+        Assert.Equal(50, reopened.Tombstones.Count);
+        Assert.True(reopened.Tombstones.IsCovered(seriesId, "usage", 25L));
+
+        var points = QueryAll(reopened, seriesId, "usage");
+        Assert.Equal(50, points.Count);
+        Assert.All(points, static p => Assert.True(p.Timestamp >= 50));
     }
 
     [Fact]
