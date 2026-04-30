@@ -879,6 +879,26 @@ internal static class SelectExecutor
                     var geoFilters = where.GeoFilters
                         .Where(f => string.Equals(f.FieldName, fname, StringComparison.Ordinal))
                         .ToArray();
+
+                    if (CanUseExtendedAggregateSketchPath(spec, bucketSizeMs, geoFilters))
+                    {
+                        bool existed = bucketAccumulators.TryGetValue(long.MinValue, out var slots);
+                        slots ??= CreateAggSlots(aggSpecs);
+
+                        if (slots[specIdx].TryUpdateExtendedFromSidecar(
+                                tsdb,
+                                series.Id,
+                                fname,
+                                where.TimeRange,
+                                out long observedCount))
+                        {
+                            if (!existed && observedCount > 0)
+                                bucketAccumulators[long.MinValue] = slots;
+
+                            continue;
+                        }
+                    }
+
                     var points = QueryPoints(tsdb, series.Id, fname, where.TimeRange, geoFilters);
                     foreach (var dp in points)
                     {
@@ -888,9 +908,7 @@ internal static class SelectExecutor
 
                         if (!bucketAccumulators.TryGetValue(bucketStart, out var slots))
                         {
-                            slots = new AggSlot[aggSpecs.Count];
-                            for (int k = 0; k < slots.Length; k++)
-                                slots[k] = AggSlot.Create(aggSpecs[k]);
+                            slots = CreateAggSlots(aggSpecs);
                             bucketAccumulators[bucketStart] = slots;
                         }
 
@@ -921,6 +939,25 @@ internal static class SelectExecutor
 
         var columnNames = projections.Select(p => p.ColumnName).ToList();
         return new SelectExecutionResult(columnNames, rows);
+    }
+
+    private static AggSlot[] CreateAggSlots(IReadOnlyList<AggSpec> aggSpecs)
+    {
+        var slots = new AggSlot[aggSpecs.Count];
+        for (int i = 0; i < slots.Length; i++)
+            slots[i] = AggSlot.Create(aggSpecs[i]);
+        return slots;
+    }
+
+    private static bool CanUseExtendedAggregateSketchPath(
+        AggSpec spec,
+        long bucketSizeMs,
+        IReadOnlyList<GeoPointWhereFilter> geoFilters)
+    {
+        return spec.IsExtended
+            && bucketSizeMs <= 0
+            && spec.FieldName is not null
+            && geoFilters.Count == 0;
     }
 
     private static double FieldValueToDouble(FieldValue v, MeasurementColumn? col)
@@ -1022,6 +1059,25 @@ internal static class SelectExecutor
             {
                 _extended.Add(timestamp, FieldValueToDouble(value, col));
             }
+        }
+
+        public bool TryUpdateExtendedFromSidecar(
+            Tsdb tsdb,
+            ulong seriesId,
+            string fieldName,
+            TimeRange range,
+            out long observedCount)
+        {
+            observedCount = 0;
+            if (_extended is null)
+                return false;
+
+            return tsdb.Query.TryAddExtendedAggregateSketches(
+                seriesId,
+                fieldName,
+                range,
+                _extended,
+                out observedCount);
         }
 
         public object? Finalize()

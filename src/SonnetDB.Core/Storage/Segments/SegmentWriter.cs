@@ -139,9 +139,12 @@ public sealed class SegmentWriter
         long footerOffset = 0L;
         var indexEntries = new List<BlockIndexEntry>(sorted.Count);
         var vectorIndexBlocks = new List<HnswVectorBlockIndex>();
+        var aggregateSketchBlocks = new List<BlockAggregateSketch>();
         bool tempFileCreated = false;
         string tempVectorIndexPath = SonnetDB.Engine.TsdbPaths.VectorIndexPathForSegment(tempPath);
         string vectorIndexPath = SonnetDB.Engine.TsdbPaths.VectorIndexPathForSegment(path);
+        string tempAggregateIndexPath = SonnetDB.Engine.TsdbPaths.AggregateIndexPathForSegment(tempPath);
+        string aggregateIndexPath = SonnetDB.Engine.TsdbPaths.AggregateIndexPathForSegment(path);
 
         try
         {
@@ -192,7 +195,7 @@ public sealed class SegmentWriter
                                     TimestampCodec.WriteDeltaOfDelta(tsArr.AsSpan(0, points.Length), tsBuf.AsSpan(0, tsPayloadLen));
                                 ReadOnlySpan<byte> tsSpan = tsBuf.AsSpan(0, tsPayloadLen);
                                 WriteOneBlock(bs, bucket, points, fieldNameSpan, tsSpan, BlockEncoding.DeltaTimestamp,
-                                    blockOffset, indexEntries, vectorIndexBlocks, vectorIndexes,
+                                    blockOffset, indexEntries, vectorIndexBlocks, aggregateSketchBlocks, vectorIndexes,
                                     ref segMinTs, ref segMaxTs, ref currentOffset);
                             }
                             finally { ArrayPool<byte>.Shared.Return(tsBuf); }
@@ -215,7 +218,7 @@ public sealed class SegmentWriter
 
                         ReadOnlySpan<byte> tsSpan = tsBufV1.AsSpan(0, tsPayloadLen);
                         WriteOneBlock(bs, bucket, points, fieldNameSpan, tsSpan, BlockEncoding.None,
-                            blockOffset, indexEntries, vectorIndexBlocks, vectorIndexes,
+                            blockOffset, indexEntries, vectorIndexBlocks, aggregateSketchBlocks, vectorIndexes,
                             ref segMinTs, ref segMaxTs, ref currentOffset);
                     }
                     finally { ArrayPool<byte>.Shared.Return(tsBufV1); }
@@ -253,6 +256,8 @@ public sealed class SegmentWriter
 
             if (vectorIndexBlocks.Count > 0)
                 SegmentVectorIndexFile.Write(tempVectorIndexPath, vectorIndexBlocks);
+            if (aggregateSketchBlocks.Count > 0)
+                SegmentAggregateSketchFile.Write(tempAggregateIndexPath, aggregateSketchBlocks);
 
             bs.Dispose();
             // using var fs ensures fs is disposed when the try block exits (idempotent if bs already closed it)
@@ -263,6 +268,7 @@ public sealed class SegmentWriter
             if (tempFileCreated)
                 try { File.Delete(tempPath); } catch { }
             try { File.Delete(tempVectorIndexPath); } catch { }
+            try { File.Delete(tempAggregateIndexPath); } catch { }
             throw;
         }
 
@@ -283,6 +289,22 @@ public sealed class SegmentWriter
         else if (File.Exists(vectorIndexPath))
         {
             try { File.Delete(vectorIndexPath); } catch { }
+        }
+
+        if (aggregateSketchBlocks.Count > 0)
+        {
+            try
+            {
+                File.Move(tempAggregateIndexPath, aggregateIndexPath, overwrite: true);
+            }
+            catch
+            {
+                try { File.Delete(tempAggregateIndexPath); } catch { }
+            }
+        }
+        else if (File.Exists(aggregateIndexPath))
+        {
+            try { File.Delete(aggregateIndexPath); } catch { }
         }
 
         // 崩溃注入钩子（仅测试使用）：rename 完成后、Checkpoint 写入之前
@@ -318,6 +340,7 @@ public sealed class SegmentWriter
         long blockOffset,
         List<BlockIndexEntry> indexEntries,
         List<HnswVectorBlockIndex> vectorIndexBlocks,
+        List<BlockAggregateSketch> aggregateSketchBlocks,
         IReadOnlyDictionary<SeriesFieldKey, SonnetDB.Catalog.VectorIndexDefinition>? vectorIndexes,
         ref long segMinTs,
         ref long segMaxTs,
@@ -414,6 +437,16 @@ public sealed class SegmentWriter
                     blockIndex,
                     points.Span,
                     vectorIndex.Hnsw));
+            }
+
+            if (BlockAggregateSketch.TryBuild(
+                    blockIndex,
+                    crc32,
+                    bucket.FieldType,
+                    points.Span,
+                    out var aggregateSketch))
+            {
+                aggregateSketchBlocks.Add(aggregateSketch);
             }
 
             currentOffset += blockLength;

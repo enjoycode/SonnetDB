@@ -139,6 +139,7 @@ internal sealed class CompactionWorker : IDisposable
                     {
                         TryDelete(TsdbPaths.SegmentPath(_owner.RootDirectory, oldId));
                         TryDelete(TsdbPaths.VectorIndexPath(_owner.RootDirectory, oldId));
+                        TryDelete(TsdbPaths.AggregateIndexPath(_owner.RootDirectory, oldId));
                     }
 
                     // 回收已被消化的墓碑（不再覆盖任何活段的墓碑可以丢弃）

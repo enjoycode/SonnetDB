@@ -139,6 +139,46 @@ internal sealed class TDigest
         return bytes;
     }
 
+    /// <summary>
+    /// 从 <see cref="Serialize"/> 生成的二进制载荷恢复 t-digest。
+    /// </summary>
+    /// <param name="bytes">二进制载荷。</param>
+    /// <returns>恢复后的 t-digest。</returns>
+    /// <exception cref="InvalidDataException">载荷格式不合法。</exception>
+    public static TDigest Deserialize(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 8
+            || bytes[0] != (byte)'T'
+            || bytes[1] != (byte)'D'
+            || bytes[2] != (byte)'0'
+            || bytes[3] != (byte)'1')
+        {
+            throw new InvalidDataException("TDigest magic 不匹配。");
+        }
+
+        int n = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(bytes[4..8]);
+        long expectedLength = 8L + (long)n * 16L;
+        if (n < 0 || bytes.Length != expectedLength)
+            throw new InvalidDataException("TDigest centroid 数量或长度非法。");
+
+        var digest = new TDigest();
+        double totalWeight = 0;
+        for (int i = 0; i < n; i++)
+        {
+            int offset = 8 + i * 16;
+            double mean = System.Buffers.Binary.BinaryPrimitives.ReadDoubleLittleEndian(bytes[offset..(offset + 8)]);
+            double weight = System.Buffers.Binary.BinaryPrimitives.ReadDoubleLittleEndian(bytes[(offset + 8)..(offset + 16)]);
+            if (double.IsNaN(mean) || weight <= 0 || double.IsNaN(weight) || double.IsInfinity(weight))
+                throw new InvalidDataException("TDigest centroid 内容非法。");
+
+            digest._centroids.Add(new Centroid(mean, weight));
+            totalWeight += weight;
+        }
+
+        digest.Count = checked((long)Math.Round(totalWeight));
+        return digest;
+    }
+
     /// <summary>序列化为人类可读 JSON 字符串。</summary>
     public string ToJson()
     {

@@ -35,6 +35,9 @@ public static class TsdbPaths
     /// <summary>向量索引 sidecar 文件扩展名。</summary>
     public const string VectorIndexFileExtension = ".SDBVIDX";
 
+    /// <summary>扩展聚合 block sketch sidecar 文件扩展名。</summary>
+    public const string AggregateIndexFileExtension = ".SDBAIDX";
+
     /// <summary>墓碑清单文件名（相对于根目录）。</summary>
     public const string TombstoneManifestFileName = "tombstones.tslmanifest";
 
@@ -118,6 +121,27 @@ public static class TsdbPaths
     {
         ArgumentNullException.ThrowIfNull(segmentPath);
         return Path.ChangeExtension(segmentPath, VectorIndexFileExtension);
+    }
+
+    /// <summary>
+    /// 返回指定 SegmentId 对应的扩展聚合 sketch sidecar 文件完整路径：
+    /// <c>{root}/segments/{segmentId:X16}.SDBAIDX</c>。
+    /// </summary>
+    /// <param name="root">数据库根目录路径。</param>
+    /// <param name="segmentId">段唯一标识符。</param>
+    /// <returns>扩展聚合 sidecar 文件路径。</returns>
+    public static string AggregateIndexPath(string root, long segmentId) =>
+        Path.Combine(root, SegmentsDirName, $"{segmentId:X16}{AggregateIndexFileExtension}");
+
+    /// <summary>
+    /// 根据段文件路径推导对应的扩展聚合 sketch sidecar 文件路径。
+    /// </summary>
+    /// <param name="segmentPath">段文件完整路径。</param>
+    /// <returns>对应的 sidecar 文件路径。</returns>
+    public static string AggregateIndexPathForSegment(string segmentPath)
+    {
+        ArgumentNullException.ThrowIfNull(segmentPath);
+        return Path.ChangeExtension(segmentPath, AggregateIndexFileExtension);
     }
 
     /// <summary>

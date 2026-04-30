@@ -1,6 +1,7 @@
 ﻿using SonnetDB.Engine;
 using SonnetDB.Sql;
 using SonnetDB.Sql.Execution;
+using SonnetDB.Storage.Segments;
 using Xunit;
 
 namespace SonnetDB.Core.Tests.Sql;
@@ -25,6 +26,14 @@ public sealed class SqlExecutorExtendedAggregateTests : IDisposable
     }
 
     private TsdbOptions Options() => new() { RootDirectory = _root };
+
+    private TsdbOptions ManualFlushOptions() => new()
+    {
+        RootDirectory = _root,
+        BackgroundFlush = new BackgroundFlushOptions { Enabled = false },
+        Compaction = new SonnetDB.Engine.Compaction.CompactionPolicy { Enabled = false },
+        SegmentWriterOptions = new SegmentWriterOptions { FsyncOnCommit = false },
+    };
 
     private static Tsdb OpenWithSchema(TsdbOptions options)
     {
@@ -120,6 +129,50 @@ public sealed class SqlExecutorExtendedAggregateTests : IDisposable
         var r = Select(db, "SELECT distinct_count(usage) FROM cpu");
         long est = (long)r.Rows[0][0]!;
         Assert.InRange(est, 240, 260); // ±4% 容忍
+    }
+
+    [Fact]
+    public void PercentileAndDistinctCount_AfterFlush_UseAggregateSketchSidecar()
+    {
+        using var db = OpenWithSchema(ManualFlushOptions());
+        var values = Enumerable.Range(0, 200)
+            .Select(i => (double)(i % 50))
+            .ToArray();
+        Seed(db, values);
+
+        var flush = db.FlushNow();
+        Assert.NotNull(flush);
+        Assert.True(File.Exists(TsdbPaths.AggregateIndexPath(_root, flush.SegmentId)));
+
+        var reader = Assert.Single(db.Segments.Readers);
+        Assert.False(reader.AggregateSketchOffsetsLoaded);
+
+        var r = Select(db, "SELECT percentile(usage, 95), p95(usage), distinct_count(usage) FROM cpu");
+
+        Assert.Single(r.Rows);
+        Assert.Equal((double)r.Rows[0][0]!, (double)r.Rows[0][1]!, precision: 6);
+        Assert.InRange((double)r.Rows[0][0]!, 45d, 49d);
+        Assert.InRange((long)r.Rows[0][2]!, 48L, 52L);
+        Assert.True(reader.AggregateSketchOffsetsLoaded);
+    }
+
+    [Fact]
+    public void PercentileAndDistinctCount_MissingSidecar_FallBackToDecodedBlocks()
+    {
+        using var db = OpenWithSchema(ManualFlushOptions());
+        var values = Enumerable.Range(1, 100).Select(i => (double)i).ToArray();
+        Seed(db, values);
+
+        var flush = db.FlushNow();
+        Assert.NotNull(flush);
+        File.Delete(TsdbPaths.AggregateIndexPath(_root, flush.SegmentId));
+
+        var r = Select(db, "SELECT p95(usage), distinct_count(usage) FROM cpu");
+
+        Assert.Single(r.Rows);
+        Assert.InRange((double)r.Rows[0][0]!, 90d, 99d);
+        Assert.InRange((long)r.Rows[0][1]!, 98L, 102L);
+        Assert.True(Assert.Single(db.Segments.Readers).AggregateSketchOffsetsLoaded);
     }
 
     [Fact]

@@ -35,6 +35,7 @@
 - **PR #77 — 地理空间基准 + 文档完善**：新增 `GeoQueryBenchmark`，覆盖 `100k` 默认轨迹点和可选 `1M` 档位下的 `geo_within`、`geo_bbox`、`trajectory_length` 与 `GEOPOINT` range scan；README 与 `docs/geo-spatial.md` 补齐地理空间功能矩阵、Web Admin / SQL Console 地图用法、基准运行方式和车辆追踪 / 户外运动 / IoT 地理围栏端到端示例。
 
 ### Changed
+- **扩展聚合 block sketch sidecar 快路径**：新增可选 `.SDBAIDX` sidecar，为数值 block 写入 TDigest 与 HyperLogLog sketch，`percentile` / `p50` / `p90` / `p95` / `p99` / `tdigest_agg` / `distinct_count` 在全局聚合且无 tombstone/geo 过滤时可按 block 合并 sketch；`.SDBSEG` v5 主格式不变，缺失或损坏 sidecar 会自动回退旧解码扫描路径，并补充 sidecar 懒加载、缺失回退与 SQL 快路径测试。
 - **窗口函数流式状态接口**：新增 `IWindowState` / `IWindowStreamingEvaluator`，流式窗口函数可通过 `Update(timestamp, value)` 按行推进；`DoubleWindowEvaluatorBase` 保留旧 `Compute` / `ComputeDouble` 适配层，`SelectExecutor` 在窗口 evaluator 全部支持流式状态时跳过 `long[]` / `FieldValue?[]` 对齐数组和预计算输出，仍对未迁移函数自动回退旧 materialized 路径。补充流式状态语义与大数据集内存占用回归测试。
 - **窗口函数 Span 批量路径**：`moving_average`、`running_sum` 及新增 `running_min` / `running_max` 的 typed/boxed 批量计算改为基于 `ReadOnlySpan` / `Span` 单遍填充输出；`moving_average` 小窗口使用栈上环形缓冲，减少临时数组，同时保持前 `n-1` 行 NULL、缺失值跳过/延续和时间顺序语义不变。补充空输入、全缺失、窗口大小 1 与累计极值边界测试。
 - **窗口函数 typed evaluator**：新增 `IWindowDoubleEvaluator` / `WindowDoubleOutput` 数值窗口函数输出接口，`SelectExecutor` 对 typed evaluator 优先复用 `double[] + bool[]`，避免 `Compute` 先生成 `object?[]` 导致每行提前装箱；`moving_average`、`ewma`、`holt_winters` 与累计求和路径已迁移，并新增 `running_sum` 作为 `cumulative_sum` 兼容别名。补充 typed 语义测试、SQL 兼容测试与 BenchmarkDotNet 分配基准。

@@ -246,6 +246,12 @@ internal sealed class PercentileAccumulator : IAggregateAccumulator
         _digest.Merge(p._digest);
     }
 
+    internal void MergeDigest(TDigest digest)
+    {
+        ArgumentNullException.ThrowIfNull(digest);
+        _digest.Merge(digest);
+    }
+
     public object? Finalize() => Count == 0 ? null : (object)_digest.Quantile(_q);
 }
 
@@ -275,6 +281,12 @@ internal sealed class TDigestAggAccumulator : IAggregateAccumulator
         if (other is not TDigestAggAccumulator t)
             throw new ArgumentException($"Cannot merge {other.GetType().Name} into TDigestAggAccumulator.", nameof(other));
         _digest.Merge(t._digest);
+    }
+
+    internal void MergeDigest(TDigest digest)
+    {
+        ArgumentNullException.ThrowIfNull(digest);
+        _digest.Merge(digest);
     }
 
     public object? Finalize() => Count == 0 ? null : (object)_digest.ToJson();
@@ -312,6 +324,13 @@ internal sealed class DistinctCountAccumulator : IAggregateAccumulator
             throw new ArgumentException($"Cannot merge {other.GetType().Name} into DistinctCountAccumulator.", nameof(other));
         _hll.Merge(d._hll);
         Count += d.Count;
+    }
+
+    internal void MergeSketch(HyperLogLog hll, long count)
+    {
+        ArgumentNullException.ThrowIfNull(hll);
+        _hll.Merge(hll);
+        Count += count;
     }
 
     public object? Finalize() => Count == 0 ? (object)0L : _hll.Estimate();

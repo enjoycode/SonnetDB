@@ -106,6 +106,7 @@ public sealed class RetentionWorker : IDisposable
             {
                 TryDelete(reader.Path);
                 TryDelete(TsdbPaths.VectorIndexPathForSegment(reader.Path));
+                TryDelete(TsdbPaths.AggregateIndexPathForSegment(reader.Path));
             }
         }
 

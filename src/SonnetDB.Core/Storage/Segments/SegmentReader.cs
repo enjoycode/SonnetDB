@@ -29,6 +29,7 @@ public sealed class SegmentReader : IDisposable
 {
     private static readonly HnswVectorIndexCache SharedVectorIndexCache = new();
     private static readonly IReadOnlyDictionary<int, long> EmptyVectorIndexOffsets = new Dictionary<int, long>();
+    private static readonly IReadOnlyDictionary<int, long> EmptyAggregateSketchOffsets = new Dictionary<int, long>();
 
     private SegmentByteSource? _source;
     private readonly SegmentReaderOptions _options;
@@ -38,8 +39,11 @@ public sealed class SegmentReader : IDisposable
     private readonly BlockDecodeCache? _decodeCache;
     private readonly HnswVectorIndexCache? _vectorIndexCache;
     private readonly object _vectorIndexLoadLock = new();
+    private readonly object _aggregateSketchLoadLock = new();
     private IReadOnlyDictionary<int, long>? _vectorIndexOffsetsByBlock;
+    private IReadOnlyDictionary<int, long>? _aggregateSketchOffsetsByBlock;
     private volatile bool _vectorIndexOffsetsLoaded;
+    private volatile bool _aggregateSketchOffsetsLoaded;
 
     /// <summary>段文件路径。</summary>
     public string Path { get; }
@@ -553,6 +557,37 @@ public sealed class SegmentReader : IDisposable
     }
 
     /// <summary>
+    /// 尝试获取指定 block 对应的扩展聚合 sketch。
+    /// </summary>
+    /// <param name="descriptor">目标 block。</param>
+    /// <param name="sketch">命中时返回的 sketch 快照。</param>
+    /// <returns>存在并通过校验返回 true，否则返回 false。</returns>
+    internal bool TryGetAggregateSketch(in BlockDescriptor descriptor, out BlockAggregateSketch sketch)
+    {
+        ThrowIfDisposed();
+
+        sketch = null!;
+        if (descriptor.FieldType is not (FieldType.Float64 or FieldType.Int64 or FieldType.Boolean)
+            || descriptor.Index < 0
+            || descriptor.Index >= _blocks.Length)
+        {
+            return false;
+        }
+
+        var offsets = EnsureAggregateSketchOffsetsLoaded();
+        if (!offsets.TryGetValue(descriptor.Index, out long offset))
+            return false;
+
+        return SegmentAggregateSketchFile.TryLoadBlockAt(
+            Path,
+            offset,
+            _blocks,
+            descriptor.Index,
+            descriptor.Crc32,
+            out sketch);
+    }
+
+    /// <summary>
     /// 释放内部 <c>byte[]</c> 引用以便 GC 回收。调用后不可再调用其他方法。
     /// </summary>
     public void Dispose()
@@ -586,6 +621,8 @@ public sealed class SegmentReader : IDisposable
         => _vectorIndexCache?.GetSegmentCount(Header.SegmentId) ?? 0;
 
     internal bool VectorIndexOffsetsLoaded => _vectorIndexOffsetsLoaded;
+
+    internal bool AggregateSketchOffsetsLoaded => _aggregateSketchOffsetsLoaded;
 
     internal bool UsesMemoryMappedStorage => _source?.IsMemoryMapped == true;
 
@@ -681,6 +718,23 @@ public sealed class SegmentReader : IDisposable
             }
 
             return _vectorIndexOffsetsByBlock ?? EmptyVectorIndexOffsets;
+        }
+    }
+
+    private IReadOnlyDictionary<int, long> EnsureAggregateSketchOffsetsLoaded()
+    {
+        if (_aggregateSketchOffsetsLoaded)
+            return _aggregateSketchOffsetsByBlock ?? EmptyAggregateSketchOffsets;
+
+        lock (_aggregateSketchLoadLock)
+        {
+            if (!_aggregateSketchOffsetsLoaded)
+            {
+                _aggregateSketchOffsetsByBlock = SegmentAggregateSketchFile.TryLoadOffsets(Path, _blocks);
+                _aggregateSketchOffsetsLoaded = true;
+            }
+
+            return _aggregateSketchOffsetsByBlock ?? EmptyAggregateSketchOffsets;
         }
     }
 

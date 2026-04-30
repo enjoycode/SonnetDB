@@ -5,6 +5,8 @@ using SonnetDB.Catalog;
 using SonnetDB.Engine;
 using SonnetDB.Memory;
 using SonnetDB.Model;
+using SonnetDB.Query.Functions;
+using SonnetDB.Query.Functions.Aggregates;
 using SonnetDB.Storage.Format;
 using SonnetDB.Storage.Segments;
 
@@ -478,6 +480,77 @@ public sealed class QueryEngine
         return result;
     }
 
+    /// <summary>
+    /// 为 SQL 扩展聚合尝试走 block sketch sidecar 快路径；不支持或遇到 tombstone 时返回 false，由调用方回退逐点扫描。
+    /// </summary>
+    internal bool TryAddExtendedAggregateSketches(
+        ulong seriesId,
+        string fieldName,
+        TimeRange range,
+        IAggregateAccumulator accumulator,
+        out long observedCount)
+    {
+        ArgumentNullException.ThrowIfNull(fieldName);
+        ArgumentNullException.ThrowIfNull(accumulator);
+
+        observedCount = 0;
+        if (!CanUseAggregateSketchAccumulator(accumulator))
+            return false;
+
+        if (_tombstones is not null)
+        {
+            var tombstoneList = _tombstones.GetForSeriesField(seriesId, fieldName);
+            if (tombstoneList.Count > 0
+                && FilterTombstonesForQueryRange(
+                    tombstoneList,
+                    range.FromInclusive,
+                    range.ToInclusive).Count > 0)
+            {
+                return false;
+            }
+        }
+
+        var key = new SeriesFieldKey(seriesId, fieldName);
+        var bucket = _memTable.TryGet(in key);
+        ReadOnlyMemory<DataPoint>? memSlice = bucket?.SnapshotRange(range.FromInclusive, range.ToInclusive);
+        FieldType? memFieldType = bucket?.FieldType;
+        observedCount += AddDecodedPointsToAccumulator(memSlice, accumulator);
+
+        using (var snapshotLease = _segments.AcquireSnapshot())
+        {
+            var snapshot = snapshotLease.Snapshot;
+            var candidates = snapshot.Index.LookupCandidates(
+                seriesId, fieldName, range.FromInclusive, range.ToInclusive);
+            var readers = BuildReaderMap(snapshot);
+
+            foreach (var blockRef in candidates)
+            {
+                ThrowIfFieldTypeMismatch(memFieldType, blockRef);
+
+                if (!readers.TryGetValue(blockRef.SegmentId, out var reader))
+                    continue;
+
+                if (CanUseAggregateSketch(blockRef.Descriptor, range)
+                    && reader.TryGetAggregateSketch(blockRef.Descriptor, out var sketch)
+                    && TryMergeAggregateSketch(accumulator, sketch))
+                {
+                    observedCount += blockRef.Descriptor.Count;
+                    continue;
+                }
+
+                var data = reader.ReadBlock(blockRef.Descriptor);
+                observedCount += AddBlockToAccumulator(
+                    blockRef.Descriptor,
+                    data.TimestampPayload,
+                    data.ValuePayload,
+                    range,
+                    accumulator);
+            }
+        }
+
+        return true;
+    }
+
     // ── 私有辅助 ──────────────────────────────────────────────────────────────
 
     private bool ShouldUsePointAggregatePath(AggregateQuery query)
@@ -536,6 +609,65 @@ public sealed class QueryEngine
             var point = points[i];
             AddValueToBucket(buckets, bucketSizeMs, point.Timestamp, ToDouble(point.Value));
         }
+    }
+
+    private static long AddDecodedPointsToAccumulator(
+        ReadOnlyMemory<DataPoint>? points,
+        IAggregateAccumulator accumulator)
+    {
+        if (!points.HasValue)
+            return 0;
+
+        return AddDecodedPointsToAccumulator(points.Value.Span, accumulator);
+    }
+
+    private static long AddDecodedPointsToAccumulator(
+        ReadOnlySpan<DataPoint> points,
+        IAggregateAccumulator accumulator)
+    {
+        for (int i = 0; i < points.Length; i++)
+        {
+            var point = points[i];
+            accumulator.Add(point.Timestamp, ToDouble(point.Value));
+        }
+
+        return points.Length;
+    }
+
+    private static long AddBlockToAccumulator(
+        in BlockDescriptor descriptor,
+        ReadOnlySpan<byte> tsPayload,
+        ReadOnlySpan<byte> valPayload,
+        TimeRange range,
+        IAggregateAccumulator accumulator)
+    {
+        if (CanAggregateRawBlock(descriptor))
+        {
+            int start = LowerBoundRaw(tsPayload, descriptor.Count, range.FromInclusive);
+            int end = UpperBoundRaw(tsPayload, descriptor.Count, range.ToInclusive);
+            if (start >= end)
+                return 0;
+
+            ThrowIfString(descriptor.FieldType);
+            for (int i = start; i < end; i++)
+            {
+                long timestamp = ReadRawTimestamp(tsPayload, i);
+                double value = ReadRawNumericValue(descriptor.FieldType, valPayload, i);
+                accumulator.Add(timestamp, value);
+            }
+            return end - start;
+        }
+
+        if (CanFuseDeltaTimestampInline(descriptor))
+            return FuseDeltaBlockToAccumulator(descriptor, tsPayload, valPayload, range, accumulator);
+
+        var points = BlockDecoder.DecodeRange(
+            descriptor,
+            tsPayload,
+            valPayload,
+            range.FromInclusive,
+            range.ToInclusive);
+        return AddDecodedPointsToAccumulator(points.AsSpan(), accumulator);
     }
 
     private static void AddSegmentBlocksToGlobal(
@@ -780,6 +912,41 @@ public sealed class QueryEngine
         }
     }
 
+    private static long FuseDeltaBlockToAccumulator(
+        in BlockDescriptor descriptor,
+        ReadOnlySpan<byte> tsPayload,
+        ReadOnlySpan<byte> valPayload,
+        TimeRange range,
+        IAggregateAccumulator accumulator)
+    {
+        int count = descriptor.Count;
+        if (count == 0) return 0;
+
+        long[] rented = ArrayPool<long>.Shared.Rent(count);
+        try
+        {
+            Span<long> timestamps = rented.AsSpan(0, count);
+            TimestampCodec.ReadDeltaOfDelta(tsPayload, timestamps);
+
+            int start = BinarySearchLowerBound(timestamps, range.FromInclusive);
+            int end = BinarySearchUpperBound(timestamps, range.ToInclusive);
+            if (start >= end) return 0;
+
+            FieldType fieldType = descriptor.FieldType;
+            for (int i = start; i < end; i++)
+            {
+                double value = ReadRawNumericValue(fieldType, valPayload, i);
+                accumulator.Add(timestamps[i], value);
+            }
+
+            return end - start;
+        }
+        finally
+        {
+            ArrayPool<long>.Shared.Return(rented);
+        }
+    }
+
     private static int BinarySearchLowerBound(ReadOnlySpan<long> timestamps, long value)
     {
         int lo = 0, hi = timestamps.Length;
@@ -823,6 +990,43 @@ public sealed class QueryEngine
             Aggregator.Min or Aggregator.Max => descriptor.HasAggregateMinMax,
             _ => false,
         };
+    }
+
+    private static bool CanUseAggregateSketchAccumulator(IAggregateAccumulator accumulator)
+        => accumulator is PercentileAccumulator
+            or TDigestAggAccumulator
+            or DistinctCountAccumulator;
+
+    private static bool CanUseAggregateSketch(
+        in BlockDescriptor descriptor,
+        TimeRange range)
+    {
+        return descriptor.MinTimestamp >= range.FromInclusive
+            && descriptor.MaxTimestamp <= range.ToInclusive
+            && descriptor.FieldType is FieldType.Float64 or FieldType.Int64 or FieldType.Boolean;
+    }
+
+    private static bool TryMergeAggregateSketch(
+        IAggregateAccumulator accumulator,
+        BlockAggregateSketch sketch)
+    {
+        switch (accumulator)
+        {
+            case PercentileAccumulator percentile when sketch.TDigest is not null:
+                percentile.MergeDigest(sketch.TDigest);
+                return true;
+
+            case TDigestAggAccumulator digestAgg when sketch.TDigest is not null:
+                digestAgg.MergeDigest(sketch.TDigest);
+                return true;
+
+            case DistinctCountAccumulator distinct when sketch.HyperLogLog is not null:
+                distinct.MergeSketch(sketch.HyperLogLog, sketch.ValueCount);
+                return true;
+
+            default:
+                return false;
+        }
     }
 
     /// <summary>

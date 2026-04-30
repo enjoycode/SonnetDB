@@ -76,6 +76,50 @@ internal sealed class HyperLogLog
         }
     }
 
+    /// <summary>
+    /// 序列化寄存器快照。
+    /// </summary>
+    /// <returns>包含 magic、精度与寄存器内容的二进制载荷。</returns>
+    public byte[] Serialize()
+    {
+        var bytes = new byte[12 + RegisterCount];
+        bytes[0] = (byte)'H';
+        bytes[1] = (byte)'L';
+        bytes[2] = (byte)'0';
+        bytes[3] = (byte)'1';
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(4, 4), Precision);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(8, 4), RegisterCount);
+        _registers.CopyTo(bytes.AsSpan(12));
+        return bytes;
+    }
+
+    /// <summary>
+    /// 从 <see cref="Serialize"/> 生成的二进制载荷恢复 HyperLogLog。
+    /// </summary>
+    /// <param name="bytes">二进制载荷。</param>
+    /// <returns>恢复后的 HyperLogLog。</returns>
+    /// <exception cref="InvalidDataException">载荷格式不合法。</exception>
+    public static HyperLogLog Deserialize(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length != 12 + RegisterCount
+            || bytes[0] != (byte)'H'
+            || bytes[1] != (byte)'L'
+            || bytes[2] != (byte)'0'
+            || bytes[3] != (byte)'1')
+        {
+            throw new InvalidDataException("HyperLogLog magic 或长度不匹配。");
+        }
+
+        int precision = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(bytes[4..8]);
+        int registerCount = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(bytes[8..12]);
+        if (precision != Precision || registerCount != RegisterCount)
+            throw new InvalidDataException("HyperLogLog 精度不匹配。");
+
+        var hll = new HyperLogLog();
+        bytes[12..].CopyTo(hll._registers.AsSpan());
+        return hll;
+    }
+
     /// <summary>估算基数。</summary>
     public long Estimate()
     {
