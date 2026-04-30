@@ -32,6 +32,8 @@ public sealed class SetupEndToEndTests : IAsyncLifetime
             AutoLoadExistingDatabases = true,
             AllowAnonymousProbes = true,
         };
+        options.Copilot.Docs.AutoIngestOnStartup = false;
+        options.Copilot.Skills.AutoIngestOnStartup = false;
 
         _app = Program.BuildApp(["--Kestrel:Endpoints:Http:Url=http://127.0.0.1:0"], options);
         await _app.StartAsync();

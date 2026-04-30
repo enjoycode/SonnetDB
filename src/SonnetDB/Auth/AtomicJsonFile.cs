@@ -5,8 +5,8 @@ using System.Text.Json;
 namespace SonnetDB.Auth;
 
 /// <summary>
-/// 跨进程文件原子写工具：tempfile + fsync + File.Move(overwrite=true)。
-/// 同时通过 <see cref="FileShare.None"/> 短临界 + 进程内锁防止本进程并发写互相覆盖。
+/// 跨进程文件原子写工具：unique tempfile + fsync + File.Move(overwrite=true)。
+/// 唯一临时文件名避免同一路径的多个存储实例并发持久化时互相抢占 <c>.tmp</c>。
 /// </summary>
 internal static class AtomicJsonFile
 {
@@ -33,7 +33,7 @@ internal static class AtomicJsonFile
     }
 
     /// <summary>
-    /// 原子写 JSON 文件：先写到 <c>.tmp</c>，flush + fsync，再 <see cref="File.Move(string, string, bool)"/> 覆盖目标。
+    /// 原子写 JSON 文件：先写到唯一 <c>.tmp</c>，flush + fsync，再 <see cref="File.Move(string, string, bool)"/> 覆盖目标。
     /// </summary>
     public static void Write<T>(string path, T value, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo)
     {
@@ -43,12 +43,56 @@ internal static class AtomicJsonFile
         var dir = Path.GetDirectoryName(path)!;
         Directory.CreateDirectory(dir);
 
-        var tmp = Path.Combine(dir, Path.GetFileName(path) + ".tmp");
-        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+        var tmp = Path.Combine(dir, $".{Path.GetFileName(path)}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
+        try
         {
-            JsonSerializer.Serialize(fs, value, typeInfo);
-            fs.Flush(flushToDisk: true);
+            using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                JsonSerializer.Serialize(fs, value, typeInfo);
+                fs.Flush(flushToDisk: true);
+            }
+            MoveWithRetry(tmp, path);
         }
-        File.Move(tmp, path, overwrite: true);
+        catch
+        {
+            TryDelete(tmp);
+            throw;
+        }
+    }
+
+    private static void MoveWithRetry(string sourceFileName, string destFileName)
+    {
+        const int MaxAttempts = 4;
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(sourceFileName, destFileName, overwrite: true);
+                return;
+            }
+            catch (IOException) when (attempt < MaxAttempts)
+            {
+                Thread.Sleep(attempt * 10);
+            }
+            catch (UnauthorizedAccessException) when (attempt < MaxAttempts)
+            {
+                Thread.Sleep(attempt * 10);
+            }
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }
