@@ -1283,6 +1283,36 @@ public sealed class QueryEngine
             if (value > Max) Max = value;
         }
 
+        public void AddCountRange(long firstTimestamp, long count, bool useObservedStart)
+        {
+            if (count <= 0) return;
+
+            if (useObservedStart && firstTimestamp < BucketStart)
+                BucketStart = firstTimestamp;
+
+            Count += count;
+        }
+
+        public void AddAggregateRange(
+            long firstTimestamp,
+            NumericAggregateVectorResult aggregate,
+            bool useObservedStart)
+        {
+            if (aggregate.Count == 0) return;
+
+            if (useObservedStart && firstTimestamp < BucketStart)
+                BucketStart = firstTimestamp;
+
+            if (Count == 0)
+                FirstValue = aggregate.Min;
+            LastValue = aggregate.Max;
+
+            Count += aggregate.Count;
+            Sum += aggregate.Sum;
+            if (aggregate.Min < Min) Min = aggregate.Min;
+            if (aggregate.Max > Max) Max = aggregate.Max;
+        }
+
         public void AddMetadataBlock(in BlockDescriptor descriptor, bool useObservedStart)
         {
             if (useObservedStart && descriptor.MinTimestamp < BucketStart)
