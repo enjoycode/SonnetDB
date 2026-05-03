@@ -1,0 +1,143 @@
+name: Connectors Release
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  NUGET_XMLDOC_MODE: skip
+
+jobs:
+  build:
+    name: Connectors (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            install_go: true
+            install_rust: true
+          - os: windows-latest
+            rid: win-x64
+            install_go: true
+            install_rust: true
+          - os: windows-latest
+            rid: win-x86
+            install_go: false
+            install_rust: false
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - uses: actions/setup-java@v5
+        if: matrix.rid != 'win-x86'
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-go@v6
+        if: matrix.install_go
+        with:
+          go-version: '1.22.x'
+          cache-dependency-path: connectors/go/go.mod
+
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows' && matrix.install_go
+        with:
+          msystem: UCRT64
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc
+          path-type: inherit
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.install_rust
+
+      - name: Install Linux native build prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev cmake build-essential
+
+      - name: Resolve connector release metadata
+        id: metadata
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Connector releases require tags named vX.Y.Z."
+              exit 1
+            fi
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "tasks=all" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-ci" >> "$GITHUB_OUTPUT"
+            echo "tasks=build" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and package connectors
+        shell: bash
+        run: |
+          dotnet run --project eng/tools/connectors-release/connectors-release.csproj -- \
+            --tasks "${{ steps.metadata.outputs.tasks }}" \
+            --version "${{ steps.metadata.outputs.version }}" \
+            --rid "${{ matrix.rid }}"
+
+      - name: Upload connector packages
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v7
+        with:
+          name: connectors-${{ matrix.rid }}
+          path: artifacts/release/connectors/${{ matrix.rid }}/*.zip
+
+  github-release:
+    name: Upload Connector Release Assets
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts/connectors-release-upload
+
+      - name: Upload connector zips to GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          title="SonnetDB ${tag#v}"
+
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$title" --notes-file docs/releases/README.md
+          fi
+
+          mapfile -t files < <(find artifacts/connectors-release-upload -type f -name '*.zip')
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No connector zip files found."
+            exit 1
+          fi
+
+          gh release upload "$tag" "${files[@]}" --clobber

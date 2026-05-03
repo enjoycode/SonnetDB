@@ -2,6 +2,7 @@
   <Folder Name="/eng/">
     <Project Path="eng/benchmarks/run-benchmarks/run-benchmarks.csproj" />
     <Project Path="eng/benchmarks/start-benchmark-env/start-benchmark-env.csproj" />
+    <Project Path="eng/tools/connectors-release/connectors-release.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/SonnetDB.Cli/SonnetDB.Cli.csproj" />

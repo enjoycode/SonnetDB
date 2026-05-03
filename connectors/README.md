@@ -24,6 +24,30 @@ The VB6 and PureBasic connectors are kept as source-level integrations and local
 
 Use a licensed local machine or self-hosted runner if you need automated binary builds for these two connectors.
 
+## Connector Release Packages
+
+Connector release packages are built by `.github/workflows/connectors-release.yml`.
+
+- Non-tag pushes, pull requests, and manual runs compile the connectors only.
+- Git tags named `vX.Y.Z` compile and package connectors, then upload every connector zip to the matching GitHub Release.
+- Package versions use the tag without the leading `v`.
+- The release tool is implemented in C# at `eng/tools/connectors-release` and can be run locally with `dotnet run`.
+
+Each zip is independent for one connector and one target runtime identifier. The package includes the connector files, examples, `README.md`, `VERSION`, launch scripts, and the matching SonnetDB native runtime files. Implemented package families currently include:
+
+- `linux-x64`: C, Java, Go, Rust, Python, PureBasic.
+- `win-x64`: C, Java, Go, Rust, Python, PureBasic.
+- `win-x86`: C and the VB6 bridge/source package.
+
+Local package-only smoke, using already-built native artifacts:
+
+```bash
+dotnet run --project eng/tools/connectors-release/connectors-release.csproj -- \
+  --tasks package \
+  --version 0.0.0-local \
+  --rid linux-x64
+```
+
 ## WSL Development Environment
 
 On Ubuntu 24.04 / WSL, install the connector toolchain with:
