@@ -1,0 +1,66 @@
+name: "Feature Request"
+description: "提出 SonnetDB 新能力或增强建议"
+title: "feat(area): "
+labels:
+  - "type:feature"
+  - "status:triage"
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景与动机
+      placeholder: 当前痛点是什么，为什么需要该能力
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      placeholder: 期望行为、接口形态或 SQL 示例
+    validations:
+      required: true
+
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: 建议 Milestone
+      options:
+        - Milestone 16 - Copilot 产品化升级
+        - Milestone 17 - 生态与连接器
+        - Milestone 18 - VS Code 扩展
+        - 其他/待评估
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 优先级建议
+      options:
+        - P1 - 高
+        - P2 - 中
+        - P3 - 低
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      placeholder: |
+        - [ ] 提供可执行 API / SQL
+        - [ ] 补充测试
+        - [ ] 更新文档
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，确认不是重复需求
+          required: true
+        - label: 我同意按单一职责拆分任务（一个 Issue 解决一件事）
+          required: true

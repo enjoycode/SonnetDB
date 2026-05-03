@@ -1,0 +1,44 @@
+name: "Task"
+description: "工程任务、重构或路线图子项拆解"
+title: "chore(area): "
+labels:
+  - "type:task"
+  - "status:triage"
+body:
+  - type: input
+    id: roadmap
+    attributes:
+      label: 对应 ROADMAP 条目
+      description: 填写 Milestone + PR 编号（如 Milestone 16 / PR #85）
+      placeholder: Milestone 16 / PR #85
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 任务范围
+      placeholder: 说明边界与非目标
+    validations:
+      required: true
+
+  - type: textarea
+    id: checklist
+    attributes:
+      label: 执行清单
+      placeholder: |
+        - [ ] 代码实现
+        - [ ] 测试补充
+        - [ ] 文档更新
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: 约束确认
+      options:
+        - label: 我确认不会引入 unsafe
+          required: true
+        - label: 我确认核心库不新增第三方运行时依赖
+          required: true
+        - label: 我确认完成后会更新 CHANGELOG 的 Unreleased
+          required: true

@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Added
+- **GitHub 协作模板与治理规范**：新增 `.github/ISSUE_TEMPLATE/`（bug/feature/task + config）、`.github/pull_request_template.md`，并新增 `.github/project-management.md` 统一 Milestone / Label 命名、颜色与 Issue 生命周期流转规则。
 - **WAL LastLsn footer 元数据**：新 WAL segment 会在记录区后追加 32 字节 LastLsn footer，`WalWriter.Open` 优先通过 footer 快速恢复 `NextLsn`，旧 WAL、损坏 footer 与截断尾部会自动回退到顺序扫描并重写 footer；`WalRecordHeader` 与既有 WAL 记录格式保持不变，旧 WAL 继续可读。
 - **WAL group-commit**：`SyncWalOnEveryWrite=true` 时新增可配置的 `WalGroupCommitOptions`（默认 2 ms 窗口），多个并发 `Write` / `WriteMany` / `Delete` 请求会在写入 WAL 后共享一次 `Flush(true)`，写请求仍会等待该批 fsync 完成后返回；WAL record/header 二进制格式不变，旧 WAL 继续可读。新增 WAL group-commit 崩溃恢复、`WriteMany` 批量写入、并发写入测试与 `WalGroupCommitBenchmark` 基准。
 - **WAL 小记录写入优化**：`WalWriter.AppendRecord` 现在会将 `WalRecordHeader` 与 payload 合并到同一块 `stackalloc` / `ArrayPool` 缓冲后尽量单次 `Stream.Write`，保留原有 CRC32 payload 校验与 WAL 二进制布局不变；补充小/大 payload round-trip、CRC 损坏和截断容忍回归测试。
