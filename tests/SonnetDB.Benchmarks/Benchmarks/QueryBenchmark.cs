@@ -3,7 +3,6 @@ using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using InfluxDB.Client;
 using InfluxDB.Client.Writes;
-using LiteQuery = LiteDB.Query;
 using Microsoft.Data.Sqlite;
 using SonnetDB.Benchmarks.Helpers;
 using SonnetDB.Engine;
@@ -12,6 +11,7 @@ using SonnetDB.Engine.Retention;
 using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Query;
+using LiteQuery = LiteDB.Query;
 
 namespace SonnetDB.Benchmarks.Benchmarks;
 

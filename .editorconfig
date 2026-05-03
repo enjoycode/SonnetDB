@@ -15,7 +15,18 @@ indent_size = 2
 indent_size = 2
 
 [*.cs]
+charset = unset
+
 # Naming rules
+# Constants and private static fields are handled by code review conventions; this rule only guards regular private fields.
+dotnet_naming_rule.private_static_fields_are_allowed.severity = none
+dotnet_naming_rule.private_static_fields_are_allowed.symbols = private_static_fields
+dotnet_naming_rule.private_static_fields_are_allowed.style = camel_case_underscore_prefix
+
+dotnet_naming_symbols.private_static_fields.applicable_kinds = field
+dotnet_naming_symbols.private_static_fields.applicable_accessibilities = private
+dotnet_naming_symbols.private_static_fields.required_modifiers = static
+
 dotnet_naming_rule.private_fields_should_be_camel_case.severity = warning
 dotnet_naming_rule.private_fields_should_be_camel_case.symbols = private_fields
 dotnet_naming_rule.private_fields_should_be_camel_case.style = camel_case_underscore_prefix

@@ -3,9 +3,9 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
+using SonnetDB.Configuration;
 using SonnetDB.Data;
 using SonnetDB.Data.Remote;
-using SonnetDB.Configuration;
 using SonnetDB.Model;
 using Xunit;
 

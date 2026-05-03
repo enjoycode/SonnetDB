@@ -244,8 +244,8 @@ public static class PidParameterEstimator
         return options.Method switch
         {
             PidTuningMethod.ZieglerNichols => ComputeZieglerNichols(K, tau, theta),
-            PidTuningMethod.CohenCoon      => ComputeCohenCoon(K, tau, theta),
-            PidTuningMethod.Imc            => ComputeImc(K, tau, theta, options.ImcLambda),
+            PidTuningMethod.CohenCoon => ComputeCohenCoon(K, tau, theta),
+            PidTuningMethod.Imc => ComputeImc(K, tau, theta, options.ImcLambda),
             _ => throw new ArgumentOutOfRangeException(
                      nameof(options), options.Method,
                      $"不支持的整定方法：{options.Method}。")

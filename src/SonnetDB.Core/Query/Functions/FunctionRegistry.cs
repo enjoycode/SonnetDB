@@ -1,11 +1,11 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using SonnetDB.Catalog;
+using SonnetDB.Model;
 using SonnetDB.Query.Functions.Aggregates;
 using SonnetDB.Query.Functions.Control;
 using SonnetDB.Query.Functions.Window;
 using SonnetDB.Sql.Ast;
 using SonnetDB.Storage.Format;
-using SonnetDB.Model;
 
 namespace SonnetDB.Query.Functions;
 

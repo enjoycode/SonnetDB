@@ -463,54 +463,54 @@ public sealed class SegmentWriter
         switch (fieldType)
         {
             case FieldType.Float64:
-            {
-                double mn = double.PositiveInfinity;
-                double mx = double.NegativeInfinity;
-                for (int i = 0; i < points.Length; i++)
                 {
-                    double value = points[i].Value.AsDouble();
-                    sum += value;
-                    if (value < mn) mn = value;
-                    if (value > mx) mx = value;
+                    double mn = double.PositiveInfinity;
+                    double mx = double.NegativeInfinity;
+                    for (int i = 0; i < points.Length; i++)
+                    {
+                        double value = points[i].Value.AsDouble();
+                        sum += value;
+                        if (value < mn) mn = value;
+                        if (value > mx) mx = value;
+                    }
+                    min = mn;
+                    max = mx;
+                    return BlockHeader.HasSumCount | BlockHeader.HasMinMax;
                 }
-                min = mn;
-                max = mx;
-                return BlockHeader.HasSumCount | BlockHeader.HasMinMax;
-            }
 
             case FieldType.Int64:
-            {
-                long mn = long.MaxValue;
-                long mx = long.MinValue;
-                for (int i = 0; i < points.Length; i++)
                 {
-                    long value = points[i].Value.AsLong();
-                    sum += value;
-                    if (value < mn) mn = value;
-                    if (value > mx) mx = value;
+                    long mn = long.MaxValue;
+                    long mx = long.MinValue;
+                    for (int i = 0; i < points.Length; i++)
+                    {
+                        long value = points[i].Value.AsLong();
+                        sum += value;
+                        if (value < mn) mn = value;
+                        if (value > mx) mx = value;
+                    }
+                    // Int64 → double：±2^53 之外可能损失精度，sum 已是 double，min/max 这里同样转 double。
+                    // 写入路径之外（查询路径）始终把整数值视作 double 比较，因此 min/max 仍可信。
+                    min = mn;
+                    max = mx;
+                    return BlockHeader.HasSumCount | BlockHeader.HasMinMax;
                 }
-                // Int64 → double：±2^53 之外可能损失精度，sum 已是 double，min/max 这里同样转 double。
-                // 写入路径之外（查询路径）始终把整数值视作 double 比较，因此 min/max 仍可信。
-                min = mn;
-                max = mx;
-                return BlockHeader.HasSumCount | BlockHeader.HasMinMax;
-            }
 
             case FieldType.Boolean:
-            {
-                int mn = 1;
-                int mx = 0;
-                for (int i = 0; i < points.Length; i++)
                 {
-                    int value = points[i].Value.AsBool() ? 1 : 0;
-                    sum += value;
-                    if (value < mn) mn = value;
-                    if (value > mx) mx = value;
+                    int mn = 1;
+                    int mx = 0;
+                    for (int i = 0; i < points.Length; i++)
+                    {
+                        int value = points[i].Value.AsBool() ? 1 : 0;
+                        sum += value;
+                        if (value < mn) mn = value;
+                        if (value > mx) mx = value;
+                    }
+                    min = mn;
+                    max = mx;
+                    return BlockHeader.HasSumCount | BlockHeader.HasMinMax;
                 }
-                min = mn;
-                max = mx;
-                return BlockHeader.HasSumCount | BlockHeader.HasMinMax;
-            }
 
             default:
                 return 0;

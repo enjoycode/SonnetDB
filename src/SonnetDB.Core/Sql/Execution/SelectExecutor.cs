@@ -586,8 +586,8 @@ internal static class SelectExecutor
                 yield break;
             case FunctionCallExpression fn:
                 foreach (var arg in fn.Arguments)
-                foreach (var fieldName in GetScalarFieldDependencies(arg))
-                    yield return fieldName;
+                    foreach (var fieldName in GetScalarFieldDependencies(arg))
+                        yield return fieldName;
                 yield break;
             case UnaryExpression unary:
                 foreach (var fieldName in GetScalarFieldDependencies(unary.Operand))

@@ -1,5 +1,5 @@
-﻿using System.Buffers.Binary;
-using System.Buffers;
+﻿using System.Buffers;
+using System.Buffers.Binary;
 using System.Text;
 using SonnetDB.Model;
 using SonnetDB.Storage.Format;

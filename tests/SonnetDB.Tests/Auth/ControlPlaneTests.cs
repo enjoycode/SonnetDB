@@ -1,5 +1,5 @@
-﻿using SonnetDB.Engine;
-using SonnetDB.Auth;
+﻿using SonnetDB.Auth;
+using SonnetDB.Engine;
 using SonnetDB.Hosting;
 using SonnetDB.Sql;
 using SonnetDB.Sql.Ast;

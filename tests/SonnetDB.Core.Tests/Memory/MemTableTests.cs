@@ -1,7 +1,7 @@
-﻿using SonnetDB.Memory;
+﻿using System.Text;
+using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Storage.Format;
-using System.Text;
 using Xunit;
 
 namespace SonnetDB.Core.Tests.Memory;

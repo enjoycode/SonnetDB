@@ -1,5 +1,5 @@
-﻿using SonnetDB.Engine;
-using SonnetDB.Catalog;
+﻿using SonnetDB.Catalog;
+using SonnetDB.Engine;
 using SonnetDB.Model;
 using SonnetDB.Query;
 using SonnetDB.Sql;

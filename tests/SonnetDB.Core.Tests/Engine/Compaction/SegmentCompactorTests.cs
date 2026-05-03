@@ -1,6 +1,6 @@
-﻿using SonnetDB.Engine;
+﻿using SonnetDB.Catalog;
+using SonnetDB.Engine;
 using SonnetDB.Engine.Compaction;
-using SonnetDB.Catalog;
 using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Query;

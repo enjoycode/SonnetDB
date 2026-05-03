@@ -429,7 +429,7 @@ public sealed class CopilotInfrastructureTests : IAsyncLifetime
         var embeddingError = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await embeddingProvider.EmbedAsync("hello"));
         var chatError = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await chatProvider.CompleteAsync([new AiMessage("user", "hello") ]));
+            await chatProvider.CompleteAsync([new AiMessage("user", "hello")]));
 
         Assert.Contains("returned 400", embeddingError.Message);
         Assert.Contains("embedding failed", embeddingError.Message);

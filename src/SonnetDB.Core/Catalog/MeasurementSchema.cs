@@ -1,5 +1,5 @@
-﻿using System.Collections.ObjectModel;
-using System.Collections.Frozen;
+﻿using System.Collections.Frozen;
+using System.Collections.ObjectModel;
 using SonnetDB.Storage.Format;
 
 namespace SonnetDB.Catalog;
