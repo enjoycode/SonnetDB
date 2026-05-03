@@ -69,6 +69,7 @@
 - 新增 `docs/sql-cookbook.md`，把 `demo.sql` 中高频、当前真实支持的 `CREATE MEASUREMENT`、`INSERT`、`SELECT`、`GROUP BY time(...)`、窗口函数、PID、预测、向量检索、元数据与 `DELETE` 场景整理成可直接复制的 cookbook，并在 `docs/index.md` 与 `docs/sql-reference.md` 中加入入口。
 
 ### Fixed
+- **CI 测试稳定性**：为服务端与 Accuracy 测试项目补齐 `coverlet.collector`，修复 `--collect:"XPlat Code Coverage"` 找不到 collector；Accuracy Tests 在 Docker/InfluxDB 不可用时改为显式 no-op 通过并记录原因，避免可选外部依赖缺失导致 CI 失败；SSE db 事件断言改为等待当前测试触发的数据库事件，避免 `__copilot__` 系统库后台事件串扰。
 - **CI Format Check 回归**：收窄 `.editorconfig` 私有字段命名规则，避免 `dotnet format` 把 `private const` 与 `private static` 字段误判为实例字段；同步修复既有 whitespace、import 顺序和 LF 行尾问题，使 `dotnet format --verify-no-changes --severity warn` 可通过。
 - **Tsdb.Dispose final flush 诊断**：关闭路径中的 final flush 失败仍保持 `Dispose` 不抛异常，但会写入 `Tsdb.LastError` 并触发 `Tsdb.DiagnosticEvent`，避免异常被静默吞掉；诊断事件订阅者自身抛错不会影响关闭语义。
 - 修复 Linux x64 C connector quickstart 运行时错误：CMake 现在在 Linux 下通过精确文件名链接 `SonnetDB.Native.so`，避免 Native AOT 共享库无 SONAME 时把构建目录写入 `DT_NEEDED`，并补充 WSL 开发环境与连接器验证文档。

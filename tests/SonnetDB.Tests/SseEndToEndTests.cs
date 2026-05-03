@@ -48,6 +48,9 @@ public sealed class SseEndToEndTests : IAsyncLifetime
                 [_adminToken] = ServerRoles.Admin,
             },
         };
+        options.Copilot.Docs.AutoIngestOnStartup = false;
+        options.Copilot.Skills.AutoIngestOnStartup = false;
+
         _app = Program.BuildApp(["--Kestrel:Endpoints:Http:Url=http://127.0.0.1:0"], options);
         await _app.StartAsync();
         var addresses = _app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!;
@@ -102,7 +105,7 @@ public sealed class SseEndToEndTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Created, create.StatusCode);
 
         // 3) 流上应当能收到 db.created 事件
-        var dbEvt = await ReadEventOfTypeAsync(reader, buffer, "db", TimeSpan.FromSeconds(5));
+        var dbEvt = await ReadDatabaseEventAsync(reader, buffer, dbName, DatabaseEvent.ActionCreated, TimeSpan.FromSeconds(5));
         using (var doc = JsonDocument.Parse(dbEvt.Data))
         {
             Assert.Equal(dbName, doc.RootElement.GetProperty("database").GetString());
@@ -130,7 +133,7 @@ public sealed class SseEndToEndTests : IAsyncLifetime
         // 6) DROP → db.dropped
         var drop = await apiClient.DeleteAsync($"/v1/db/{dbName}");
         Assert.Equal(HttpStatusCode.OK, drop.StatusCode);
-        var dropEvt = await ReadEventOfTypeAsync(reader, buffer, "db", TimeSpan.FromSeconds(5));
+        var dropEvt = await ReadDatabaseEventAsync(reader, buffer, dbName, DatabaseEvent.ActionDropped, TimeSpan.FromSeconds(5));
         using (var doc = JsonDocument.Parse(dropEvt.Data))
         {
             Assert.Equal(dbName, doc.RootElement.GetProperty("database").GetString());
@@ -269,6 +272,31 @@ public sealed class SseEndToEndTests : IAsyncLifetime
             // 忽略其他通道（hello / metrics / db / slow_query）继续等
         }
         throw new TimeoutException($"未在 {timeout.TotalSeconds:F1}s 内收到 type='{expectedType}' 事件。");
+    }
+
+    private static async Task<(string Event, string Data)> ReadDatabaseEventAsync(
+        StreamReader reader,
+        StringBuilder buffer,
+        string databaseName,
+        string action,
+        TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero) break;
+            var evt = await ReadEventOfTypeAsync(reader, buffer, ServerEvent.ChannelDatabase, remaining);
+            using var doc = JsonDocument.Parse(evt.Data);
+            if (string.Equals(doc.RootElement.GetProperty("database").GetString(), databaseName, StringComparison.Ordinal)
+                && string.Equals(doc.RootElement.GetProperty("action").GetString(), action, StringComparison.Ordinal))
+            {
+                return evt;
+            }
+        }
+
+        throw new TimeoutException(
+            $"未在 {timeout.TotalSeconds:F1}s 内收到 database='{databaseName}', action='{action}' 的 db 事件。");
     }
 
     /// <summary>

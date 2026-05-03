@@ -10,7 +10,8 @@ public sealed class InfluxDbAccuracyTests(AccuracyFixture fixture) : IClassFixtu
     [Fact]
     public async Task ShowMeasurements_MatchesInfluxDb()
     {
-        _fixture.EnsureReady();
+        if (!_fixture.TryEnsureReady())
+            return;
 
         var sonnet = await _fixture.QuerySonnetAsync("SHOW MEASUREMENTS");
         var influx = await QueryInfluxMeasurementNamesAsync();
@@ -26,7 +27,8 @@ public sealed class InfluxDbAccuracyTests(AccuracyFixture fixture) : IClassFixtu
     [Fact]
     public async Task Telemetry_FieldCounts_MatchInfluxDb()
     {
-        _fixture.EnsureReady();
+        if (!_fixture.TryEnsureReady())
+            return;
 
         var sonnet = await _fixture.QuerySonnetAsync(
             "SELECT count(usage), count(errors), count(active), count(status) FROM telemetry");
@@ -43,7 +45,8 @@ public sealed class InfluxDbAccuracyTests(AccuracyFixture fixture) : IClassFixtu
     [Fact]
     public async Task Telemetry_RawProjectionAcrossSeries_MatchesInfluxDb()
     {
-        _fixture.EnsureReady();
+        if (!_fixture.TryEnsureReady())
+            return;
 
         var sonnet = await _fixture.QuerySonnetAsync(
             "SELECT time, host, region, usage, errors, active, status FROM telemetry");
@@ -59,7 +62,8 @@ public sealed class InfluxDbAccuracyTests(AccuracyFixture fixture) : IClassFixtu
     [Fact]
     public async Task Telemetry_SparseFields_MatchInfluxDb()
     {
-        _fixture.EnsureReady();
+        if (!_fixture.TryEnsureReady())
+            return;
 
         var sonnet = await _fixture.QuerySonnetAsync(
             "SELECT time, host, region, usage, errors, active, status FROM telemetry WHERE host = 'beta'");
@@ -75,7 +79,8 @@ public sealed class InfluxDbAccuracyTests(AccuracyFixture fixture) : IClassFixtu
     [Fact]
     public async Task Telemetry_LimitOffsetOnSingleSeries_MatchesInfluxDb()
     {
-        _fixture.EnsureReady();
+        if (!_fixture.TryEnsureReady())
+            return;
 
         var sonnet = await _fixture.QuerySonnetAsync(
             "SELECT time, host, region, usage, errors, active, status FROM telemetry WHERE host = 'alpha' LIMIT 2 OFFSET 1");
@@ -92,7 +97,8 @@ public sealed class InfluxDbAccuracyTests(AccuracyFixture fixture) : IClassFixtu
     [Fact]
     public async Task Telemetry_AggregatesOnSingleSeries_MatchInfluxDb()
     {
-        _fixture.EnsureReady();
+        if (!_fixture.TryEnsureReady())
+            return;
 
         var sonnet = await _fixture.QuerySonnetAsync(
             "SELECT sum(usage), avg(usage), min(usage), max(usage), count(usage), first(usage), last(usage) FROM telemetry WHERE host = 'alpha'");
@@ -109,7 +115,8 @@ public sealed class InfluxDbAccuracyTests(AccuracyFixture fixture) : IClassFixtu
     [Fact]
     public async Task Telemetry_GroupByTimeAggregates_MatchInfluxDb()
     {
-        _fixture.EnsureReady();
+        if (!_fixture.TryEnsureReady())
+            return;
 
         var sonnet = await _fixture.QuerySonnetAsync(
             "SELECT avg(usage), count(usage), min(usage), max(usage) FROM telemetry WHERE host = 'alpha' GROUP BY time(60000ms)");
@@ -126,7 +133,8 @@ public sealed class InfluxDbAccuracyTests(AccuracyFixture fixture) : IClassFixtu
     [Fact]
     public async Task Audit_RawProjection_MatchesInfluxDb()
     {
-        _fixture.EnsureReady();
+        if (!_fixture.TryEnsureReady())
+            return;
 
         var sonnet = await _fixture.QuerySonnetAsync(
             "SELECT time, host, severity, code, message FROM audit");

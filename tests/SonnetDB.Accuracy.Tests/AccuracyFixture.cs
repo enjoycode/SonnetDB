@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
+using DotNet.Testcontainers.Images;
 using InfluxDB.Client;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -14,7 +15,6 @@ using SonnetDB;
 using SonnetDB.Configuration;
 using SonnetDB.Contracts;
 using Xunit;
-using Xunit.Sdk;
 
 namespace SonnetDB.Accuracy.Tests;
 
@@ -24,6 +24,7 @@ public sealed class AccuracyFixture : IAsyncLifetime
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly IContainer _influxContainer = new ContainerBuilder("influxdb:2.7")
+        .WithImagePullPolicy(PullPolicy.Missing)
         .WithPortBinding(InfluxPort, true)
         .WithEnvironment("DOCKER_INFLUXDB_INIT_MODE", "setup")
         .WithEnvironment("DOCKER_INFLUXDB_INIT_USERNAME", "admin")
@@ -49,10 +50,19 @@ public sealed class AccuracyFixture : IAsyncLifetime
     public InfluxDBClient InfluxClient
         => _influxClient ?? throw new InvalidOperationException("InfluxDB 客户端尚未初始化。");
 
+    public bool TryEnsureReady()
+    {
+        if (_skipReason is null)
+            return true;
+
+        Console.Error.WriteLine(_skipReason);
+        return false;
+    }
+
     public void EnsureReady()
     {
         if (_skipReason is not null)
-            throw SkipException.ForSkip(_skipReason);
+            throw new InvalidOperationException(_skipReason);
     }
 
     public async Task InitializeAsync()
@@ -68,40 +78,51 @@ public sealed class AccuracyFixture : IAsyncLifetime
             _influxClient = new InfluxDBClient(influxBaseUrl, AccuracyDataSet.InfluxAdminToken);
 
             await WaitForInfluxReadyAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _skipReason = BuildSkipReason(ex);
+            return;
+        }
 
-            _dataRoot = Path.Combine(Path.GetTempPath(), "sndb-accuracy-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_dataRoot);
+        _dataRoot = Path.Combine(Path.GetTempPath(), "sndb-accuracy-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dataRoot);
 
-            var options = new ServerOptions
+        var options = new ServerOptions
+        {
+            DataRoot = _dataRoot,
+            AutoLoadExistingDatabases = true,
+            AllowAnonymousProbes = true,
+            Tokens = new Dictionary<string, string>
             {
-                DataRoot = _dataRoot,
-                AutoLoadExistingDatabases = true,
-                AllowAnonymousProbes = true,
-                Tokens = new Dictionary<string, string>
-                {
-                    [AccuracyDataSet.SonnetAdminToken] = ServerRoles.Admin,
-                },
-            };
+                [AccuracyDataSet.SonnetAdminToken] = ServerRoles.Admin,
+            },
+        };
+        options.Copilot.Docs.AutoIngestOnStartup = false;
+        options.Copilot.Skills.AutoIngestOnStartup = false;
 
-            _app = Program.BuildApp(["--Kestrel:Endpoints:Http:Url=http://127.0.0.1:0"], options);
-            await _app.StartAsync().ConfigureAwait(false);
+        _app = Program.BuildApp(["--Kestrel:Endpoints:Http:Url=http://127.0.0.1:0"], options);
+        await _app.StartAsync().ConfigureAwait(false);
 
-            var addresses = _app.Services.GetRequiredService<IServer>()
-                .Features.Get<IServerAddressesFeature>()
-                ?? throw new InvalidOperationException("Kestrel 未暴露监听地址。");
-            var baseUrl = addresses.Addresses.First();
+        var addresses = _app.Services.GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()
+            ?? throw new InvalidOperationException("Kestrel 未暴露监听地址。");
+        var baseUrl = addresses.Addresses.First();
 
-            _sonnetClient = new HttpClient { BaseAddress = new Uri(baseUrl) };
-            _sonnetClient.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("Bearer", AccuracyDataSet.SonnetAdminToken);
+        _sonnetClient = new HttpClient { BaseAddress = new Uri(baseUrl) };
+        _sonnetClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", AccuracyDataSet.SonnetAdminToken);
 
-            await CreateSonnetDatabaseAsync().ConfigureAwait(false);
-            await SeedSonnetAsync().ConfigureAwait(false);
+        await CreateSonnetDatabaseAsync().ConfigureAwait(false);
+        await SeedSonnetAsync().ConfigureAwait(false);
+
+        try
+        {
             await SeedInfluxAsync().ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _skipReason = $"Docker 或 InfluxDB 2.x 测试环境不可用，已跳过 Accuracy Tests。{ex.GetType().Name}: {ex.Message}";
+            _skipReason = BuildSkipReason(ex);
         }
     }
 
@@ -222,6 +243,9 @@ public sealed class AccuracyFixture : IAsyncLifetime
                 $"执行 SonnetDB SQL 失败：{response.StatusCode} / {await response.Content.ReadAsStringAsync().ConfigureAwait(false)}");
         }
     }
+
+    private static string BuildSkipReason(Exception ex)
+        => $"Docker 或 InfluxDB 2.x 测试环境不可用，已跳过 Accuracy Tests。{ex.GetType().Name}: {ex.Message}";
 }
 
 public sealed record SqlQueryResult(IReadOnlyList<string> Columns, IReadOnlyList<JsonElement> Rows)
