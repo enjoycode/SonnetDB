@@ -1,0 +1,84 @@
+name: "Bug Report"
+description: "报告 SonnetDB 缺陷（引擎/SQL/连接器/服务端）"
+title: "fix(area): "
+labels:
+  - "type:bug"
+  - "status:triage"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请提供最小复现。不要粘贴密钥、Token 或客户敏感数据。
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: 影响组件
+      options:
+        - core-engine
+        - sql
+        - server
+        - adonet
+        - connector-c
+        - connector-go
+        - connector-rust
+        - connector-java
+        - web-admin
+        - docs
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题描述
+      placeholder: 描述实际行为与期望行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 最小复现步骤
+      placeholder: |
+        1. 创建数据库...
+        2. 执行 SQL ...
+        3. 观察到 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: sql
+    attributes:
+      label: 相关 SQL（可选）
+      render: sql
+
+  - type: input
+    id: env
+    attributes:
+      label: 环境信息
+      placeholder: 例如 Windows 11 / .NET 10 / SonnetDB 1.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: 严重级别
+      options:
+        - P0 - 阻断
+        - P1 - 高
+        - P2 - 中
+        - P3 - 低
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，确认不是重复问题
+          required: true
+        - label: 我确认未包含任何密钥、Token、证书或敏感数据
+          required: true
