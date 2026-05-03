@@ -301,20 +301,28 @@ internal static class SonnetDbNativeExports
     [UnmanagedCallersOnly(EntryPoint = "sonnetdb_close", CallConvs = new[] { typeof(CallConvCdecl) })]
     public static void Close(IntPtr connection)
     {
+        GCHandle handle = default;
+        bool hasHandle = false;
+
         try
         {
             ClearError();
             if (connection == IntPtr.Zero)
                 return;
 
-            var handle = GCHandle.FromIntPtr(connection);
+            handle = GCHandle.FromIntPtr(connection);
+            hasHandle = true;
             if (handle.Target is IDisposable disposable)
                 disposable.Dispose();
-            handle.Free();
         }
         catch (Exception ex)
         {
             SetError(ex);
+        }
+        finally
+        {
+            if (hasHandle)
+                handle.Free();
         }
     }
 
@@ -339,20 +347,28 @@ internal static class SonnetDbNativeExports
     [UnmanagedCallersOnly(EntryPoint = "sonnetdb_result_free", CallConvs = new[] { typeof(CallConvCdecl) })]
     public static void ResultFree(IntPtr result)
     {
+        GCHandle handle = default;
+        bool hasHandle = false;
+
         try
         {
             ClearError();
             if (result == IntPtr.Zero)
                 return;
 
-            var handle = GCHandle.FromIntPtr(result);
+            handle = GCHandle.FromIntPtr(result);
+            hasHandle = true;
             if (handle.Target is IDisposable disposable)
                 disposable.Dispose();
-            handle.Free();
         }
         catch (Exception ex)
         {
             SetError(ex);
+        }
+        finally
+        {
+            if (hasHandle)
+                handle.Free();
         }
     }
 

@@ -8,6 +8,7 @@ The connector layout follows the same layering used by mature time-series databa
 - `go/` provides the Go cgo connector and a `database/sql` driver over the C ABI.
 - `rust/` provides hand-maintained Rust FFI bindings plus safe connection/result wrapper types over the C ABI.
 - `java/` provides the Java connector over the C ABI through a Java 8-compatible JNI backend and an optional JDK 21+ FFM backend.
+- `python/` provides a dependency-free `ctypes` connector plus a small DB-API-style cursor facade over the C ABI.
 - `vb6/` provides source modules for Visual Basic 6 plus a local-build x86 stdcall bridge over the C ABI.
 - `purebasic/` provides a PureBasic include file that dynamically loads the C ABI.
 - `odbc/` is reserved for the ODBC driver.
@@ -71,6 +72,15 @@ cd connectors/rust
 native="$(realpath ../../artifacts/connectors/c/linux-x64)"
 SONNETDB_NATIVE_LIB_DIR="$native" LD_LIBRARY_PATH="$native:${LD_LIBRARY_PATH:-}" \
   cargo run --example quickstart
+```
+
+Run the Linux x64 Python connector quickstart:
+
+```bash
+cd connectors/python
+native="$(realpath ../../artifacts/connectors/c/linux-x64)"
+SONNETDB_NATIVE_LIB_DIR="$native" LD_LIBRARY_PATH="$native:${LD_LIBRARY_PATH:-}" \
+  python examples/quickstart.py
 ```
 
 Run the Linux x64 PureBasic connector quickstart from a machine that already has PureBasic installed:

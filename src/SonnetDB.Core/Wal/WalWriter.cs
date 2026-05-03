@@ -241,18 +241,42 @@ public sealed class WalWriter : IDisposable
     {
         if (_disposed)
             return;
+        Exception? firstError = null;
         try
         {
             FlushCore(flushToDisk: true);
         }
+        catch (Exception ex)
+        {
+            firstError = ex;
+        }
         finally
         {
             _disposed = true;
-            _stream?.Dispose();
-            _fileStream?.Dispose();
+            try
+            {
+                _stream?.Dispose();
+            }
+            catch (Exception ex) when (firstError is null)
+            {
+                firstError = ex;
+            }
+
+            try
+            {
+                _fileStream?.Dispose();
+            }
+            catch (Exception ex) when (firstError is null)
+            {
+                firstError = ex;
+            }
+
             _stream = null;
             _fileStream = null;
         }
+
+        if (firstError is not null)
+            throw firstError;
     }
 
     // ── 私有辅助 ─────────────────────────────────────────────────────────────

@@ -615,9 +615,27 @@ public sealed class Tsdb : IDisposable
             }
             finally
             {
-                walSetToDispose?.Dispose();
-                _walGroupCommit.Dispose();
-                Segments.Dispose();
+                try
+                {
+                    walSetToDispose?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    ReportDiagnostic(
+                        "Dispose.WalClose",
+                        TsdbDiagnosticSeverity.Warning,
+                        "Dispose 关闭 WAL 时发生异常；资源释放会继续执行。",
+                        ex);
+                }
+
+                try
+                {
+                    _walGroupCommit.Dispose();
+                }
+                finally
+                {
+                    Segments.Dispose();
+                }
             }
         }
     }
