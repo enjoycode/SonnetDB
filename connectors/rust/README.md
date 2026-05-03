@@ -1,5 +1,63 @@
 # SonnetDB Rust Connector
 
-Reserved for the Rust connector.
+The Rust connector wraps the stable SonnetDB C ABI from `connectors/c` with a small safe API.
 
-Planned direction: generate or hand-maintain FFI bindings to `connectors/c/include/sonnetdb.h`, then expose safe Rust connection and result cursor types.
+It exposes:
+
+- `Connection::open` / `Connection::execute` / `Connection::execute_non_query`
+- `ResultSet` forward-only cursors with typed getters
+- `Connection::flush`, `sonnetdb::version`, and `sonnetdb::last_error`
+- hand-maintained FFI bindings for `connectors/c/include/sonnetdb.h`
+
+The first version intentionally does not implement SQL parameters because the native ABI currently accepts a single SQL string.
+
+## Requirements
+
+- Rust 1.75+ recommended
+- a native SonnetDB C library built for the current platform:
+  - Windows: `SonnetDB.Native.dll` plus `SonnetDB.Native.lib`
+  - Linux: `SonnetDB.Native.so`
+
+Build the C connector first:
+
+```powershell
+cmake -S connectors/c --preset windows-x64
+cmake --build artifacts/connectors/c/win-x64 --config Release
+```
+
+## Run the Quickstart on Windows
+
+```powershell
+cd connectors/rust
+$native = (Resolve-Path ../c/native/SonnetDB.Native/bin/Release/net10.0/win-x64/native).Path
+$env:SONNETDB_NATIVE_LIB_DIR = $native
+$env:PATH = "$native;$env:PATH"
+cargo run --example quickstart
+```
+
+## Run the Quickstart on Linux
+
+```bash
+cmake -S connectors/c --preset linux-x64
+cmake --build artifacts/connectors/c/linux-x64
+
+cd connectors/rust
+native="$(realpath ../../artifacts/connectors/c/linux-x64)"
+SONNETDB_NATIVE_LIB_DIR="$native" LD_LIBRARY_PATH="$native:${LD_LIBRARY_PATH:-}" \
+  cargo run --example quickstart
+```
+
+## API Sketch
+
+```rust
+let connection = sonnetdb::Connection::open("./data-rust")?;
+connection.execute_non_query("CREATE MEASUREMENT cpu (host TAG, usage FIELD FLOAT)")?;
+
+let mut result = connection.execute("SELECT time, host, usage FROM cpu LIMIT 10")?;
+while result.next()? {
+    let ts = result.get_i64(0)?;
+    let host = result.get_text(1)?.unwrap_or_default();
+    let usage = result.get_f64(2)?;
+    println!("{ts}\t{host}\t{usage:.3}");
+}
+```
