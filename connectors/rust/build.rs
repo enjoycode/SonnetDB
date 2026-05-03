@@ -20,7 +20,11 @@ fn main() {
 
     match target_os.as_str() {
         "windows" => println!("cargo:rustc-link-lib=dylib=SonnetDB.Native"),
-        "linux" => println!("cargo:rustc-link-lib=dylib=:SonnetDB.Native.so"),
+        "linux" => {
+            // SonnetDB.Native.so is published without a lib* prefix, so use the
+            // supported verbatim modifier to request the linker's exact-file form.
+            println!("cargo:rustc-link-lib=dylib:+verbatim=SonnetDB.Native.so");
+        }
         other => panic!("SonnetDB Rust connector currently supports windows and linux, not {other}."),
     }
 }
