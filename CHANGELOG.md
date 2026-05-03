@@ -64,6 +64,7 @@
 - **WAL catalog checkpoint**：`Tsdb.FlushNowLocked` 不再在每次 Flush 后向新 WAL 重写全量 `CreateSeries` snapshot；当 catalog 出现新增 series 时，Flush 会先原子持久化 `catalog.SDBCAT`，再写 Segment / WAL Checkpoint / 回收旧 WAL segment。崩溃恢复现在由「已 checkpoint 的 series 来自 catalog 文件，checkpoint 之后的新 series 继续来自 WAL `CreateSeries`」共同保证，避免 catalog 大时每次 Flush 产生 O(series_count) WAL 放大。
 
 ### Docs
+- 新增 `docs/blogs/129-132` 连接器系列文章，分别介绍 Go、Rust、Visual Basic 6 与 PureBasic 连接器的 C ABI 复用方式、API 形态、构建/部署要求、CI 策略与适用场景。
 - 新增 `docs/blogs/117-schema-on-write.md`，介绍受控 schema-on-write 的使用场景、SQL / LP / JSON / Bulk VALUES 自动补列规则、`INT -> FLOAT` 类型提升与 schema 先持久化再写 WAL 的崩溃安全语义。
 - 新增 `docs/sql-cookbook.md`，把 `demo.sql` 中高频、当前真实支持的 `CREATE MEASUREMENT`、`INSERT`、`SELECT`、`GROUP BY time(...)`、窗口函数、PID、预测、向量检索、元数据与 `DELETE` 场景整理成可直接复制的 cookbook，并在 `docs/index.md` 与 `docs/sql-reference.md` 中加入入口。
 
