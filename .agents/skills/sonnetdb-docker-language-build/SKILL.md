@@ -1,85 +1,115 @@
 ---
 name: sonnetdb-docker-language-build
-description: [TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]
+description: Run SonnetDB language connector builds and smoke tests inside Docker when the host machine is missing non-.NET toolchains such as Go, Rust, Python, Linux CMake, or Linux native dependencies. Use when Codex needs a Docker-backed fallback for connectors/go, connectors/rust, connectors/python, or Linux connector checks without installing host SDKs; do not use for C/Java Windows CMake validation covered by sonnetdb-connectors-cmake.
 ---
 
-# Sonnetdb Docker Language Build
+# SonnetDB Docker Language Build
 
-## Overview
+Use this skill when a connector task is blocked by a missing host language toolchain and Docker is available. Prefer the repository's native commands when the local toolchain exists; use Docker as the reproducible fallback.
 
-[TODO: 1-2 sentences explaining what this skill enables]
+## Workflow
 
-## Structuring This Skill
+1. Start from the `SonnetDB` repository root.
+2. Read the connector README for the language being checked.
+3. Detect host tools with `Get-Command` or direct version commands.
+4. If the required tool is missing, run the check in a short-lived Docker container.
+5. Mount the repository read/write only when the command needs to create `artifacts/`, `bin/`, `obj/`, target outputs, or language caches.
+6. Report the host tools detected, Docker image used, exact command run, and whether artifacts were created.
 
-[TODO: Choose the structure that best fits this skill's purpose. Common patterns:
+For C and Java Windows native connector work, use `$sonnetdb-connectors-cmake` instead. This skill is for Docker-backed language/runtime fallback paths.
 
-**1. Workflow-Based** (best for sequential processes)
-- Works well when there are clear step-by-step procedures
-- Example: DOCX skill with "Workflow Decision Tree" -> "Reading" -> "Creating" -> "Editing"
-- Structure: ## Overview -> ## Workflow Decision Tree -> ## Step 1 -> ## Step 2...
+## Docker Basics
 
-**2. Task-Based** (best for tool collections)
-- Works well when the skill offers different operations/capabilities
-- Example: PDF skill with "Quick Start" -> "Merge PDFs" -> "Split PDFs" -> "Extract Text"
-- Structure: ## Overview -> ## Quick Start -> ## Task Category 1 -> ## Task Category 2...
+On Windows PowerShell, run Docker with `${PWD}` mounted at `/work`:
 
-**3. Reference/Guidelines** (best for standards or specifications)
-- Works well for brand guidelines, coding standards, or requirements
-- Example: Brand styling with "Brand Guidelines" -> "Colors" -> "Typography" -> "Features"
-- Structure: ## Overview -> ## Guidelines -> ## Specifications -> ## Usage...
+```powershell
+docker run --rm -v "${PWD}:/work" -w /work <image> <command>
+```
 
-**4. Capabilities-Based** (best for integrated systems)
-- Works well when the skill provides multiple interrelated features
-- Example: Product Management with "Core Capabilities" -> numbered capability list
-- Structure: ## Overview -> ## Core Capabilities -> ### 1. Feature -> ### 2. Feature...
+If the command writes many dependency caches, prefer container-local caches or a disposable path under `artifacts/`. Do not mount secrets, host profile directories, or production configuration files.
 
-Patterns can be mixed and matched as needed. Most skills combine patterns (e.g., start with task-based, add workflow for complex operations).
+## Go Connector
 
-Delete this entire "Structuring This Skill" section when done - it's just guidance.]
+Use when `go` is missing locally and the task touches `connectors/go`.
 
-## [TODO: Replace with the first main section based on chosen structure]
+```powershell
+docker run --rm -v "${PWD}:/work" -w /work/connectors/go golang:1.25 `
+  go test ./...
+```
 
-[TODO: Add content here. See examples in existing skills:
-- Code samples for technical skills
-- Decision trees for complex workflows
-- Concrete examples with realistic user requests
-- References to scripts/templates/references as needed]
+Run the quickstart only after a compatible native SonnetDB C library exists for the container OS, usually under `artifacts/connectors/c/linux-x64`.
 
-## Resources (optional)
+```powershell
+docker run --rm -v "${PWD}:/work" -w /work/connectors/go `
+  -e SONNETDB_NATIVE_LIB_DIR=/work/artifacts/connectors/c/linux-x64 `
+  golang:1.25 `
+  go run ./examples/quickstart
+```
 
-Create only the resource directories this skill actually needs. Delete this section if no resources are required.
+## Rust Connector
 
-### scripts/
-Executable code (Python/Bash/etc.) that can be run directly to perform specific operations.
+Use when `cargo` or `rustc` is missing locally and the task touches `connectors/rust`.
 
-**Examples from other skills:**
-- PDF skill: `fill_fillable_fields.py`, `extract_form_field_info.py` - utilities for PDF manipulation
-- DOCX skill: `document.py`, `utilities.py` - Python modules for document processing
+```powershell
+docker run --rm -v "${PWD}:/work" -w /work/connectors/rust rust:1 `
+  cargo test
+```
 
-**Appropriate for:** Python scripts, shell scripts, or any executable code that performs automation, data processing, or specific operations.
+Run the quickstart only after a Linux native library is available:
 
-**Note:** Scripts may be executed without loading into context, but can still be read by Codex for patching or environment adjustments.
+```powershell
+docker run --rm -v "${PWD}:/work" -w /work/connectors/rust `
+  -e SONNETDB_NATIVE_LIB_DIR=/work/artifacts/connectors/c/linux-x64 `
+  rust:1 `
+  cargo run --example quickstart
+```
 
-### references/
-Documentation and reference material intended to be loaded into context to inform Codex's process and thinking.
+## Python Connector
 
-**Examples from other skills:**
-- Product management: `communication.md`, `context_building.md` - detailed workflow guides
-- BigQuery: API reference documentation and query examples
-- Finance: Schema documentation, company policies
+Use when `python` is missing or local Python package state is unreliable and the task touches `connectors/python`.
 
-**Appropriate for:** In-depth documentation, API references, database schemas, comprehensive guides, or any detailed information that Codex should reference while working.
+```powershell
+docker run --rm -v "${PWD}:/work" -w /work/connectors/python python:3.13 `
+  python -m unittest discover -s tests
+```
 
-### assets/
-Files not intended to be loaded into context, but rather used within the output Codex produces.
+Run the quickstart only after a Linux native library is available:
 
-**Examples from other skills:**
-- Brand styling: PowerPoint template files (.pptx), logo files
-- Frontend builder: HTML/React boilerplate project directories
-- Typography: Font files (.ttf, .woff2)
+```powershell
+docker run --rm -v "${PWD}:/work" -w /work/connectors/python `
+  -e SONNETDB_NATIVE_LIB_DIR=/work/artifacts/connectors/c/linux-x64 `
+  python:3.13 `
+  python examples/quickstart.py
+```
 
-**Appropriate for:** Templates, boilerplate code, document templates, images, icons, fonts, or any files meant to be copied or used in the final output.
+## Linux Native Library
 
----
+For language quickstarts that need the C ABI on Linux, build the native library in Docker when local CMake/Linux tools are unavailable:
 
-**Not every skill requires all three types of resources.**
+```powershell
+docker run --rm -v "${PWD}:/work" -w /work mcr.microsoft.com/dotnet/sdk:10.0 `
+  dotnet publish connectors/c/native/SonnetDB.Native/SonnetDB.Native.csproj `
+  --configuration Release `
+  --runtime linux-x64 `
+  /p:SelfContained=true `
+  --output artifacts/connectors/c/linux-x64
+```
+
+If the connector specifically requires the CMake-produced library, use a .NET SDK image and install only the missing build packages inside the disposable container:
+
+```powershell
+docker run --rm -v "${PWD}:/work" -w /work mcr.microsoft.com/dotnet/sdk:10.0 `
+  bash -lc "apt-get update && apt-get install -y --no-install-recommends cmake clang zlib1g-dev && cmake -S connectors/c -B artifacts/connectors/c/linux-x64 -DSONNETDB_C_RID=linux-x64 -DCMAKE_BUILD_TYPE=Release && cmake --build artifacts/connectors/c/linux-x64"
+```
+
+## Reporting
+
+Always report:
+
+- Which host tools were present or missing.
+- Which Docker image and command were used.
+- Whether native library artifacts were required and where they came from.
+- Which checks passed, failed, or were skipped.
+- The first useful error lines for any failure.
+
+Do not treat reserved connector directories as failures unless they contain real source or test entry points for the requested task.

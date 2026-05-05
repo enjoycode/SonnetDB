@@ -1,4 +1,4 @@
 interface:
   display_name: "SonnetDB Docker Language Build"
   short_description: "Use Docker for missing language toolchains."
-  default_prompt: "Use -docker-language-build when a Go, Rust, or other non-.NET toolchain is missing and you need a Docker-backed build/test path."
+  default_prompt: "Use $sonnetdb-docker-language-build when Go, Rust, Python, or Linux connector checks need a Docker-backed build/test path."
