@@ -14,7 +14,7 @@ internal sealed record OpenAiEmbeddingItem(
     [property: JsonPropertyName("embedding")] float[] Embedding);
 
 internal sealed record OpenAiChatCompletionRequest(
-    [property: JsonPropertyName("model")] string Model,
+    [property: JsonPropertyName("model")] string? Model,
     [property: JsonPropertyName("messages")] IReadOnlyList<AiMessage> Messages,
     [property: JsonPropertyName("stream")] bool Stream);
 
@@ -26,3 +26,9 @@ internal sealed record OpenAiChatCompletionChoice(
 
 internal sealed record OpenAiChatCompletionMessage(
     [property: JsonPropertyName("content")] string? Content);
+
+internal sealed record OpenAiModelsResponse(
+    [property: JsonPropertyName("data")] List<OpenAiModelItem>? Data);
+
+internal sealed record OpenAiModelItem(
+    [property: JsonPropertyName("id")] string Id);

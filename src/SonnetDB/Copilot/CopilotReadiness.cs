@@ -130,12 +130,6 @@ public sealed class CopilotReadiness
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(options.Model))
-        {
-            reason = "chat.model_missing";
-            return false;
-        }
-
         reason = null;
         return true;
     }

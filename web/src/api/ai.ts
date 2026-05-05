@@ -2,16 +2,35 @@ import type { AxiosInstance } from 'axios';
 
 export interface AiStatusResponse {
   enabled: boolean;
-  provider: string;
-  model: string;
+  isCloudBound: boolean;
 }
 
 export interface AiConfigResponse {
   enabled: boolean;
-  provider: string;
-  model: string;
-  timeoutSeconds: number;
-  hasApiKey: boolean;
+  isCloudBound: boolean;
+  cloudAccessTokenExpiresAtUtc: string | null;
+  cloudBoundAtUtc: string | null;
+}
+
+export interface AiCloudDeviceCodeResponse {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string;
+  expiresIn: number;
+  interval: number;
+}
+
+export interface AiCloudDeviceTokenResponse {
+  authorized: boolean;
+  error: string | null;
+  message: string | null;
+  accessTokenExpiresAtUtc: string | null;
+}
+
+export interface AiCloudModelsResponse {
+  default: string;
+  candidates: string[];
 }
 
 export interface AiMessage {
@@ -31,24 +50,30 @@ export async function fetchAiConfig(api: AxiosInstance): Promise<AiConfigRespons
   return resp.data;
 }
 
-/** 保存 AI 配置（admin only）。apiKey 为 undefined 时保留原密钥。 */
-export async function saveAiConfig(
+/** 保存 AI 启用状态（admin only）。 */
+export async function saveAiConfig(api: AxiosInstance, enabled: boolean): Promise<void> {
+  await api.put('/v1/admin/ai-config', { enabled });
+}
+
+/** 发起 sonnetdb.com 设备码绑定（admin only）。 */
+export async function createAiCloudDeviceCode(api: AxiosInstance): Promise<AiCloudDeviceCodeResponse> {
+  const resp = await api.post<AiCloudDeviceCodeResponse>('/v1/admin/ai-cloud/device-code', {});
+  return resp.data;
+}
+
+/** 轮询 sonnetdb.com 设备码绑定结果（admin only）。 */
+export async function pollAiCloudDeviceToken(
   api: AxiosInstance,
-  config: {
-    enabled: boolean;
-    provider: string;
-    apiKey?: string;
-    model: string;
-    timeoutSeconds: number;
-  },
-): Promise<void> {
-  await api.put('/v1/admin/ai-config', {
-    enabled: config.enabled,
-    provider: config.provider,
-    apiKey: config.apiKey ?? null,
-    model: config.model,
-    timeoutSeconds: config.timeoutSeconds,
-  });
+  deviceCode: string,
+): Promise<AiCloudDeviceTokenResponse> {
+  const resp = await api.post<AiCloudDeviceTokenResponse>('/v1/admin/ai-cloud/device-token', { deviceCode });
+  return resp.data;
+}
+
+/** 读取平台当前可用模型列表（admin only）。 */
+export async function fetchAiCloudModels(api: AxiosInstance): Promise<AiCloudModelsResponse> {
+  const resp = await api.get<AiCloudModelsResponse>('/v1/admin/ai-cloud/models');
+  return resp.data;
 }
 
 /**

@@ -67,25 +67,6 @@
           </template>
           <div class="copilot-dock__options" @mousedown.stop>
             <div class="copilot-dock__options-block">
-              <n-text strong style="font-size: 12px">模型</n-text>
-              <n-select
-                size="small"
-                v-model:value="selectedModel"
-                :options="modelOptions"
-                placeholder="使用服务端默认模型"
-                clearable
-                filterable
-                tag
-                :show="modelOptions.length > 0 || undefined"
-                :title="modelDefault ? `服务端默认：${modelDefault}` : '未配置默认模型'"
-                :to="dockEl ?? 'body'"
-              >
-                <template #empty>
-                  {{ modelDefault ? `默认：${modelDefault}` : '可输入模型名' }}
-                </template>
-              </n-select>
-            </div>
-            <div class="copilot-dock__options-block">
               <div class="copilot-dock__options-head">
                 <n-text strong style="font-size: 12px">知识库</n-text>
                 <n-space size="small">
@@ -300,8 +281,8 @@ import { computed, h, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { marked, Renderer, type Tokens } from 'marked';
 import {
-  NButton, NInput, NPopconfirm, NPopover, NSelect, NSpace, NTag, NText,
-  type SelectOption, useDialog, useMessage,
+  NButton, NInput, NPopconfirm, NPopover, NSpace, NTag, NText,
+  useDialog, useMessage,
 } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
 import { useCopilotSessionsStore, type CopilotSession } from '@/stores/copilotSessions';
@@ -314,7 +295,6 @@ import {
   streamCopilotChat,
   fetchCopilotKnowledgeStatus,
   triggerCopilotDocsIngest,
-  fetchCopilotModels,
   type CopilotKnowledgeStatus,
   type CopilotChatEvent,
   type CopilotCitation,
@@ -378,38 +358,6 @@ watch(permissionMode, (mode) => {
   } catch {
     // 忽略
   }
-});
-
-// === M8: 模型选择器 ===
-const MODEL_STORAGE_KEY = 'sndb.copilot.model.v1';
-const selectedModel = ref<string>('');
-const modelDefault = ref<string>('');
-const modelCandidates = ref<string[]>([]);
-try {
-  const saved = localStorage.getItem(MODEL_STORAGE_KEY);
-  if (saved) selectedModel.value = saved;
-} catch {
-  // 忽略
-}
-watch(selectedModel, (m) => {
-  try {
-    localStorage.setItem(MODEL_STORAGE_KEY, m ?? '');
-  } catch {
-    // 忽略
-  }
-});
-const modelOptions = computed<SelectOption[]>(() => {
-  const set = new Set<string>();
-  const out: SelectOption[] = [];
-  const push = (label: string, value: string, suffix = '') => {
-    if (!value || set.has(value)) return;
-    set.add(value);
-    out.push({ label: label + suffix, value });
-  };
-  if (modelDefault.value) push(modelDefault.value, modelDefault.value, '（默认）');
-  for (const c of modelCandidates.value) push(c, c);
-  if (selectedModel.value) push(selectedModel.value, selectedModel.value);
-  return out;
 });
 
 const markdownRenderer = new Renderer();
@@ -495,20 +443,6 @@ function hasVisibleCitations(citations: CopilotCitation[] | undefined): boolean 
 
 function hasVisibleCitationsForContent(content: string, citations: CopilotCitation[] | undefined): boolean {
   return visibleCitationsForContent(content, citations).length > 0;
-}
-
-async function loadModels() {
-  if (!auth.state?.token) return;
-  try {
-    const m = await fetchCopilotModels(auth.state.token);
-    modelDefault.value = m.default ?? '';
-    modelCandidates.value = m.candidates ?? [];
-    if (!selectedModel.value && modelDefault.value) {
-      // 没有用户选择时，UI 显示默认模型但不写入 localStorage（保持空 = 走服务端默认）。
-    }
-  } catch {
-    // 忽略：模型列表不可用时退化为自由输入。
-  }
 }
 
 const ROUTE_LABELS: Record<string, string> = {
@@ -711,7 +645,7 @@ const assistantActions = computed<AssistantAction[]>(() => {
         title: '检查配置',
         type: 'info',
         autoSend: true,
-        prompt: () => '请帮我检查 Copilot 配置是否完整，并说明 API Key、模型、知识库索引分别影响什么。',
+        prompt: () => '请帮我检查 Copilot 配置是否完整，并说明 sonnetdb.com 账号绑定、平台模型和知识库索引分别影响什么。',
       },
       {
         key: 'kb-explain',
@@ -804,7 +738,7 @@ function buildContextMessage(): CopilotMessage | null {
   } else if (ctx.routeKey === 'events') {
     lines.push('用户正在查看「事件流」页面（实时 SSE 事件）。');
   } else if (ctx.routeKey === 'ai-settings') {
-    lines.push('用户正在「Copilot 设置」页面，可能在排查 API Key / 模型配置 / 知识库索引相关问题。');
+    lines.push('用户正在「Copilot 设置」页面，可能在排查 sonnetdb.com 账号绑定、平台模型或知识库索引相关问题。');
   }
   return { role: 'system', content: lines.join('\n') };
 }
@@ -814,7 +748,6 @@ function open(): void {
   if (status.value === null) {
     void reloadStatus();
     void reloadDbs();
-    void loadModels();
   }
 }
 
@@ -1294,7 +1227,6 @@ async function send(): Promise<void> {
         ...(requestDb ? { db: requestDb } : {}),
         messages: requestMessages,
         mode: permissionMode.value,
-        ...(selectedModel.value ? { model: selectedModel.value } : {}),
       },
       ac.signal,
     )) {
@@ -1443,7 +1375,6 @@ watch(() => auth.isAuthenticated, (val) => {
   if (val && visible.value) {
     void reloadStatus();
     void reloadDbs();
-    void loadModels();
   }
 });
 

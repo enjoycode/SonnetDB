@@ -23,10 +23,10 @@ interface ParsedErrorResponse {
 
 const CopilotReadinessHints: Record<string, string> = {
   disabled: 'Copilot 当前未启用，请在「Copilot 设置」中启用后再试。',
-  'chat.endpoint_invalid': 'Copilot Chat 服务地址未配置或格式不正确。请打开「Copilot 设置」，确认服务商、服务地址、API Key 与模型已保存。',
-  'chat.api_key_missing': 'Copilot Chat API Key 还没填写。请在「Copilot 设置」填写并保存后再试。',
-  'chat.model_missing': 'Copilot Chat 模型还没填写。请在「Copilot 设置」选择或输入模型后再试。',
-  'chat.provider_unsupported': '当前 Copilot Chat provider 暂不支持。请在「Copilot 设置」切换为 OpenAI 兼容服务后再试。',
+  'chat.endpoint_invalid': 'Copilot Chat 服务地址未就绪。请在「Copilot 设置」绑定 sonnetdb.com 账号后再试。',
+  'chat.api_key_missing': 'Copilot 还没有 Cloud Token。请在「Copilot 设置」绑定 sonnetdb.com 账号后再试。',
+  'chat.model_missing': '平台默认模型暂不可用，请在「Copilot 设置」刷新平台模型后稍后再试。',
+  'chat.provider_unsupported': '当前 Copilot Chat provider 暂不支持，请使用 sonnetdb.com 官方 AI Gateway。',
   'embedding.endpoint_invalid': 'Copilot 知识库向量服务地址未配置或格式不正确。可改用 builtin embedding，或在「Copilot 设置」补齐 OpenAI 兼容 embedding 配置。',
   'embedding.api_key_missing': 'Copilot 知识库向量服务缺少 API Key。请补齐 embedding API Key，或改用 builtin embedding。',
   'embedding.model_missing': 'Copilot 知识库向量模型未配置。请填写 embedding 模型，或改用 builtin embedding。',
@@ -85,12 +85,12 @@ function extractReadinessReason(message: string): string {
 
 function formatReadinessError(reason: string): string {
   return CopilotReadinessHints[reason]
-    ?? 'Copilot 还没准备好，请检查「Copilot 设置」中的服务地址、API Key、模型和知识库配置。';
+    ?? 'Copilot 还没准备好，请检查「Copilot 设置」中的 sonnetdb.com 账号绑定和知识库配置。';
 }
 
 function formatProviderStatusError(status: number, providerMessage: string): string {
   if (status === 401 || status === 403) {
-    return 'Copilot 模型服务拒绝了请求，请检查「Copilot 设置」中的 API Key、服务商权限和模型访问权限。';
+    return 'Copilot 模型服务拒绝了请求，请检查「Copilot 设置」中的 sonnetdb.com 账号绑定和平台权限。';
   }
 
   if (status === 404) {
@@ -201,24 +201,6 @@ export async function triggerCopilotDocsIngest(token: string, force = false): Pr
   }
 }
 
-/** 服务端可用 chat 模型（M8）。 */
-export interface CopilotModels {
-  default: string;
-  candidates: string[];
-}
-
-/** 拉取 Copilot 可用 chat 模型列表（默认 + 候选）。 */
-export async function fetchCopilotModels(token: string): Promise<CopilotModels> {
-  const resp = await fetch('/v1/copilot/models', {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!resp.ok) {
-    throw new Error(await readCopilotHttpError(resp, '读取 Copilot 模型列表'));
-  }
-  return (await resp.json()) as CopilotModels;
-}
-
-
 export interface CopilotCitation {
   id: string;
   kind: string;
@@ -251,10 +233,6 @@ export interface CopilotChatRequest {
    * - `read-write`：在凭据本身具备写权限的前提下允许 execute_sql 写入。
    */
   mode?: 'read-only' | 'read-write';
-  /**
-   * M8：本次请求使用的 chat 模型名；为空时使用服务端 `CopilotChatOptions.Model` 默认。
-   */
-  model?: string;
 }
 
 export async function* streamCopilotChat(

@@ -60,6 +60,11 @@ namespace SonnetDB.Json;
 // ---- AI 公开 API ----
 [JsonSerializable(typeof(AiConfigResponse))]
 [JsonSerializable(typeof(AiConfigRequest))]
+[JsonSerializable(typeof(AiCloudDeviceCodeRequest))]
+[JsonSerializable(typeof(AiCloudDeviceCodeResponse))]
+[JsonSerializable(typeof(AiCloudDeviceTokenRequest))]
+[JsonSerializable(typeof(AiCloudDeviceTokenResponse))]
+[JsonSerializable(typeof(AiCloudModelsResponse))]
 [JsonSerializable(typeof(AiChatRequest))]
 [JsonSerializable(typeof(AiMessage))]
 [JsonSerializable(typeof(AiStatusResponse))]
@@ -81,6 +86,8 @@ namespace SonnetDB.Json;
 [JsonSerializable(typeof(OpenAiChatCompletionResponse))]
 [JsonSerializable(typeof(OpenAiChatCompletionChoice))]
 [JsonSerializable(typeof(OpenAiChatCompletionMessage))]
+[JsonSerializable(typeof(OpenAiModelsResponse))]
+[JsonSerializable(typeof(OpenAiModelItem))]
 // ---- Copilot 公开 API（PR #64）----
 [JsonSerializable(typeof(CopilotIngestRequest))]
 [JsonSerializable(typeof(CopilotIngestResponse))]
@@ -98,7 +105,6 @@ namespace SonnetDB.Json;
 [JsonSerializable(typeof(CopilotSkillLoadResponse))]
 [JsonSerializable(typeof(CopilotSkillsListResponse))]
 [JsonSerializable(typeof(CopilotKnowledgeStatusResponse))]
-[JsonSerializable(typeof(CopilotModelsResponse))]
 [JsonSerializable(typeof(CopilotChatRequest))]
 [JsonSerializable(typeof(CopilotChatEvent))]
 [JsonSerializable(typeof(CopilotCitation))]

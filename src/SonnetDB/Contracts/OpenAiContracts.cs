@@ -5,7 +5,7 @@ namespace SonnetDB.Contracts;
 // ---- OpenAI-compatible /v1/chat/completions 内部协议 ----
 
 internal sealed record OpenAiRequest(
-    string Model,
+    string? Model,
     List<AiMessage> Messages,
     bool Stream);
 

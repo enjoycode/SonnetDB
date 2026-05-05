@@ -1,6 +1,8 @@
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using SonnetDB.Auth;
@@ -18,15 +20,8 @@ namespace SonnetDB.Endpoints;
 /// </summary>
 internal static class AiEndpointHandler
 {
-    /// <summary>固定服务商 URL 映射，避免用户自定义上游地址带来 SSRF 风险。</summary>
-    private static readonly Dictionary<string, string> _providerUrls = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["international"] = "https://sonnet.vip",
-        ["domestic"] = "https://ai.sonnetdb.com",
-    };
-
-    private static string GetBaseUrl(string provider) =>
-        _providerUrls.TryGetValue(provider, out var url) ? url : _providerUrls["international"];
+    private const string OfficialGatewayBaseUrl = "https://ai.sonnetdb.com";
+    private const string OfficialPlatformApiBaseUrl = "https://api.sonnetdb.com";
 
     /// <summary>
     /// 向应用注册 AI 端点。
@@ -44,7 +39,7 @@ internal static class AiEndpointHandler
         {
             var cfg = configStore.Get();
             return Results.Json(
-                new AiStatusResponse(cfg.Enabled, cfg.Provider, cfg.Model),
+                new AiStatusResponse(Enabled: true, IsCloudBound(cfg)),
                 ServerJsonContext.Default.AiStatusResponse);
         });
 
@@ -60,7 +55,11 @@ internal static class AiEndpointHandler
 
             var cfg = configStore.Get();
             return Results.Json(
-                new AiConfigResponse(cfg.Enabled, cfg.Provider, cfg.Model, cfg.TimeoutSeconds, !string.IsNullOrEmpty(cfg.ApiKey)),
+                new AiConfigResponse(
+                    Enabled: true,
+                    IsCloudBound(cfg),
+                    cfg.CloudAccessTokenExpiresAtUtc,
+                    cfg.CloudBoundAtUtc),
                 ServerJsonContext.Default.AiConfigResponse);
         });
 
@@ -79,27 +78,207 @@ internal static class AiEndpointHandler
                 return;
             }
 
-            if (!_providerUrls.ContainsKey(req.Provider))
-            {
-                await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "provider 必须为 international 或 domestic。").ConfigureAwait(false);
-                return;
-            }
-
             var existing = configStore.Get();
             var updated = new AiOptions
             {
-                Enabled = req.Enabled,
-                Provider = req.Provider,
-                ApiKey = req.ApiKey ?? existing.ApiKey,
-                Model = req.Model,
-                TimeoutSeconds = req.TimeoutSeconds > 0 ? req.TimeoutSeconds : existing.TimeoutSeconds,
+                Enabled = true,
+                GatewayBaseUrl = OfficialGatewayBaseUrl,
+                PlatformApiBaseUrl = OfficialPlatformApiBaseUrl,
+                ApiKey = existing.ApiKey,
+                CloudAccessToken = existing.CloudAccessToken,
+                CloudRefreshToken = existing.CloudRefreshToken,
+                CloudTokenType = string.IsNullOrWhiteSpace(existing.CloudTokenType) ? "Bearer" : existing.CloudTokenType,
+                CloudAccessTokenExpiresAtUtc = existing.CloudAccessTokenExpiresAtUtc,
+                CloudScope = existing.CloudScope,
+                CloudBoundAtUtc = existing.CloudBoundAtUtc,
+                Model = string.Empty,
+                TimeoutSeconds = 60,
             };
             configStore.Save(updated);
 
-            // M16/M2：同步到 Copilot 子系统选项，使 /v1/copilot/chat 依赖的 readiness/Provider 立即生效。
+            // M16/M2：同步到 Copilot 子系统选项，使 /v1/copilot/chat 依赖的 Cloud Token 立即生效。
             AiCopilotBridge.Apply(updated, copilotChatOptions, copilotEmbeddingOptions);
 
             ctx.Response.StatusCode = StatusCodes.Status204NoContent;
+        }));
+
+        app.MapMethods("/v1/admin/ai-cloud/models", ["GET"], (RequestDelegate)(async ctx =>
+        {
+            if (!BearerAuthMiddleware.IsAdmin(BearerAuthMiddleware.GetRole(ctx)))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status403Forbidden, "forbidden", "仅 admin 可读取平台模型列表。").ConfigureAwait(false);
+                return;
+            }
+
+            var cfg = configStore.Get();
+            if (!IsCloudBound(cfg))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status503ServiceUnavailable, "cloud_not_bound",
+                    "AI 助手尚未绑定 sonnetdb.com 账号，请先完成绑定。").ConfigureAwait(false);
+                return;
+            }
+
+            if (cfg.CloudAccessTokenExpiresAtUtc is not null &&
+                cfg.CloudAccessTokenExpiresAtUtc <= DateTimeOffset.UtcNow.AddMinutes(1))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status503ServiceUnavailable, "cloud_token_expired",
+                    "sonnetdb.com Cloud Access Token 已过期，请重新绑定账号。").ConfigureAwait(false);
+                return;
+            }
+
+            using var client = httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(cfg.TimeoutSeconds > 0 ? cfg.TimeoutSeconds : 60);
+            using var request = new HttpRequestMessage(HttpMethod.Get, OfficialGatewayBaseUrl + "/v1/models");
+            request.Headers.Authorization = new AuthenticationHeaderValue(
+                string.IsNullOrWhiteSpace(cfg.CloudTokenType) ? "Bearer" : cfg.CloudTokenType.Trim(),
+                cfg.CloudAccessToken);
+
+            using var response = await client.SendAsync(request, ctx.RequestAborted).ConfigureAwait(false);
+            var payload = await response.Content.ReadAsStringAsync(ctx.RequestAborted).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status502BadGateway, "platform_models_failed",
+                    $"平台模型列表读取失败 {(int)response.StatusCode}: {payload}").ConfigureAwait(false);
+                return;
+            }
+
+            var parsed = JsonSerializer.Deserialize(payload, ServerJsonContext.Default.OpenAiModelsResponse);
+            var candidates = parsed?.Data?
+                .Where(static item => !string.IsNullOrWhiteSpace(item.Id))
+                .Select(static item => item.Id.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList() ?? [];
+            var defaultModel = candidates.Count > 0 ? candidates[0] : string.Empty;
+            var resp = new AiCloudModelsResponse(defaultModel, candidates);
+            ctx.Response.StatusCode = StatusCodes.Status200OK;
+            ctx.Response.ContentType = "application/json; charset=utf-8";
+            await JsonSerializer.SerializeAsync(ctx.Response.Body, resp, ServerJsonContext.Default.AiCloudModelsResponse, ctx.RequestAborted).ConfigureAwait(false);
+        }));
+
+        app.MapMethods("/v1/admin/ai-cloud/device-code", ["POST"], (RequestDelegate)(async ctx =>
+        {
+            if (!BearerAuthMiddleware.IsAdmin(BearerAuthMiddleware.GetRole(ctx)))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status403Forbidden, "forbidden", "仅 admin 可发起 sonnetdb.com 账号绑定。").ConfigureAwait(false);
+                return;
+            }
+
+            var req = await ReadJsonAsync(ctx, ServerJsonContext.Default.AiCloudDeviceCodeRequest).ConfigureAwait(false);
+            req ??= new AiCloudDeviceCodeRequest(null, null, null);
+
+            var cfg = configStore.Get();
+            using var client = httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(cfg.TimeoutSeconds > 0 ? cfg.TimeoutSeconds : 60);
+
+            var platformBaseUrl = NormalizePlatformApiBaseUrl(cfg.PlatformApiBaseUrl);
+            using var response = await client.PostAsync(
+                platformBaseUrl + "/api/v1/device-codes",
+                JsonContent.Create(
+                    new PlatformDeviceCodeRequest(
+                        string.IsNullOrWhiteSpace(req.ClientName) ? "SonnetDB OSS Copilot" : req.ClientName.Trim(),
+                        string.IsNullOrWhiteSpace(req.ClientVersion) ? null : req.ClientVersion.Trim(),
+                        string.IsNullOrWhiteSpace(req.DeviceName) ? Environment.MachineName : req.DeviceName.Trim(),
+                        ["platform.cloud", "ai.invoke"]),
+                    PlatformDeviceCodeJsonContext.Default.PlatformDeviceCodeRequest),
+                ctx.RequestAborted).ConfigureAwait(false);
+
+            var payload = await response.Content.ReadAsStringAsync(ctx.RequestAborted).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status502BadGateway, "platform_device_code_failed",
+                    $"sonnetdb.com 设备码申请失败 {(int)response.StatusCode}: {payload}").ConfigureAwait(false);
+                return;
+            }
+
+            var parsed = JsonSerializer.Deserialize(payload, PlatformDeviceCodeJsonContext.Default.PlatformDeviceCodeResponse);
+            if (parsed is null)
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status502BadGateway, "platform_device_code_invalid",
+                    "sonnetdb.com 返回了无法解析的设备码响应。").ConfigureAwait(false);
+                return;
+            }
+
+            var resp = new AiCloudDeviceCodeResponse(
+                parsed.DeviceCode,
+                parsed.UserCode,
+                parsed.VerificationUri,
+                parsed.VerificationUriComplete,
+                parsed.ExpiresIn,
+                parsed.Interval);
+            ctx.Response.StatusCode = StatusCodes.Status200OK;
+            ctx.Response.ContentType = "application/json; charset=utf-8";
+            await JsonSerializer.SerializeAsync(ctx.Response.Body, resp, ServerJsonContext.Default.AiCloudDeviceCodeResponse, ctx.RequestAborted).ConfigureAwait(false);
+        }));
+
+        app.MapMethods("/v1/admin/ai-cloud/device-token", ["POST"], (RequestDelegate)(async ctx =>
+        {
+            if (!BearerAuthMiddleware.IsAdmin(BearerAuthMiddleware.GetRole(ctx)))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status403Forbidden, "forbidden", "仅 admin 可完成 sonnetdb.com 账号绑定。").ConfigureAwait(false);
+                return;
+            }
+
+            var req = await ReadJsonAsync(ctx, ServerJsonContext.Default.AiCloudDeviceTokenRequest).ConfigureAwait(false);
+            if (req is null || string.IsNullOrWhiteSpace(req.DeviceCode))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status400BadRequest, "bad_request", "deviceCode 不可为空。").ConfigureAwait(false);
+                return;
+            }
+
+            var cfg = configStore.Get();
+            using var client = httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(cfg.TimeoutSeconds > 0 ? cfg.TimeoutSeconds : 60);
+
+            var platformBaseUrl = NormalizePlatformApiBaseUrl(cfg.PlatformApiBaseUrl);
+            var platformReq = new PlatformDeviceTokenRequest(req.DeviceCode.Trim());
+            using var response = await client.PostAsync(
+                platformBaseUrl + "/api/v1/device-tokens",
+                JsonContent.Create(platformReq, PlatformDeviceCodeJsonContext.Default.PlatformDeviceTokenRequest),
+                ctx.RequestAborted).ConfigureAwait(false);
+            var payload = await response.Content.ReadAsStringAsync(ctx.RequestAborted).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var error = TryReadPlatformDeviceTokenError(payload);
+                var pollResponse = new AiCloudDeviceTokenResponse(false, error.Code, error.Message, null);
+                ctx.Response.StatusCode = StatusCodes.Status200OK;
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                await JsonSerializer.SerializeAsync(ctx.Response.Body, pollResponse, ServerJsonContext.Default.AiCloudDeviceTokenResponse, ctx.RequestAborted).ConfigureAwait(false);
+                return;
+            }
+
+            var token = JsonSerializer.Deserialize(payload, PlatformDeviceCodeJsonContext.Default.PlatformDeviceTokenResponse);
+            if (token is null || string.IsNullOrWhiteSpace(token.AccessToken))
+            {
+                await WriteErrorAsync(ctx, StatusCodes.Status502BadGateway, "platform_device_token_invalid",
+                    "sonnetdb.com 返回了无法解析的 Cloud Token 响应。").ConfigureAwait(false);
+                return;
+            }
+
+            var utcNow = DateTimeOffset.UtcNow;
+            var expiresAt = utcNow.AddSeconds(token.ExpiresIn > 0 ? token.ExpiresIn : 1800);
+            var updated = new AiOptions
+            {
+                Enabled = true,
+                GatewayBaseUrl = OfficialGatewayBaseUrl,
+                PlatformApiBaseUrl = OfficialPlatformApiBaseUrl,
+                ApiKey = cfg.ApiKey,
+                CloudAccessToken = token.AccessToken,
+                CloudRefreshToken = token.RefreshToken,
+                CloudTokenType = string.IsNullOrWhiteSpace(token.TokenType) ? "Bearer" : token.TokenType,
+                CloudAccessTokenExpiresAtUtc = expiresAt,
+                CloudScope = token.Scope,
+                CloudBoundAtUtc = utcNow,
+                Model = string.Empty,
+                TimeoutSeconds = 60,
+            };
+            configStore.Save(updated);
+            AiCopilotBridge.Apply(updated, copilotChatOptions, copilotEmbeddingOptions);
+
+            var resp = new AiCloudDeviceTokenResponse(true, null, null, expiresAt.ToString("O"));
+            ctx.Response.StatusCode = StatusCodes.Status200OK;
+            ctx.Response.ContentType = "application/json; charset=utf-8";
+            await JsonSerializer.SerializeAsync(ctx.Response.Body, resp, ServerJsonContext.Default.AiCloudDeviceTokenResponse, ctx.RequestAborted).ConfigureAwait(false);
         }));
 
         app.MapMethods("/v1/ai/chat", ["POST"], (RequestDelegate)(async ctx =>
@@ -128,17 +307,18 @@ internal static class AiEndpointHandler
             }
 
             var cfg = configStore.Get();
-            if (!cfg.Enabled)
+            if (!IsCloudBound(cfg))
             {
-                await WriteErrorAsync(ctx, StatusCodes.Status503ServiceUnavailable, "ai_disabled",
-                    "AI 助手未启用，请联系管理员在 AI 设置中开启并配置。").ConfigureAwait(false);
+                await WriteErrorAsync(ctx, StatusCodes.Status503ServiceUnavailable, "cloud_not_bound",
+                    "AI 助手尚未绑定 sonnetdb.com 账号，请管理员在 Copilot 设置中完成绑定。").ConfigureAwait(false);
                 return;
             }
 
-            if (string.IsNullOrEmpty(cfg.ApiKey))
+            if (cfg.CloudAccessTokenExpiresAtUtc is not null &&
+                cfg.CloudAccessTokenExpiresAtUtc <= DateTimeOffset.UtcNow.AddMinutes(1))
             {
-                await WriteErrorAsync(ctx, StatusCodes.Status503ServiceUnavailable, "no_api_key",
-                    "AI 助手尚未配置 API Key，请联系管理员。").ConfigureAwait(false);
+                await WriteErrorAsync(ctx, StatusCodes.Status503ServiceUnavailable, "cloud_token_expired",
+                    "sonnetdb.com Cloud Access Token 已过期，请在 Copilot 设置中重新绑定账号。").ConfigureAwait(false);
                 return;
             }
 
@@ -241,16 +421,19 @@ internal static class AiEndpointHandler
         using var client = factory.CreateClient();
         client.Timeout = TimeSpan.FromSeconds(cfg.TimeoutSeconds);
 
-        var requestBody = new OpenAiRequest(cfg.Model, messages, Stream: true);
+        var model = await ResolvePlatformDefaultModelAsync(client, cfg, ctx.RequestAborted).ConfigureAwait(false);
+        var requestBody = new OpenAiRequest(model, messages, Stream: true);
         var json = JsonSerializer.Serialize(requestBody, ServerJsonContext.Default.OpenAiRequest);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        var baseUrl = GetBaseUrl(cfg.Provider);
+        var baseUrl = NormalizeGatewayBaseUrl(cfg.GatewayBaseUrl);
         using var httpReq = new HttpRequestMessage(HttpMethod.Post, baseUrl + "/v1/chat/completions")
         {
             Content = content,
         };
-        httpReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cfg.ApiKey);
+        httpReq.Headers.Authorization = new AuthenticationHeaderValue(
+            string.IsNullOrWhiteSpace(cfg.CloudTokenType) ? "Bearer" : cfg.CloudTokenType.Trim(),
+            cfg.CloudAccessToken);
 
         using var resp = await client.SendAsync(httpReq, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
@@ -296,6 +479,28 @@ internal static class AiEndpointHandler
         await WriteSseDoneAsync(ctx).ConfigureAwait(false);
     }
 
+    private static async ValueTask<string?> ResolvePlatformDefaultModelAsync(
+        HttpClient client,
+        AiOptions cfg,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, OfficialGatewayBaseUrl + "/v1/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            string.IsNullOrWhiteSpace(cfg.CloudTokenType) ? "Bearer" : cfg.CloudTokenType.Trim(),
+            cfg.CloudAccessToken);
+
+        using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            return null;
+
+        var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        var parsed = JsonSerializer.Deserialize(payload, ServerJsonContext.Default.OpenAiModelsResponse);
+        return parsed?.Data?
+            .FirstOrDefault(static item => !string.IsNullOrWhiteSpace(item.Id))
+            ?.Id
+            .Trim();
+    }
+
     private static async Task WriteSseTokenAsync(HttpContext ctx, string token)
     {
         var evt = JsonSerializer.Serialize(new SseTokenEvent(token), ServerJsonContext.Default.SseTokenEvent);
@@ -330,6 +535,46 @@ internal static class AiEndpointHandler
             ctx.RequestAborted).ConfigureAwait(false);
     }
 
+    private static bool IsCloudBound(AiOptions cfg)
+        => !string.IsNullOrWhiteSpace(cfg.CloudAccessToken);
+
+    private static string NormalizeGatewayBaseUrl(string? value)
+        => NormalizeAllowedBaseUrl(value, OfficialGatewayBaseUrl, OfficialGatewayBaseUrl);
+
+    private static string NormalizePlatformApiBaseUrl(string? value)
+        => NormalizeAllowedBaseUrl(value, OfficialPlatformApiBaseUrl, OfficialPlatformApiBaseUrl);
+
+    private static string NormalizeAllowedBaseUrl(string? value, string allowed, string fallback)
+    {
+        var candidate = string.IsNullOrWhiteSpace(value) ? fallback : value.Trim().TrimEnd('/');
+        return string.Equals(candidate, allowed, StringComparison.OrdinalIgnoreCase)
+            ? allowed
+            : fallback;
+    }
+
+    private static (string Code, string Message) TryReadPlatformDeviceTokenError(string payload)
+    {
+        try
+        {
+            var problem = JsonSerializer.Deserialize(payload, PlatformDeviceCodeJsonContext.Default.PlatformProblemResponse);
+            var code = problem?.Error;
+            if (string.IsNullOrWhiteSpace(code) && problem?.Extensions is not null &&
+                problem.Extensions.TryGetValue("error", out var value) &&
+                value.ValueKind == JsonValueKind.String)
+            {
+                code = value.GetString();
+            }
+
+            return (
+                string.IsNullOrWhiteSpace(code) ? "authorization_pending" : code,
+                problem?.Detail ?? problem?.Title ?? "等待用户在 sonnetdb.com 上确认绑定。");
+        }
+        catch (JsonException)
+        {
+            return ("authorization_pending", "等待用户在 sonnetdb.com 上确认绑定。");
+        }
+    }
+
     private static async Task<T?> ReadJsonAsync<T>(HttpContext ctx, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo)
         where T : class
     {
@@ -346,3 +591,46 @@ internal static class AiEndpointHandler
         }
     }
 }
+
+internal sealed record PlatformDeviceCodeRequest(
+    string ClientName,
+    string? ClientVersion,
+    string? DeviceName,
+    IReadOnlyList<string> Scopes);
+
+internal sealed record PlatformDeviceCodeResponse(
+    string DeviceCode,
+    string UserCode,
+    string VerificationUri,
+    string VerificationUriComplete,
+    int ExpiresIn,
+    int Interval);
+
+internal sealed record PlatformDeviceTokenRequest(string DeviceCode);
+
+internal sealed record PlatformDeviceTokenResponse(
+    string AccessToken,
+    string RefreshToken,
+    string TokenType,
+    int ExpiresIn,
+    string Scope);
+
+internal sealed record PlatformProblemResponse(
+    string? Type,
+    string? Title,
+    int? Status,
+    string? Detail,
+    string? Error,
+    [property: JsonExtensionData]
+    Dictionary<string, JsonElement>? Extensions);
+
+[JsonSourceGenerationOptions(
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    WriteIndented = false)]
+[JsonSerializable(typeof(PlatformDeviceCodeRequest))]
+[JsonSerializable(typeof(PlatformDeviceCodeResponse))]
+[JsonSerializable(typeof(PlatformDeviceTokenRequest))]
+[JsonSerializable(typeof(PlatformDeviceTokenResponse))]
+[JsonSerializable(typeof(PlatformProblemResponse))]
+internal sealed partial class PlatformDeviceCodeJsonContext : JsonSerializerContext;

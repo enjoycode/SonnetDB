@@ -74,9 +74,7 @@ public sealed class AiEndpointAuthorizationTests : IAsyncLifetime
         SetAiConfig(new AiOptions
         {
             Enabled = true,
-            Provider = "international",
-            ApiKey = "dummy-key",
-            Model = "test-model",
+            CloudAccessToken = "dummy-token",
             TimeoutSeconds = 1,
         });
 
@@ -102,10 +100,8 @@ public sealed class AiEndpointAuthorizationTests : IAsyncLifetime
     {
         SetAiConfig(new AiOptions
         {
-            Enabled = false,
-            Provider = "international",
-            ApiKey = "",
-            Model = "test-model",
+            Enabled = true,
+            CloudAccessToken = "",
             TimeoutSeconds = 1,
         });
 
@@ -123,7 +119,7 @@ public sealed class AiEndpointAuthorizationTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("ai_disabled", body);
+        Assert.Contains("cloud_not_bound", body);
     }
 
     private void SetAiConfig(AiOptions options)
