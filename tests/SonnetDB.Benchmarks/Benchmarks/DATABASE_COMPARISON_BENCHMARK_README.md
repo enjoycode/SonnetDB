@@ -2,7 +2,7 @@
 
 ## 简介
 
-这是一个 SonnetDB 与 Apache IoTDB 的性能对比基准测试，用于对两个时序数据库进行性能评估。测试模拟了 10 万设备、每设备 30 个测点、一天数据的写入场景。
+这是一个 SonnetDB 与 Apache IoTDB 的性能对比基准测试，用于对两个时序数据库进行写入性能评估。默认测试模拟 1,000 个设备、每设备 30 个测点、1 小时数据的写入场景，并按 `AB BA AB BA` 顺序逐次运行四轮。
 
 > 当前实现口径：SonnetDB 与 IoTDB 都写入相同的设备、时间戳和 `c1..c30` 字段。默认正式规模为 1,000 个设备 × 12 个时间点 = 12,000 行；每行 30 个字段，总计 360,000 个字段值。吞吐量按 `values/sec` 统计，避免把“行”和“字段值”混在一起。
 >
@@ -14,8 +14,8 @@
 - **不并行执行**：测试逐次执行，避免并发干扰
 - **详细性能指标**：
   - 单次运行耗时（毫秒）
-  - 写入数据点总数
-  - 吞吐量（数据点/秒）
+  - 写入行数和字段值总数
+  - 吞吐量（字段值/秒，`values/sec`）
 - **统计分析**：
   - 平均/最小/最大耗时
   - 平均吞吐量
@@ -49,17 +49,24 @@ curl -u root:root http://localhost:18080/rest/v2/query -d '{"sql":"SHOW VERSION"
 
 ## 使用方法
 
-### 方式一：作为基准测试之一运行
+### 方式一：命令行运行（推荐）
 
-将 `DatabaseComparisonBenchmark` 集成到 BenchmarkDotNet 框架（需要修改 Program.cs）：
+当前项目入口已支持以下参数，不需要再手动修改 `Program.cs`：
 
-```csharp
-// Program.cs 中加入
-var benchmarks = new[] { typeof(DatabaseComparisonBenchmark) };
-BenchmarkRunner.Run(benchmarks);
+```bash
+cd SonnetDB
+
+# 小规模链路验证
+dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-smoke
+
+# 默认四轮公平测试：AB BA AB BA
+dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison
+
+# 100,000 设备高基数模式，可能非常耗时
+dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-full
 ```
 
-### 方式二：独立程序运行（推荐）
+### 方式二：作为库函数调用
 
 创建一个独立的控制台应用：
 
@@ -77,84 +84,76 @@ using SonnetDB.Benchmarks.Benchmarks;
 await DatabaseComparisonBenchmark.RunComparison();
 ```
 
-### 编译和运行
+### 编译
 
 ```bash
-# 编译
 cd SonnetDB
 dotnet build tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -c Release
-
-# 创建测试运行脚本 (Program.cs 或单独项目中)
-# 然后运行...
 ```
 
-## 输出示例
+## 实测结果
 
+以下结果来自 2026-05-06 在本机实际运行的 `--comparison` 四轮测试，不是示例值。完整日志文件：`tests/SonnetDB.Benchmarks/artifacts/database-comparison-20260506-174447.log`。
+
+测试命令：
+
+```bash
+dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison
 ```
-═════════════════════════════════════════════════════════════════
-  SonnetDB vs IoTDB 对比基准测试 (AB BA AB BA 四轮)
-═════════════════════════════════════════════════════════════════
 
-╔═══ 第 1 轮：AB ═══╗
+测试规模：
 
-● A 阶段开始...
-    SonnetDB 进度: 2026-04-01 00:00:00 批次 10/100 | 已写 300,000 点 | 吞吐 123,456 pts/sec
-    SonnetDB 进度: 2026-04-01 00:05:00 批次 20/100 | 已写 600,000 点 | 吞吐 125,000 pts/sec
-    ...
-    SonnetDB 完成: 共写入 288,000,000 点，耗时 2345.67s，吞吐 122,635 pts/sec
-  耗时: 2345670ms | 吞吐量: 122635 pts/sec
+| 项目 | 值 |
+|------|------|
+| 设备数 | 1,000 |
+| 字段/设备 | 30 |
+| 时间点 | 12 |
+| 每阶段行数 | 12,000 |
+| 每阶段字段值总数 | 360,000 |
+| 执行顺序 | AB BA AB BA |
+| A | SonnetDB |
+| B | IoTDB |
 
-● B 阶段开始...
-    IoTDB 生成进度: 2026-04-01 00:00:00 (10/100 * 1000设备) 已生成 300,000 点
-    ...
-    IoTDB 写入完成: 288000000 点，耗时 3456.78 秒
-  耗时: 3456780ms | 吞吐量: 83217 pts/sec
+四轮结果：
 
-...
+| 轮次 | 阶段 | 数据库 | 耗时(ms) | 行数 | 字段值 | 吞吐量(values/sec) |
+|------|------|--------|---------:|-----:|-------:|-------------------:|
+| 1 | A | SonnetDB | 3,095 | 12,000 | 360,000 | 116,317 |
+| 1 | B | IoTDB | 24,880 | 12,000 | 360,000 | 14,469 |
+| 2 | B | IoTDB | 31,740 | 12,000 | 360,000 | 11,342 |
+| 2 | A | SonnetDB | 1,871 | 12,000 | 360,000 | 192,410 |
+| 3 | A | SonnetDB | 2,085 | 12,000 | 360,000 | 172,662 |
+| 3 | B | IoTDB | 37,350 | 12,000 | 360,000 | 9,639 |
+| 4 | B | IoTDB | 36,563 | 12,000 | 360,000 | 9,846 |
+| 4 | A | SonnetDB | 2,218 | 12,000 | 360,000 | 162,308 |
 
-═════════════════════════════════════════════════════════════════
-  性能对比总结
-═════════════════════════════════════════════════════════════════
+统计结果：
 
-╔════════╦═════════════╦════════════╦═══════════════╦═══════════════════╗
-║ 轮数   ║ 数据库      ║ 耗时(ms)   ║ 数据点        ║ 吞吐量(pts/sec)   ║
-╠════════╬═════════════╬════════════╬═══════════════╬═══════════════════╣
-║      1 ║ SonnetDB    ║    2345670 ║   288,000,000 ║             122635 ║
-║      1 ║ IoTDB       ║    3456780 ║   288,000,000 ║              83217 ║
-╚════════╩═════════════╩════════════╩═══════════════╩═══════════════════╝
+| 数据库 | 平均耗时(ms) | 最小耗时(ms) | 最大耗时(ms) | 平均吞吐量(values/sec) |
+|--------|-------------:|-------------:|-------------:|-----------------------:|
+| SonnetDB | 2,317 | 1,871 | 3,095 | 160,924 |
+| IoTDB | 32,633 | 24,880 | 37,350 | 11,324 |
 
-● SonnetDB 统计:
-  平均耗时: 2400000 ms
-  最小耗时: 2345670 ms
-  最大耗时: 2450000 ms
-  平均吞吐量: 121453 pts/sec
+相对性能：SonnetDB 平均吞吐量为 IoTDB 的 14.21 倍。
 
-● IoTDB 统计:
-  平均耗时: 3500000 ms
-  最小耗时: 3456780 ms
-  最大耗时: 3520000 ms
-  平均吞吐量: 82857 pts/sec
-
-● 相对性能对比:
-  SonnetDB 比 IoTDB 快 1.46x
-```
+说明：该实测结果只代表上述环境、上述数据规模和当前测试代码路径。`--comparison-full` 保留 100,000 设备高基数模式，但本次统计没有使用该模式，避免把未完成长跑或高基数建 series 开销混入这份四轮结果。
 
 ## 代码位置
 
-- 测试类：[DatabaseComparisonBenchmark.cs](./Benchmarks/DatabaseComparisonBenchmark.cs)
+- 测试类：[DatabaseComparisonBenchmark.cs](./DatabaseComparisonBenchmark.cs)
 - 所需库：
   - SonnetDB.Benchmarks.Helpers.IoTDBRestClient
-  - SonnetDB.Benchmarks.Helpers.BenchmarkDataPoint
 
 ## 性能测试指标说明
 
 | 指标 | 说明 |
 |------|------|
 | 耗时(ms) | 测试运行的总耗时，单位毫秒 |
-| 数据点 | 写入的总数据点数 |
-| 吞吐量(pts/sec) | 每秒写入的数据点数 = 数据点 × 1000 / 耗时(ms) |
+| 行数 | 写入的时序行数；一行包含一个设备在一个时间戳上的 30 个字段 |
+| 字段值 | 写入的字段值总数 = 行数 × 字段数 |
+| 吞吐量(values/sec) | 每秒写入的字段值数 = 字段值 × 1000 / 耗时(ms) |
 | 平均耗时 | 四轮测试中相同数据库的平均耗时 |
-| 相对性能对比 | SonnetDB吞吐量 / IoTDB吞吐量 |
+| 相对性能对比 | SonnetDB 平均吞吐量 / IoTDB 平均吞吐量 |
 
 ## 常见问题
 
@@ -169,13 +168,11 @@ docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d iotd
 
 ### Q: 测试耗时很长
 
-**A**: 这是正常的。测试涉及 2.88 亿条数据点的写入，通常需要 30 分钟到几小时，具体取决于硬件性能。
+**A**: 默认 `--comparison` 模式是可完成的四轮公平测试，当前实测耗时主要由 IoTDB 阶段决定，四轮总耗时约 2 分多钟。`--comparison-full` 是 100,000 设备高基数模式，可能非常耗时，不应把未完成的 full 模式数据写入统计结果。
 
 ### Q: 可以减少测试数据量吗？
 
-**A**: 可以。修改 `RunSonnetDbBenchmark()` 和 `RunIoTDbBenchmarkAsync()` 中的循环次数：
-- 修改 `for (var i = 0; i < 288; i++)` 为 `for (var i = 0; i < 28; i++)` 可减少 90% 的数据
-- 修改 `for (var j = 0; j < 100; j++)` 为 `for (var j = 0; j < 10; j++)` 可减少 90% 的数据
+**A**: 可以。当前测试通过 `DatabaseComparisonOptions` 控制规模，主要参数包括 `DeviceCount`、`FieldCount`、`TimeSlotCount`、`DeviceBatchSize` 和 `IotDbTabletBatchSize`。默认 `--comparison` 使用 1,000 个设备；`--comparison-full` 使用 100,000 个设备。
 
 ### Q: 如何导出测试结果？
 
