@@ -41,6 +41,7 @@ RUN rm -rf src/SonnetDB/wwwroot/help \
 
 RUN dotnet publish src/SonnetDB/SonnetDB.csproj \
     -c Release \
+    -p:BuildAdminUi=true \
     -o /app/publish
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime

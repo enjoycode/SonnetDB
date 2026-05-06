@@ -56,28 +56,23 @@ SonnetDB is a time-series database for IoT, industrial telemetry, observability,
 - 🔐 Control-plane SQL for users, databases, grants, and tokens
 - 🧪 Continuous benchmarks against InfluxDB, TDengine, IoTDB, TimescaleDB, SQLite, and LiteDB
 
-## 🆚 Facade Benchmarking Against Other TSDB Projects
+## � Why SonnetDB
 
-The SonnetDB facade intentionally follows patterns commonly seen in major database front pages:
+- **Embedded + server, one codebase**: Run as an in-process zero-dependency engine, or deploy as a standalone HTTP service — from edge devices to cloud, the same database fits both.
+- **Standard SQL for time-series**: No proprietary query language to learn. Use familiar SQL for writes, queries, aggregation, forecast functions, GeoSpatial analysis, and control-plane operations.
+- **~2× faster than alternatives**: Our server-vs-server benchmark shows ~**1.98× higher query throughput** than comparable time-series databases on the same hardware.
+- **First-class multi-language connectors**: Official connectors for C, Go, Rust, Java, Python, VB6, and PureBasic, plus a full ADO.NET provider for .NET ecosystems.
+- **Built-in control plane**: User management, RBAC, token lifecycle, and Admin UI included — no extra ops tooling required.
+- **MIT licensed, fully open source**: Free to use, modify, and redistribute. Enterprise features available via [sonnetdb.com](https://sonnetdb.com).
 
-- InfluxDB-style onboarding: run first, then write/query quickly
-- TimescaleDB-style messaging: SQL-first analytics capability visibility
-- TDengine/IoTDB-style framing: time-series workload focus + deployment clarity
+## 🌐 Website & Resources
 
-So this README front section prioritizes:
-
-- Product shape (embedded + server)
-- Ecosystem entries (NuGet, Docker, connectors)
-- Verifiable capabilities (functions, geo, control-plane, benchmark track)
-
-## 🌐 Official Website Proposal
-
-Recommended public addresses:
-
-- Homepage: https://sonnetdb.com
-- Docs/Product docs entry: https://sonnetdb.com/docs
-- OSS repo: https://github.com/IoTSharp/SonnetDB
-- Platform/business entry (optional split): https://sonnetdb.com/platform
+| | Link |
+| --- | --- |
+| Homepage | https://sonnetdb.com |
+| Documentation | https://sonnetdb.com/docs |
+| Open-source repo | https://github.com/IoTSharp/SonnetDB |
+| Enterprise & cloud platform | https://sonnetdb.com/platform |
 
 ## What Is Included
 
