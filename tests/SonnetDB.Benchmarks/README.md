@@ -338,6 +338,37 @@ dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --fi
 | `IoTDB_Aggregate_1Min` | 866.1 ms | 4.38 MB | `GROUP BY ([start,end), 60000ms)` |
 | `TimescaleDB_Aggregate_1Min` | 90.43 ms | 0.01 MB | `time_bucket('1 minute', time)` |
 
+### SonnetDB Server vs IoTDB Server 对比结果
+
+> 以下数据为 2026-05-06 在 Windows 11 / Intel Core Ultra 9 185H / .NET 10.0.7 上运行 `--comparison-server` 的真实结果。该组结果与旧的“SonnetDB 嵌入式 vs IoTDB REST”口径不同：本次两边都走服务端路径，SonnetDB 使用 `POST /v1/db/{db}/measurements/{m}/json`，IoTDB 使用 REST v2 `insertTablet`。完整日志见 `tests/SonnetDB.Benchmarks/artifacts/database-comparison-server-20260506-183522.log`。
+
+| 项目 | 值 |
+|------|----|
+| 设备数 | 1,000 |
+| 字段/设备 | 30 |
+| 时间点 | 12 |
+| 每阶段行数 | 12,000 |
+| 每阶段字段值总数 | 360,000 |
+| 执行顺序 | AB BA AB BA |
+
+| 轮次 | 数据库 | 耗时(ms) | 吞吐量(values/sec) |
+|------|--------|---------:|-------------------:|
+| 1 | SonnetDB Server | 7,402 | 48,636 |
+| 1 | IoTDB Server | 22,019 | 16,350 |
+| 2 | IoTDB Server | 31,142 | 11,560 |
+| 2 | SonnetDB Server | 23,297 | 15,453 |
+| 3 | SonnetDB Server | 28,342 | 12,702 |
+| 3 | IoTDB Server | 41,267 | 8,724 |
+| 4 | IoTDB Server | 37,774 | 9,530 |
+| 4 | SonnetDB Server | 24,529 | 14,677 |
+
+| 数据库 | 平均耗时(ms) | 最小耗时(ms) | 最大耗时(ms) | 平均吞吐量(values/sec) |
+|--------|-------------:|-------------:|-------------:|-----------------------:|
+| SonnetDB Server | 20,892 | 7,402 | 28,342 | 22,867 |
+| IoTDB Server | 33,050 | 22,019 | 41,267 | 11,541 |
+
+相对性能：SonnetDB Server 平均吞吐约为 IoTDB Server 的 **1.98x**。专门的对比说明、命令和两种口径对照见 [Benchmarks/DATABASE_COMPARISON_BENCHMARK_README.md](Benchmarks/DATABASE_COMPARISON_BENCHMARK_README.md)。
+
 ### PR #49 关键结论
 
 - **SonnetDB 嵌入式写入**：544.9 ms / 1M 点 ≈ **1.83 M pts/s**，比 InfluxDB 快 **9.6×**、比 TDengine REST INSERT 子表路径快 **81×**、比 TDengine schemaless LP 快 **1.8×**。

@@ -7,6 +7,8 @@ using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Storage.Format;
 using SonnetDB.Benchmarks.Helpers;
+using System.Text;
+using System.Text.Json;
 
 namespace SonnetDB.Benchmarks.Benchmarks;
 
@@ -108,6 +110,11 @@ public static class DatabaseComparisonBenchmark
     public static Task RunComparison() => RunComparison(DefaultOptions);
 
     /// <summary>
+    /// 运行“Server vs Server”对比：SonnetDB HTTP Server vs IoTDB REST Server。
+    /// </summary>
+    public static Task RunServerComparison() => RunComparison(DefaultOptions, useServerMode: true);
+
+    /// <summary>
     /// 运行 100,000 设备的完整高基数测试；该模式可能非常耗时。
     /// </summary>
     public static Task RunFullComparison() => RunComparison(FullOptions);
@@ -118,9 +125,20 @@ public static class DatabaseComparisonBenchmark
     public static Task RunSmokeComparison() => RunComparison(SmokeOptions);
 
     /// <summary>
+    /// 运行“Server vs Server”小规模冒烟测试。
+    /// </summary>
+    public static Task RunServerSmokeComparison() => RunComparison(SmokeOptions, useServerMode: true);
+
+    /// <summary>
     /// 按指定参数运行对比基准测试。
     /// </summary>
-    public static async Task RunComparison(DatabaseComparisonOptions options)
+    public static Task RunComparison(DatabaseComparisonOptions options)
+        => RunComparison(options, useServerMode: false);
+
+    /// <summary>
+    /// 按指定参数运行对比基准测试。
+    /// </summary>
+    public static async Task RunComparison(DatabaseComparisonOptions options, bool useServerMode)
     {
         options.Validate();
 
@@ -128,8 +146,9 @@ public static class DatabaseComparisonBenchmark
             ' ',
             Enumerable.Range(0, options.RoundCount).Select(roundIndex => roundIndex % 2 == 0 ? "AB" : "BA"));
 
+        string modeLabel = useServerMode ? "Server vs Server" : "Embedded vs IoTDB Server";
         Console.WriteLine("═════════════════════════════════════════════════════════════════");
-        Console.WriteLine($"  SonnetDB vs IoTDB 对比基准测试 ({sequenceLabel}，{options.RoundCount} 轮)");
+        Console.WriteLine($"  SonnetDB vs IoTDB 对比基准测试 ({modeLabel} | {sequenceLabel}，{options.RoundCount} 轮)");
         Console.WriteLine("═════════════════════════════════════════════════════════════════");
         Console.WriteLine($"  设备数: {options.DeviceCount:N0} | 字段/设备: {options.FieldCount:N0} | 时间点: {options.TimeSlotCount:N0}");
         Console.WriteLine($"  行数: {options.TotalRows:N0} | 字段值总数: {options.TotalFieldValues:N0}");
@@ -150,7 +169,7 @@ public static class DatabaseComparisonBenchmark
 
             // 第一阶段（A或B）
             Console.WriteLine($"● {phaseA} 阶段开始...");
-            var resultA = await RunSingleBenchmark(phaseA, runNumber, options, preparedData).ConfigureAwait(false);
+            var resultA = await RunSingleBenchmark(phaseA, runNumber, options, preparedData, useServerMode).ConfigureAwait(false);
             results.Add(resultA);
             Console.WriteLine($"  耗时: {resultA.TotalMilliseconds}ms | " +
                             $"吞吐量: {resultA.ValuesPerSecond:F0} values/sec");
@@ -158,7 +177,7 @@ public static class DatabaseComparisonBenchmark
 
             // 第二阶段（B或A）
             Console.WriteLine($"● {phaseB} 阶段开始...");
-            var resultB = await RunSingleBenchmark(phaseB, runNumber, options, preparedData).ConfigureAwait(false);
+            var resultB = await RunSingleBenchmark(phaseB, runNumber, options, preparedData, useServerMode).ConfigureAwait(false);
             results.Add(resultB);
             Console.WriteLine($"  耗时: {resultB.TotalMilliseconds}ms | " +
                             $"吞吐量: {resultB.ValuesPerSecond:F0} values/sec");
@@ -184,7 +203,8 @@ public static class DatabaseComparisonBenchmark
         string phase,
         int runNumber,
         DatabaseComparisonOptions options,
-        PreparedData preparedData)
+        PreparedData preparedData,
+        bool useServerMode)
     {
         var stopwatch = Stopwatch.StartNew();
         WriteCounts counts = default;
@@ -192,7 +212,9 @@ public static class DatabaseComparisonBenchmark
         if (phase == "A")
         {
             // 运行 SonnetDB 测试
-            counts = RunSonnetDbBenchmark(options, preparedData);
+            counts = useServerMode
+                ? await RunSonnetDbServerBenchmarkAsync(options, preparedData).ConfigureAwait(false)
+                : RunSonnetDbBenchmark(options, preparedData);
         }
         else if (phase == "B")
         {
@@ -374,6 +396,65 @@ public static class DatabaseComparisonBenchmark
         }
     }
 
+    private static async Task<WriteCounts> RunSonnetDbServerBenchmarkAsync(
+        DatabaseComparisonOptions options,
+        PreparedData preparedData)
+    {
+        string baseUrl = Environment.GetEnvironmentVariable("SONNETDB_BENCH_URL")
+            ?? "http://localhost:5080";
+        string token = Environment.GetEnvironmentVariable("SONNETDB_BENCH_TOKEN")
+            ?? "bench-admin-token";
+
+        const string database = "bench_comparison";
+        const string measurement = TableName;
+
+        try
+        {
+            using var client = new SonnetDbHttpClient(baseUrl, token);
+            await client.PingAsync().ConfigureAwait(false);
+            await client.DropDatabaseIfExistsAsync(database).ConfigureAwait(false);
+            await client.CreateDatabaseAsync(database).ConfigureAwait(false);
+
+            string createSql = BuildCreateMeasurementSql(measurement, preparedData.FieldNames);
+            await client.ExecuteSqlAsync(database, createSql).ConfigureAwait(false);
+
+            long totalRows = 0;
+            long totalFieldValues = 0;
+            var startTime = DateTime.Now;
+            var payloadBuilder = new StringBuilder(8 * 1024);
+
+            for (int deviceIndex = 0; deviceIndex < options.DeviceCount; deviceIndex++)
+            {
+                string deviceName = CreateDeviceName(deviceIndex);
+                string payload = BuildSonnetJsonPayload(deviceName, preparedData, payloadBuilder);
+
+                // 为与 IoTDB REST 路径一致，不指定 flush（保持服务器默认写入路径）。
+                await client.WriteJsonPointsAsync(database, measurement, payload).ConfigureAwait(false);
+                totalRows += options.TimeSlotCount;
+                totalFieldValues += (long)options.TimeSlotCount * options.FieldCount;
+
+                if ((deviceIndex + 1) % options.IotDbProgressEveryDevices == 0)
+                {
+                    var progressSeconds = (DateTime.Now - startTime).TotalSeconds;
+                    var throughput = totalFieldValues / progressSeconds;
+                    Console.WriteLine($"    SonnetDB Server 进度: 设备 {deviceIndex + 1:N0}/{options.DeviceCount:N0} | " +
+                                    $"已写 {totalRows:N0} 行/{totalFieldValues:N0} 值 | " +
+                                    $"吞吐 {throughput:F0} values/sec");
+                }
+            }
+
+            var elapsed = (DateTime.Now - startTime).TotalSeconds;
+            Console.WriteLine($"    SonnetDB Server 写入完成: {totalRows:N0} 行/{totalFieldValues:N0} 值，耗时 {elapsed:F2} 秒");
+            return new WriteCounts(totalRows, totalFieldValues);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ERROR] SonnetDB Server 测试失败: {ex.Message}");
+            Console.Error.WriteLine("请确保 SonnetDB 已启动: docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d sonnetdb");
+            return default;
+        }
+    }
+
     private static PreparedData PrepareData(DatabaseComparisonOptions options)
     {
         var fieldNames = CreateFieldNames(options.FieldCount);
@@ -448,6 +529,60 @@ public static class DatabaseComparisonBenchmark
     }
 
     private static string CreateDeviceName(int deviceIndex) => $"sn{deviceIndex + 1:D6}";
+
+    private static string BuildCreateMeasurementSql(string measurement, IReadOnlyList<string> fieldNames)
+    {
+        var builder = new StringBuilder(measurement.Length + fieldNames.Count * 24 + 32);
+        builder.Append("CREATE MEASUREMENT ").Append(measurement).Append(" (sn TAG");
+        foreach (string fieldName in fieldNames)
+        {
+            builder.Append(", ").Append(fieldName).Append(" FIELD FLOAT");
+        }
+
+        builder.Append(')');
+        return builder.ToString();
+    }
+
+    private static string BuildSonnetJsonPayload(
+        string deviceName,
+        PreparedData preparedData,
+        StringBuilder payloadBuilder)
+    {
+        payloadBuilder.Clear();
+        payloadBuilder.Append('{').Append("\"m\":\"").Append(TableName).Append("\",\"points\":[");
+
+        for (int timeSlotIndex = 0; timeSlotIndex < preparedData.Timestamps.Length; timeSlotIndex++)
+        {
+            if (timeSlotIndex > 0)
+            {
+                payloadBuilder.Append(',');
+            }
+
+            payloadBuilder.Append("{\"t\":")
+                .Append(preparedData.Timestamps[timeSlotIndex])
+                .Append(",\"tags\":{\"sn\":")
+                .Append(JsonSerializer.Serialize(deviceName))
+                .Append("},\"fields\":{");
+
+            for (int fieldIndex = 0; fieldIndex < preparedData.FieldNames.Length; fieldIndex++)
+            {
+                if (fieldIndex > 0)
+                {
+                    payloadBuilder.Append(',');
+                }
+
+                string fieldName = preparedData.FieldNames[fieldIndex];
+                payloadBuilder.Append(JsonSerializer.Serialize(fieldName))
+                    .Append(':')
+                    .Append(preparedData.IotDbValues[fieldIndex][timeSlotIndex].ToString("G17", System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            payloadBuilder.Append("}}");
+        }
+
+        payloadBuilder.Append("]}");
+        return payloadBuilder.ToString();
+    }
 
     private static double CreateValue(int fieldIndex) => fieldIndex + 1;
 

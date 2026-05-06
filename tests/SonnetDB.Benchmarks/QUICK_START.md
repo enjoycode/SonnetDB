@@ -8,22 +8,31 @@
 # 真实小规模冒烟：20 设备 × 30 字段 × 3 时间点
 dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-smoke
 
+# 真实小规模 Server vs Server 冒烟
+dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-server-smoke
+
 # 正式 AB BA AB BA：1,000 设备 × 30 字段 × 12 时间点
 dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison
+
+# 正式 AB BA AB BA（两边都走服务端）
+dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-server
 
 # 高基数完整模式：100,000 设备 × 30 字段 × 12 时间点，可能非常耗时
 dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-full
 ```
 
-正式默认规模是 12,000 行、360,000 个字段值，吞吐量按 `values/sec` 统计。SonnetDB 与 IoTDB 写入同样的设备、时间戳和 `c1..c30` 字段。
+正式默认规模是 12,000 行、360,000 个字段值，吞吐量按 `values/sec` 统计。SonnetDB 与 IoTDB 写入同样的设备、时间戳和 `c1..c30` 字段。若要做和 IoTDB 同口径的公平对比，优先运行 `--comparison-server`。
 
 ### 步骤 1：准备环境
 
-#### 1.1 启动 IoTDB 容器
+#### 1.1 启动 SonnetDB 与 IoTDB 容器
 
 ```bash
 # 在项目根目录运行
-docker compose -f SonnetDB/tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d iotdb
+docker compose -f SonnetDB/tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d sonnetdb iotdb
+
+# 验证 SonnetDB 是否就绪
+curl -s http://localhost:5080/healthz
 
 # 验证 IoTDB 是否就绪（HTTP 连接）
 curl -s -u root:root http://localhost:18080/rest/v2/query \
@@ -126,28 +135,43 @@ dotnet run -c Release
 dotnet run -c Release -p tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison
 ```
 
+## Server vs Server 实测结果
+
+以下结果来自 2026-05-06 实际执行：
+
+```bash
+dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-server
+```
+
+| 数据库 | 平均耗时(ms) | 平均吞吐量(values/sec) |
+|--------|-------------:|-----------------------:|
+| SonnetDB Server | 20,892 | 22,867 |
+| IoTDB Server | 33,050 | 11,541 |
+
+相对性能：SonnetDB Server 约快 **1.98x**。
+
+完整分轮日志：`tests/SonnetDB.Benchmarks/artifacts/database-comparison-server-20260506-183522.log`
+
 ## 预期输出示例
 
 ```
 ═════════════════════════════════════════════════════════════════
-  SonnetDB vs IoTDB 对比基准测试 (AB BA AB BA 四轮)
+  SonnetDB vs IoTDB 对比基准测试 (Server vs Server | AB BA AB BA，4 轮)
 ═════════════════════════════════════════════════════════════════
 
 ╔═══ 第 1 轮：AB ═══╗
 
 ● A 阶段开始...
-    SonnetDB 进度: 2026-04-01 00:00:00 批次 10/100 | 已写 300,000 点 | 吞吐 156,250 pts/sec
-    SonnetDB 进度: 2026-04-01 00:50:00 批次 20/100 | 已写 600,000 点 | 吞吐 147,059 pts/sec
+    SonnetDB Server 进度: 设备 100/1,000 | 已写 1,200 行/36,000 值 | 吞吐 56,773 values/sec
     ...
-    SonnetDB 完成: 共写入 288,000,000 点，耗时 2234.56s，吞吐 128,952 pts/sec
-  耗时: 2234560ms | 吞吐量: 128952 pts/sec
+    SonnetDB Server 写入完成: 12,000 行/360,000 值，耗时 7.26 秒
+  耗时: 7402ms | 吞吐量: 48636 values/sec
 
 ● B 阶段开始...
-    IoTDB 生成进度: 2026-04-01 00:00:00 (10/100 * 1000设备) 已生成 300,000 点
-    IoTDB 生成进度: 2026-04-01 00:50:00 (20/100 * 1000设备) 已生成 600,000 点
+    IoTDB 进度: 设备 100/1,000 | 已写 1,200 行/36,000 值 | 吞吐 9,685 values/sec
     ...
-    IoTDB 写入完成: 288000000 点，耗时 3456.78 秒
-  耗时: 3456780ms | 吞吐量: 83217 pts/sec
+    IoTDB 写入完成: 12,000 行/360,000 值，耗时 21.08 秒
+  耗时: 22019ms | 吞吐量: 16350 values/sec
 
 ...
 
@@ -156,32 +180,32 @@ dotnet run -c Release -p tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj --
 ═════════════════════════════════════════════════════════════════
 
 ╔════════╦═════════════╦════════════╦═══════════════╦═══════════════════╗
-║ 轮数   ║ 数据库      ║ 耗时(ms)   ║ 数据点        ║ 吞吐量(pts/sec)   ║
+║ 轮数   ║ 数据库      ║ 耗时(ms)   ║ 行数          ║ 吞吐量(values/sec)║
 ╠════════╬═════════════╬════════════╬═══════════════╬═══════════════════╣
-║      1 ║ SonnetDB    ║    2234560 ║   288,000,000 ║             128952 ║
-║      1 ║ IoTDB       ║    3456780 ║   288,000,000 ║              83217 ║
-║      2 ║ IoTDB       ║    3489123 ║   288,000,000 ║              82574 ║
-║      2 ║ SonnetDB    ║    2245678 ║   288,000,000 ║             128267 ║
-║      3 ║ SonnetDB    ║    2256789 ║   288,000,000 ║             127661 ║
-║      3 ║ IoTDB       ║    3512456 ║   288,000,000 ║              81953 ║
-║      4 ║ IoTDB       ║    3498765 ║   288,000,000 ║              82304 ║
-║      4 ║ SonnetDB    ║    2267890 ║   288,000,000 ║             127015 ║
+║      1 ║ SonnetDB    ║       7402 ║        12,000 ║              48636 ║
+║      1 ║ IoTDB       ║      22019 ║        12,000 ║              16350 ║
+║      2 ║ IoTDB       ║      31142 ║        12,000 ║              11560 ║
+║      2 ║ SonnetDB    ║      23297 ║        12,000 ║              15453 ║
+║      3 ║ SonnetDB    ║      28342 ║        12,000 ║              12702 ║
+║      3 ║ IoTDB       ║      41267 ║        12,000 ║               8724 ║
+║      4 ║ IoTDB       ║      37774 ║        12,000 ║               9530 ║
+║      4 ║ SonnetDB    ║      24529 ║        12,000 ║              14677 ║
 ╚════════╩═════════════╩════════════╩═══════════════╩═══════════════════╝
 
 ● SonnetDB 统计:
-  平均耗时: 2251229 ms
-  最小耗时: 2234560 ms
-  最大耗时: 2267890 ms
-  平均吞吐量: 127969 pts/sec
+  平均耗时: 20892 ms
+  最小耗时: 7402 ms
+  最大耗时: 28342 ms
+  平均吞吐量: 22867 values/sec
 
 ● IoTDB 统计:
-  平均耗时: 3489531 ms
-  最小耗时: 3456780 ms
-  最大耗时: 3512456 ms
-  平均吞吐量: 82512 pts/sec
+  平均耗时: 33050 ms
+  最小耗时: 22019 ms
+  最大耗时: 41267 ms
+  平均吞吐量: 11541 values/sec
 
 ● 相对性能对比:
-  SonnetDB 比 IoTDB 快 1.55x
+  SonnetDB 比 IoTDB 快 1.98x
 ```
 
 ## 性能调优建议

@@ -4,6 +4,13 @@
 
 这是一个 SonnetDB 与 Apache IoTDB 的性能对比基准测试，用于对两个时序数据库进行写入性能评估。默认测试模拟 1,000 个设备、每设备 30 个测点、1 小时数据的写入场景，并按 `AB BA AB BA` 顺序逐次运行四轮。
 
+当前文档同时记录两种口径：
+
+- `--comparison`：SonnetDB 嵌入式引擎 vs IoTDB REST Server
+- `--comparison-server`：SonnetDB HTTP Server vs IoTDB REST Server
+
+如果目标是和 IoTDB 做同口径服务器对比，应使用 `--comparison-server`，不要把嵌入式结果直接与 IoTDB 服务端结果混为一谈。
+
 > 当前实现口径：SonnetDB 与 IoTDB 都写入相同的设备、时间戳和 `c1..c30` 字段。默认正式规模为 1,000 个设备 × 12 个时间点 = 12,000 行；每行 30 个字段，总计 360,000 个字段值。吞吐量按 `values/sec` 统计，避免把“行”和“字段值”混在一起。
 >
 > IoTDB 侧使用每个设备一个 aligned timeseries，并通过 REST v2 `insertTablet` 写入同样的 `c1..c30` 字段。
@@ -33,15 +40,18 @@
 
 ### 前置条件
 
-1. **SonnetDB**: 本地开发环境（自动启动）
+1. **SonnetDB Server 模式**：Docker 容器或本地服务
 2. **IoTDB**: Docker 容器运行
 3. **.NET 10 SDK**: 编译和运行
 
 ### 启动外部数据库
 
 ```bash
-# 启动 IoTDB
-docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d iotdb
+# 启动 SonnetDB 与 IoTDB
+docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d sonnetdb iotdb
+
+# 检查 SonnetDB Server 是否就绪
+curl http://localhost:5080/healthz
 
 # 检查 IoTDB 是否就绪
 curl -u root:root http://localhost:18080/rest/v2/query -d '{"sql":"SHOW VERSION"}' -H "Content-Type: application/json"
@@ -59,8 +69,14 @@ cd SonnetDB
 # 小规模链路验证
 dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-smoke
 
+# 小规模 Server vs Server 链路验证
+dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-server-smoke
+
 # 默认四轮公平测试：AB BA AB BA
 dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison
+
+# 默认四轮公平测试：SonnetDB Server vs IoTDB Server
+dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-server
 
 # 100,000 设备高基数模式，可能非常耗时
 dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-full
@@ -93,12 +109,14 @@ dotnet build tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -c Release
 
 ## 实测结果
 
-以下结果来自 2026-05-06 在本机实际运行的 `--comparison` 四轮测试，不是示例值。完整日志文件：`tests/SonnetDB.Benchmarks/artifacts/database-comparison-20260506-174447.log`。
+### 1. 同口径 Server vs Server 结果
+
+以下结果来自 2026-05-06 在本机实际运行的 `--comparison-server` 四轮测试，不是示例值。完整日志文件：`tests/SonnetDB.Benchmarks/artifacts/database-comparison-server-20260506-183522.log`。
 
 测试命令：
 
 ```bash
-dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison
+dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.csproj -- --comparison-server
 ```
 
 测试规模：
@@ -111,32 +129,43 @@ dotnet run -c Release --project tests/SonnetDB.Benchmarks/SonnetDB.Benchmarks.cs
 | 每阶段行数 | 12,000 |
 | 每阶段字段值总数 | 360,000 |
 | 执行顺序 | AB BA AB BA |
-| A | SonnetDB |
+| A | SonnetDB Server |
 | B | IoTDB |
 
 四轮结果：
 
 | 轮次 | 阶段 | 数据库 | 耗时(ms) | 行数 | 字段值 | 吞吐量(values/sec) |
 |------|------|--------|---------:|-----:|-------:|-------------------:|
-| 1 | A | SonnetDB | 3,095 | 12,000 | 360,000 | 116,317 |
-| 1 | B | IoTDB | 24,880 | 12,000 | 360,000 | 14,469 |
-| 2 | B | IoTDB | 31,740 | 12,000 | 360,000 | 11,342 |
-| 2 | A | SonnetDB | 1,871 | 12,000 | 360,000 | 192,410 |
-| 3 | A | SonnetDB | 2,085 | 12,000 | 360,000 | 172,662 |
-| 3 | B | IoTDB | 37,350 | 12,000 | 360,000 | 9,639 |
-| 4 | B | IoTDB | 36,563 | 12,000 | 360,000 | 9,846 |
-| 4 | A | SonnetDB | 2,218 | 12,000 | 360,000 | 162,308 |
+| 1 | A | SonnetDB Server | 7,402 | 12,000 | 360,000 | 48,636 |
+| 1 | B | IoTDB | 22,019 | 12,000 | 360,000 | 16,350 |
+| 2 | B | IoTDB | 31,142 | 12,000 | 360,000 | 11,560 |
+| 2 | A | SonnetDB Server | 23,297 | 12,000 | 360,000 | 15,453 |
+| 3 | A | SonnetDB Server | 28,342 | 12,000 | 360,000 | 12,702 |
+| 3 | B | IoTDB | 41,267 | 12,000 | 360,000 | 8,724 |
+| 4 | B | IoTDB | 37,774 | 12,000 | 360,000 | 9,530 |
+| 4 | A | SonnetDB Server | 24,529 | 12,000 | 360,000 | 14,677 |
 
 统计结果：
 
 | 数据库 | 平均耗时(ms) | 最小耗时(ms) | 最大耗时(ms) | 平均吞吐量(values/sec) |
 |--------|-------------:|-------------:|-------------:|-----------------------:|
-| SonnetDB | 2,317 | 1,871 | 3,095 | 160,924 |
-| IoTDB | 32,633 | 24,880 | 37,350 | 11,324 |
+| SonnetDB Server | 20,892 | 7,402 | 28,342 | 22,867 |
+| IoTDB | 33,050 | 22,019 | 41,267 | 11,541 |
 
-相对性能：SonnetDB 平均吞吐量为 IoTDB 的 14.21 倍。
+相对性能：SonnetDB Server 平均吞吐量为 IoTDB 的 1.98 倍。
 
 说明：该实测结果只代表上述环境、上述数据规模和当前测试代码路径。`--comparison-full` 保留 100,000 设备高基数模式，但本次统计没有使用该模式，避免把未完成长跑或高基数建 series 开销混入这份四轮结果。
+
+### 2. 历史口径：嵌入式 vs IoTDB Server
+
+以下历史结果保留用于说明 SonnetDB 嵌入式引擎与 IoTDB 服务端路径的差异，不应作为“同口径 server 对比”引用。完整日志文件：`tests/SonnetDB.Benchmarks/artifacts/database-comparison-20260506-174447.log`。
+
+| 数据库 | 平均耗时(ms) | 平均吞吐量(values/sec) |
+|--------|-------------:|-----------------------:|
+| SonnetDB Embedded | 2,317 | 160,924 |
+| IoTDB Server | 32,633 | 11,324 |
+
+相对性能：SonnetDB Embedded 平均吞吐量为 IoTDB Server 的 14.21 倍。
 
 ## 代码位置
 
@@ -168,7 +197,7 @@ docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d iotd
 
 ### Q: 测试耗时很长
 
-**A**: 默认 `--comparison` 模式是可完成的四轮公平测试，当前实测耗时主要由 IoTDB 阶段决定，四轮总耗时约 2 分多钟。`--comparison-full` 是 100,000 设备高基数模式，可能非常耗时，不应把未完成的 full 模式数据写入统计结果。
+**A**: `--comparison-server` 模式是和 IoTDB 同口径的四轮公平测试，当前实测四轮总耗时约 3 分 36 秒。`--comparison` 仍保留历史嵌入式口径。`--comparison-full` 是 100,000 设备高基数模式，可能非常耗时，不应把未完成的 full 模式数据写入统计结果。
 
 ### Q: 可以减少测试数据量吗？
 
@@ -181,7 +210,7 @@ docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d iotd
 ## 注意事项
 
 1. **数据清理**：每轮测试前会清空旧数据，确保测试的独立性
-2. **临时文件**：SonnetDB 使用系统临时目录存储数据，测试完成后会自动清理
+2. **两种写入口径**：引用结果时务必注明是 `--comparison`（嵌入式）还是 `--comparison-server`（服务端）
 3. **网络延迟**：IoTDB 通过 HTTP REST API 通信，网络延迟可能影响结果
 4. **资源占用**：测试过程会占用大量 CPU 和 内存，建议在专用测试机上运行
 

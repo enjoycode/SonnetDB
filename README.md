@@ -283,6 +283,8 @@ dotnet run --project eng/benchmarks/run-benchmarks/run-benchmarks.csproj -- --fi
 
 基准入口由两个跨平台 C# 小工具组成：`start-benchmark-env.csproj` 负责构建并启动 [docker-compose.yml](tests/SonnetDB.Benchmarks/docker/docker-compose.yml) 中的 `sonnetdb`、InfluxDB、TDengine，并等待健康检查通过；`run-benchmarks.csproj` 负责调用环境入口并以 Release 模式运行 BenchmarkDotNet。README 只引用 [benchmark-summary.svg](docs/assets/benchmark-summary.svg)，后续刷新数字时优先更新 SVG 与 [基准 README](tests/SonnetDB.Benchmarks/README.md)，不需要反复改根 README 的表格。
 
+2026-05-06 新增一组与 Apache IoTDB 的同口径“Server vs Server”写入对比：两边都走 HTTP 服务端，不再使用 SonnetDB 嵌入式路径；测试规模为 1,000 设备 × 30 字段 × 12 时间点，按 `AB BA AB BA` 四轮执行。实测 SonnetDB Server 平均吞吐为 **22,867 values/sec**，IoTDB 为 **11,541 values/sec**，SonnetDB 约快 **1.98x**。详细日志、分轮表格与旧的“嵌入式 vs REST”口径说明见 [tests/SonnetDB.Benchmarks/Benchmarks/DATABASE_COMPARISON_BENCHMARK_README.md](tests/SonnetDB.Benchmarks/Benchmarks/DATABASE_COMPARISON_BENCHMARK_README.md)。
+
 向量召回基准见 [tests/SonnetDB.Benchmarks/Benchmarks/VectorRecallBenchmark.cs](tests/SonnetDB.Benchmarks/Benchmarks/VectorRecallBenchmark.cs) 与 [tests/SonnetDB.Benchmarks/README.md](tests/SonnetDB.Benchmarks/README.md)：当前已回填 SonnetDB 自身 `10k / 100k` 两档的 brute-force vs HNSW 实测耗时；`1M` 通过环境变量显式开启，`sqlite-vec` / `pgvector` 同机粗略对比结果区也已在基准 README 预留，后续如具备环境可单独补数。
 
 地理空间与轨迹基准见 [tests/SonnetDB.Benchmarks/Benchmarks/GeoQueryBenchmark.cs](tests/SonnetDB.Benchmarks/Benchmarks/GeoQueryBenchmark.cs) 与 [docs/geo-spatial.md](docs/geo-spatial.md)：默认覆盖 `100k` 轨迹点的 `geo_within`、`geo_bbox`、`trajectory_length` 与 `GEOPOINT` range scan；`1M` 通过 `SONNETDB_GEO_BENCH_INCLUDE_1M=1` 显式开启。

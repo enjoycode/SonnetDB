@@ -18,6 +18,12 @@ if (args.Contains("--comparison-smoke", StringComparer.OrdinalIgnoreCase))
 	return;
 }
 
+if (args.Contains("--comparison-server-smoke", StringComparer.OrdinalIgnoreCase))
+{
+	await DatabaseComparisonBenchmark.RunServerSmokeComparison().ConfigureAwait(false);
+	return;
+}
+
 if (args.Contains("--comparison-full", StringComparer.OrdinalIgnoreCase))
 {
 	await DatabaseComparisonBenchmark.RunFullComparison().ConfigureAwait(false);
@@ -27,6 +33,12 @@ if (args.Contains("--comparison-full", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--comparison", StringComparer.OrdinalIgnoreCase))
 {
 	await DatabaseComparisonBenchmark.RunComparison().ConfigureAwait(false);
+	return;
+}
+
+if (args.Contains("--comparison-server", StringComparer.OrdinalIgnoreCase))
+{
+	await DatabaseComparisonBenchmark.RunServerComparison().ConfigureAwait(false);
 	return;
 }
 

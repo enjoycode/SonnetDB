@@ -68,6 +68,7 @@
 - **WAL catalog checkpoint**：`Tsdb.FlushNowLocked` 不再在每次 Flush 后向新 WAL 重写全量 `CreateSeries` snapshot；当 catalog 出现新增 series 时，Flush 会先原子持久化 `catalog.SDBCAT`，再写 Segment / WAL Checkpoint / 回收旧 WAL segment。崩溃恢复现在由「已 checkpoint 的 series 来自 catalog 文件，checkpoint 之后的新 series 继续来自 WAL `CreateSeries`」共同保证，避免 catalog 大时每次 Flush 产生 O(series_count) WAL 放大。
 
 ### Docs
+- 补充 SonnetDB vs IoTDB 对比文档的两种口径说明：新增 2026-05-06 的 `--comparison-server` 同口径“Server vs Server”实测结果（1,000 设备 × 30 字段 × 12 时间点，AB BA AB BA 四轮，SonnetDB Server 平均 22,867 values/sec、IoTDB 11,541 values/sec、约 1.98x），并同步更新根 README、`tests/SonnetDB.Benchmarks/README.md`、`QUICK_START.md` 与专门对比说明，保留旧的嵌入式 vs REST 历史结果但明确标注为不同方法学。
 - 完善 `.agents/skills/sonnetdb-docker-language-build`，将模板 TODO 替换为 Docker-backed Go / Rust / Python / Linux connector 构建与 smoke test 回退流程，并修正技能默认提示词中的技能名。
 - 新增 `docs/blogs/129-132` 连接器系列文章，分别介绍 Go、Rust、Visual Basic 6 与 PureBasic 连接器的 C ABI 复用方式、API 形态、构建/部署要求、CI 策略与适用场景。
 - 新增 `docs/blogs/117-schema-on-write.md`，介绍受控 schema-on-write 的使用场景、SQL / LP / JSON / Bulk VALUES 自动补列规则、`INT -> FLOAT` 类型提升与 schema 先持久化再写 WAL 的崩溃安全语义。
