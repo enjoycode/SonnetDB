@@ -15,6 +15,8 @@ internal static class AiCopilotBridge
 
     /// <summary>
     /// 把 <paramref name="ai"/> 的官方 Gateway / Cloud Token 同步进 Copilot 的 chat 选项。
+    /// 若 <paramref name="ai"/> 未配置 <see cref="AiOptions.CloudAccessToken"/>，则不修改任何选项，
+    /// 保留运维或测试中已显式配置的 Provider / Endpoint / ApiKey。
     /// </summary>
     public static void Apply(AiOptions ai, CopilotChatOptions chat, CopilotEmbeddingOptions embedding)
     {
@@ -22,15 +24,12 @@ internal static class AiCopilotBridge
         ArgumentNullException.ThrowIfNull(chat);
         ArgumentNullException.ThrowIfNull(embedding);
 
+        // 未配置 Cloud Token 时不覆盖现有配置，避免清空运维或测试中显式设置的 Endpoint / ApiKey。
+        if (string.IsNullOrWhiteSpace(ai.CloudAccessToken))
+            return;
+
         chat.Provider = "openai";
         chat.Endpoint = OfficialEndpoint;
-
-        if (string.IsNullOrWhiteSpace(ai.CloudAccessToken))
-        {
-            chat.ApiKey = null;
-            return;
-        }
-
         chat.ApiKey = ai.CloudAccessToken;
         chat.Model = null;
         if (ai.TimeoutSeconds > 0)
