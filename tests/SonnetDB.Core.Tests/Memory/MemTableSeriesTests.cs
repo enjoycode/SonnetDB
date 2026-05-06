@@ -373,7 +373,8 @@ public sealed class MemTableSeriesTests
             {
                 start.Wait();
                 int iterations = 0;
-                while (Volatile.Read(ref writerDone) == 0 || iterations < 100)
+                int extraAfterDone = 0;
+                while (Volatile.Read(ref writerDone) == 0 || extraAfterDone++ < 100)
                 {
                     var slice = series.SnapshotRange(100L, 200L);
                     AssertSorted(slice);
