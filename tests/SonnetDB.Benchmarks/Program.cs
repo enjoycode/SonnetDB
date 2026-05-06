@@ -1,4 +1,5 @@
 ﻿using BenchmarkDotNet.Running;
+using SonnetDB.Benchmarks.Benchmarks;
 
 // BenchmarkDotNet 需要在 Release 模式下运行。
 // 使用示例：
@@ -11,4 +12,22 @@
 //
 // 运行前请先启动外部数据库（见 docker/docker-compose.yml）：
 //   docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d
+if (args.Contains("--comparison-smoke", StringComparer.OrdinalIgnoreCase))
+{
+	await DatabaseComparisonBenchmark.RunSmokeComparison().ConfigureAwait(false);
+	return;
+}
+
+if (args.Contains("--comparison-full", StringComparer.OrdinalIgnoreCase))
+{
+	await DatabaseComparisonBenchmark.RunFullComparison().ConfigureAwait(false);
+	return;
+}
+
+if (args.Contains("--comparison", StringComparer.OrdinalIgnoreCase))
+{
+	await DatabaseComparisonBenchmark.RunComparison().ConfigureAwait(false);
+	return;
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
