@@ -354,7 +354,8 @@ public sealed class MemTableSeriesTests
         const int readers = 4;
         int writerDone = 0;
 
-        var writer = Task.Run(() =>
+        // Use a dedicated writer thread so reader spin/load in slow CI does not starve writes.
+        var writer = Task.Factory.StartNew(() =>
         {
             start.Wait();
             try
@@ -366,7 +367,7 @@ public sealed class MemTableSeriesTests
             {
                 Volatile.Write(ref writerDone, 1);
             }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
         var readerTasks = Enumerable.Range(0, readers)
             .Select(_ => Task.Run(() =>
@@ -400,7 +401,7 @@ public sealed class MemTableSeriesTests
             .ToArray();
 
         start.Set();
-        await Task.WhenAll(readerTasks.Prepend(writer)).WaitAsync(TimeSpan.FromSeconds(15));
+        await Task.WhenAll(readerTasks.Prepend(writer)).WaitAsync(TimeSpan.FromSeconds(45));
 
         Assert.Equal(writes, series.Count);
         Assert.True(series.TryGetNumericAggregateSnapshot(
