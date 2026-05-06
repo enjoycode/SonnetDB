@@ -13,7 +13,7 @@
 | 3 | 五分钟上手：Docker 部署 SonnetDB | Docker 拉取、启动、首次安装向导全流程 | D5 |
 | 4 | 从源码构建 SonnetDB 开发环境 | git clone、dotnet build、VS Code/Rider 配置 | D7 |
 | 5 | SonnetDB 架构深度解析 | 写入路径、查询路径、WAL/MemTable/Segment 分层 | D9 |
-| 6 | 时序数据库选型指南：SonnetDB vs InfluxDB vs TDengine vs SQLite | 性能对比、功能对比、场景推荐 | D11 |
+| 6 | 时序数据库选型指南：SonnetDB vs InfluxDB vs TDengine vs SQLite | 性能对比、功能对比、场景推荐；补充 SonnetDB Server vs IoTDB Server 同口径写入对比（1.98x，22867 vs 11541 val/s） | D11 |
 | 7 | 安装 SonnetDB CLI 工具 | `dotnet tool install`、配置文件管理、REPL 模式 | D13 |
 | 8 | 首次安装向导：从零开始配置 SonnetDB 服务器 | 管理员创建、Token 生成、数据库创建 | D15 |
 | 9 | 了解 SonnetDB 的数据模型 | Measurement、Tag、Field、Time、Series 概念解析 | D17 |
@@ -122,7 +122,7 @@
 | 92 | 5 款时序数据库性能大对决 | SonnetDB vs SQLite vs InfluxDB vs TDengine 全面基准 | D183 |
 | 93 | 范围查询为何如此之快？ | Segment 跳过、Block 元数据、向量化 | D185 |
 | 94 | 聚合查询性能优化指南 | 跨桶融合、MemTable 增量聚合 | D187 |
-| 95 | 基准测试方法论：如何正确地比较时序数据库 | BenchmarkDotNet、统一数据、多次运行 | D189 |
+| 95 | 基准测试方法论：如何正确地比较时序数据库 | BenchmarkDotNet、统一数据、多次运行；强调嵌入式与服务端链路必须同口径比较，实测 1.98x 案例 | D189 |
 | 96 | Segment 压缩：Size-Tiered 策略详解 | 压缩触发条件、合并策略、IO 优化 | D191 |
 | 97 | 数据保留策略：TTL 自动过期删除 | Retention Worker、自动注入 Tombstone | D193 |
 | 98 | MCP 协议集成：将 SonnetDB 接入任意 AI 应用 | MCP 工具列表、权限模型 | D195 |
@@ -150,7 +150,7 @@
 
 | # | 标题 | 内容要点 | 建议日期 |
 |---|------|---------|----------|
-| 111 | 基准测试：SonnetDB 插入性能深度报告 | 单点/批量插入吞吐量、不同数据类型对比 | D221 |
+| 111 | 基准测试：SonnetDB 插入性能深度报告 | 单点/批量插入吞吐量、不同数据类型对比；包含 SonnetDB Server vs IoTDB Server 同口径对比（AB BA ×4，平均 1.98x，CLI: --comparison-server） | D221 |
 | 112 | 基准测试：SonnetDB 查询性能深度报告 | 范围查询、过滤查询延迟对比 | D223 |
 | 113 | 基准测试：SonnetDB 聚合性能深度报告 | 常见聚合函数性能、跨桶聚合效率 | D225 |
 | 114 | 基准测试：SonnetDB 地理空间性能深度报告 | GEOPOINT 类型读写性能、空间查询延迟 | D227 |
