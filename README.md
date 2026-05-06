@@ -2,14 +2,82 @@
 
 [中文](README.md) | [English](README.en.md)
 
-[![CI](https://github.com/maikebing/SonnetDB/actions/workflows/ci.yml/badge.svg)](https://github.com/maikebing/SonnetDB/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/maikebing/SonnetDB/actions/workflows/codeql.yml/badge.svg)](https://github.com/maikebing/SonnetDB/actions/workflows/codeql.yml)
+[![CI](https://github.com/IoTSharp/SonnetDB/actions/workflows/ci.yml/badge.svg)](https://github.com/IoTSharp/SonnetDB/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/IoTSharp/SonnetDB/actions/workflows/codeql.yml/badge.svg)](https://github.com/IoTSharp/SonnetDB/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
+[![GitHub Release](https://img.shields.io/github/v/release/IoTSharp/SonnetDB?label=Release)](https://github.com/IoTSharp/SonnetDB/releases)
 
-SonnetDB 是一个使用 C# / .NET 10 构建的时序数据库项目，既可以作为嵌入式引擎在进程内运行，也可以通过 `SonnetDB` 以 HTTP 服务、管理后台和帮助中心的形式部署。
+## 🚀 SonnetDB 是什么
 
-当前版本的持久化形态是“数据库目录 + schema/catalog/WAL/segments/tombstones”文件集合，而不是单个数据库文件。根目录下的帮助文档、CLI、ADO.NET 提供程序和服务端都围绕这一实际实现编写。
+SonnetDB 是一个面向 IoT、工业数据、可观测性与实时分析场景的时序数据库。它同时提供：
+
+- 🧩 进程内嵌入式引擎（低延迟、易集成）
+- 🌐 HTTP 服务端（Admin UI、Help、认证和权限）
+- 🔌 多语言连接器（C、Go、Rust、Java、Python、VB6、PureBasic）
+- 🛠️ 标准 ADO.NET 与 CLI 工具链
+
+> 当前版本采用目录化持久化布局（catalog/schema/WAL/segment/tombstone 文件集合），不是单文件数据库。
+
+## 🏷️ 生态下载与版本（小标签）
+
+### 📦 NuGet
+
+[![SonnetDB.Core Version](https://img.shields.io/nuget/v/SonnetDB.Core?label=SonnetDB.Core)](https://www.nuget.org/packages/SonnetDB.Core)
+[![SonnetDB.Core Downloads](https://img.shields.io/nuget/dt/SonnetDB.Core?label=Downloads)](https://www.nuget.org/packages/SonnetDB.Core)
+[![SonnetDB.Data Version](https://img.shields.io/nuget/v/SonnetDB.Data?label=SonnetDB.Data)](https://www.nuget.org/packages/SonnetDB.Data)
+[![SonnetDB.Data Downloads](https://img.shields.io/nuget/dt/SonnetDB.Data?label=Downloads)](https://www.nuget.org/packages/SonnetDB.Data)
+[![SonnetDB.Cli Version](https://img.shields.io/nuget/v/SonnetDB.Cli?label=SonnetDB.Cli)](https://www.nuget.org/packages/SonnetDB.Cli)
+[![SonnetDB.Cli Downloads](https://img.shields.io/nuget/dt/SonnetDB.Cli?label=Downloads)](https://www.nuget.org/packages/SonnetDB.Cli)
+
+### 🐳 Docker
+
+[![Docker Image](https://img.shields.io/docker/v/iotsharp/sonnetdb?label=iotsharp/sonnetdb&sort=semver)](https://hub.docker.com/r/iotsharp/sonnetdb)
+[![Docker Pulls](https://img.shields.io/docker/pulls/iotsharp/sonnetdb?label=Docker%20Pulls)](https://hub.docker.com/r/iotsharp/sonnetdb)
+[![Docker Download](https://img.shields.io/badge/Download-docker%20hub-0db7ed)](https://hub.docker.com/r/iotsharp/sonnetdb)
+[![GHCR Package](https://img.shields.io/badge/GHCR-ghcr.io%2Fiotsharp%2Fsonnetdb-2ea44f)](https://github.com/IoTSharp/SonnetDB/pkgs/container/sonnetdb)
+
+### 🔌 连接器与下载入口
+
+[![C Connector](https://img.shields.io/badge/C-Connector-blue)](connectors/c/README.md)
+[![Go Connector](https://img.shields.io/badge/Go-Connector-00ADD8)](connectors/go/README.md)
+[![Rust Connector](https://img.shields.io/badge/Rust-Connector-DEA584)](connectors/rust/README.md)
+[![Java Connector](https://img.shields.io/badge/Java-Connector-f89820)](connectors/java/README.md)
+[![Python Connector](https://img.shields.io/badge/Python-Connector-3776AB)](connectors/python/README.md)
+[![VB6 Connector](https://img.shields.io/badge/VB6-Connector-5C2D91)](connectors/vb6/README.md)
+[![PureBasic Connector](https://img.shields.io/badge/PureBasic-Connector-5A5A5A)](connectors/purebasic/README.md)
+[![Connector Releases](https://img.shields.io/badge/Downloads-GitHub%20Releases-black)](https://github.com/IoTSharp/SonnetDB/releases)
+
+## ✨ 核心特性（门面概览）
+
+- ⚡ 高吞吐写入：支持 SQL、Line Protocol、JSON、Bulk fast-path。
+- 🧠 丰富 SQL 能力：聚合、窗口函数、预测函数、控制函数（PID）和地理空间分析。
+- 🗺️ GeoSpatial：`GEOPOINT`、轨迹长度/重心/速度统计、围栏查询、GeoJSON 输出。
+- 🔐 服务端控制面：用户、数据库、授权、Token 生命周期管理。
+- 🧪 基准体系：持续对比 InfluxDB、TDengine、IoTDB、TimescaleDB、SQLite、LiteDB。
+
+## 🆚 对标数据库与门面说明
+
+为了让首次访问者快速理解定位，SonnetDB 门面遵循主流数据库项目的展示方式：
+
+- InfluxDB 风格：先给运行方式与写入/查询入口，再看生态与扩展。
+- TimescaleDB 风格：强调 SQL 语义、时间桶聚合、分析能力。
+- TDengine/IoTDB 风格：突出时序场景、吞吐能力与工程部署路径。
+
+对应地，SonnetDB 的门面将重点放在：
+
+- 项目定位（嵌入式 + 服务端双形态）
+- 生态入口（NuGet、Docker、Connector 下载）
+- 可验证特性（函数、地理空间、控制面、基准）
+
+## 🌐 官网地址（建议协商结果）
+
+建议统一对外主站为：
+
+- 官网主页：https://sonnetdb.com
+- 在线文档/产品说明入口：https://sonnetdb.com/docs
+- 开源仓库入口：https://github.com/IoTSharp/SonnetDB
+- 企业与平台入口（如需区分）：https://sonnetdb.com/platform
 
 ## 当前组成
 
@@ -21,18 +89,6 @@ SonnetDB 是一个使用 C# / .NET 10 构建的时序数据库项目，既可以
 | `src/SonnetDB` | HTTP 服务、首次安装流程、用户与授权、SSE、Admin UI、内置 `/help` 文档站点 |
 | `web` | 管理后台前端（SPA 调试 + 发布静态资源） |
 | `docs` | JekyllNet 文档站点源码；构建镜像时会生成并打包到 `/help` |
-
-## 当前能力
-
-- 嵌入式运行：通过 `Tsdb.Open(...)` 在进程内直接打开数据库目录。
-- Schema 管理：支持 `CREATE MEASUREMENT`，measurement 具有显式 tag/field schema。
-- 数据写入：支持 SQL `INSERT`、直接 `Point`/`WriteMany`、ADO.NET `CommandType.TableDirect` 批量快路径。
-- 数据查询：支持原始点查询、范围过滤、聚合函数、`GROUP BY time(...)` 时间桶聚合。
-- 地理空间：支持 `GEOPOINT`、`geo_within` / `geo_bbox` 空间过滤、轨迹聚合、GeoJSON 输出和 Web Admin 地图视图。
-- 数据删除：支持 `DELETE FROM ... WHERE ...`，底层通过 tombstone 与 compaction 生效。
-- 远程访问：`SonnetDB.Data` 可通过 `sonnetdb+http://...` 连接 `SonnetDB`。
-- 管理控制面：支持用户、数据库、授权、Token 的 SQL 管理语句。
-- 运维入口：提供 `/admin/`、`/help/`、`/healthz`、`/metrics`、`/v1/events`。
 
 ## 快速开始
 

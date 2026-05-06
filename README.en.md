@@ -2,14 +2,82 @@
 
 [中文](README.md) | [English](README.en.md)
 
-[![CI](https://github.com/maikebing/SonnetDB/actions/workflows/ci.yml/badge.svg)](https://github.com/maikebing/SonnetDB/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/maikebing/SonnetDB/actions/workflows/codeql.yml/badge.svg)](https://github.com/maikebing/SonnetDB/actions/workflows/codeql.yml)
+[![CI](https://github.com/IoTSharp/SonnetDB/actions/workflows/ci.yml/badge.svg)](https://github.com/IoTSharp/SonnetDB/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/IoTSharp/SonnetDB/actions/workflows/codeql.yml/badge.svg)](https://github.com/IoTSharp/SonnetDB/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
+[![GitHub Release](https://img.shields.io/github/v/release/IoTSharp/SonnetDB?label=Release)](https://github.com/IoTSharp/SonnetDB/releases)
 
-SonnetDB is a time-series database project built with C# and .NET 10. It can run as an embedded engine inside your process, and it can also be deployed through `SonnetDB` with HTTP APIs, an admin UI, and built-in help docs.
+## 🚀 What Is SonnetDB
 
-The current persistence model is directory-based. A database is stored as a set of files such as schema, catalog, WAL, segments, and tombstones. It is no longer described as a single-file database.
+SonnetDB is a time-series database for IoT, industrial telemetry, observability, and real-time analytics. It offers:
+
+- 🧩 Embedded engine mode for low-latency in-process workloads
+- 🌐 HTTP server mode with Admin UI, Help center, auth and RBAC
+- 🔌 Multi-language connectors (C, Go, Rust, Java, Python, VB6, PureBasic)
+- 🛠️ ADO.NET provider and CLI tooling
+
+> SonnetDB persists data as a directory layout (catalog/schema/WAL/segments/tombstones), not as a single-file database.
+
+## 🏷️ Ecosystem Downloads and Versions
+
+### 📦 NuGet
+
+[![SonnetDB.Core Version](https://img.shields.io/nuget/v/SonnetDB.Core?label=SonnetDB.Core)](https://www.nuget.org/packages/SonnetDB.Core)
+[![SonnetDB.Core Downloads](https://img.shields.io/nuget/dt/SonnetDB.Core?label=Downloads)](https://www.nuget.org/packages/SonnetDB.Core)
+[![SonnetDB.Data Version](https://img.shields.io/nuget/v/SonnetDB.Data?label=SonnetDB.Data)](https://www.nuget.org/packages/SonnetDB.Data)
+[![SonnetDB.Data Downloads](https://img.shields.io/nuget/dt/SonnetDB.Data?label=Downloads)](https://www.nuget.org/packages/SonnetDB.Data)
+[![SonnetDB.Cli Version](https://img.shields.io/nuget/v/SonnetDB.Cli?label=SonnetDB.Cli)](https://www.nuget.org/packages/SonnetDB.Cli)
+[![SonnetDB.Cli Downloads](https://img.shields.io/nuget/dt/SonnetDB.Cli?label=Downloads)](https://www.nuget.org/packages/SonnetDB.Cli)
+
+### 🐳 Docker
+
+[![Docker Image](https://img.shields.io/docker/v/iotsharp/sonnetdb?label=iotsharp/sonnetdb&sort=semver)](https://hub.docker.com/r/iotsharp/sonnetdb)
+[![Docker Pulls](https://img.shields.io/docker/pulls/iotsharp/sonnetdb?label=Docker%20Pulls)](https://hub.docker.com/r/iotsharp/sonnetdb)
+[![Docker Download](https://img.shields.io/badge/Download-docker%20hub-0db7ed)](https://hub.docker.com/r/iotsharp/sonnetdb)
+[![GHCR Package](https://img.shields.io/badge/GHCR-ghcr.io%2Fiotsharp%2Fsonnetdb-2ea44f)](https://github.com/IoTSharp/SonnetDB/pkgs/container/sonnetdb)
+
+### 🔌 Connectors and Download Entries
+
+[![C Connector](https://img.shields.io/badge/C-Connector-blue)](connectors/c/README.md)
+[![Go Connector](https://img.shields.io/badge/Go-Connector-00ADD8)](connectors/go/README.md)
+[![Rust Connector](https://img.shields.io/badge/Rust-Connector-DEA584)](connectors/rust/README.md)
+[![Java Connector](https://img.shields.io/badge/Java-Connector-f89820)](connectors/java/README.md)
+[![Python Connector](https://img.shields.io/badge/Python-Connector-3776AB)](connectors/python/README.md)
+[![VB6 Connector](https://img.shields.io/badge/VB6-Connector-5C2D91)](connectors/vb6/README.md)
+[![PureBasic Connector](https://img.shields.io/badge/PureBasic-Connector-5A5A5A)](connectors/purebasic/README.md)
+[![Connector Releases](https://img.shields.io/badge/Downloads-GitHub%20Releases-black)](https://github.com/IoTSharp/SonnetDB/releases)
+
+## ✨ Core Capabilities
+
+- ⚡ High-throughput ingestion via SQL, Line Protocol, JSON, and bulk fast paths
+- 🧠 Rich SQL features: aggregates, window functions, forecast and control functions (PID)
+- 🗺️ GeoSpatial stack: `GEOPOINT`, trajectory analytics, geo filters, GeoJSON output
+- 🔐 Control-plane SQL for users, databases, grants, and tokens
+- 🧪 Continuous benchmarks against InfluxDB, TDengine, IoTDB, TimescaleDB, SQLite, and LiteDB
+
+## 🆚 Facade Benchmarking Against Other TSDB Projects
+
+The SonnetDB facade intentionally follows patterns commonly seen in major database front pages:
+
+- InfluxDB-style onboarding: run first, then write/query quickly
+- TimescaleDB-style messaging: SQL-first analytics capability visibility
+- TDengine/IoTDB-style framing: time-series workload focus + deployment clarity
+
+So this README front section prioritizes:
+
+- Product shape (embedded + server)
+- Ecosystem entries (NuGet, Docker, connectors)
+- Verifiable capabilities (functions, geo, control-plane, benchmark track)
+
+## 🌐 Official Website Proposal
+
+Recommended public addresses:
+
+- Homepage: https://sonnetdb.com
+- Docs/Product docs entry: https://sonnetdb.com/docs
+- OSS repo: https://github.com/IoTSharp/SonnetDB
+- Platform/business entry (optional split): https://sonnetdb.com/platform
 
 ## What Is Included
 
