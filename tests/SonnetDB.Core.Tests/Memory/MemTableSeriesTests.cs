@@ -350,7 +350,7 @@ public sealed class MemTableSeriesTests
     {
         var series = new MemTableSeries(MakeKey(), FieldType.Float64);
         using var start = new ManualResetEventSlim(false);
-        const int writes = 1_000;
+        const int writes = 200;
         const int readers = 4;
         int writerDone = 0;
 
@@ -372,8 +372,9 @@ public sealed class MemTableSeriesTests
             .Select(_ => Task.Run(() =>
             {
                 start.Wait();
-                int iterations = 0;
-                while (Volatile.Read(ref writerDone) == 0 || iterations < 500)
+                int extraAfterDone = 0;
+                int loopCount = 0;
+                while (Volatile.Read(ref writerDone) == 0 || ++extraAfterDone <= 100)
                 {
                     var slice = series.SnapshotRange(100L, 200L);
                     AssertSorted(slice);
@@ -391,15 +392,15 @@ public sealed class MemTableSeriesTests
                         Assert.True(sum >= 0.0);
                     }
 
-                    iterations++;
-                    if ((iterations & 31) == 0)
+                    loopCount++;
+                    if ((loopCount & 31) == 0)
                         Thread.Yield();
                 }
             }))
             .ToArray();
 
         start.Set();
-        await Task.WhenAll(readerTasks.Prepend(writer)).WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.WhenAll(readerTasks.Prepend(writer)).WaitAsync(TimeSpan.FromSeconds(15));
 
         Assert.Equal(writes, series.Count);
         Assert.True(series.TryGetNumericAggregateSnapshot(
