@@ -14,32 +14,32 @@ using SonnetDB.Benchmarks.Benchmarks;
 //   docker compose -f tests/SonnetDB.Benchmarks/docker/docker-compose.yml up -d
 if (args.Contains("--comparison-smoke", StringComparer.OrdinalIgnoreCase))
 {
-	await DatabaseComparisonBenchmark.RunSmokeComparison().ConfigureAwait(false);
-	return;
+    await DatabaseComparisonBenchmark.RunSmokeComparison().ConfigureAwait(false);
+    return;
 }
 
 if (args.Contains("--comparison-server-smoke", StringComparer.OrdinalIgnoreCase))
 {
-	await DatabaseComparisonBenchmark.RunServerSmokeComparison().ConfigureAwait(false);
-	return;
+    await DatabaseComparisonBenchmark.RunServerSmokeComparison().ConfigureAwait(false);
+    return;
 }
 
 if (args.Contains("--comparison-full", StringComparer.OrdinalIgnoreCase))
 {
-	await DatabaseComparisonBenchmark.RunFullComparison().ConfigureAwait(false);
-	return;
+    await DatabaseComparisonBenchmark.RunFullComparison().ConfigureAwait(false);
+    return;
 }
 
 if (args.Contains("--comparison", StringComparer.OrdinalIgnoreCase))
 {
-	await DatabaseComparisonBenchmark.RunComparison().ConfigureAwait(false);
-	return;
+    await DatabaseComparisonBenchmark.RunComparison().ConfigureAwait(false);
+    return;
 }
 
 if (args.Contains("--comparison-server", StringComparer.OrdinalIgnoreCase))
 {
-	await DatabaseComparisonBenchmark.RunServerComparison().ConfigureAwait(false);
-	return;
+    await DatabaseComparisonBenchmark.RunServerComparison().ConfigureAwait(false);
+    return;
 }
 
 BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);

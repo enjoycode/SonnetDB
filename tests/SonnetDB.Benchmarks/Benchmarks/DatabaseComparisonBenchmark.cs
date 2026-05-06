@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using SonnetDB.Benchmarks.Helpers;
 using SonnetDB.Catalog;
 using SonnetDB.Engine;
 using SonnetDB.Engine.Compaction;
@@ -6,9 +9,6 @@ using SonnetDB.Engine.Retention;
 using SonnetDB.Memory;
 using SonnetDB.Model;
 using SonnetDB.Storage.Format;
-using SonnetDB.Benchmarks.Helpers;
-using System.Text;
-using System.Text.Json;
 
 namespace SonnetDB.Benchmarks.Benchmarks;
 
@@ -608,7 +608,7 @@ public static class DatabaseComparisonBenchmark
             if (roundIndex < groupedByRound.Count - 1)
                 Console.WriteLine("╠════════╬═════════════╬════════════╬═══════════════╬═══════════════════╬════════════════════╣");
         }
-    Console.WriteLine("╚════════╩═════════════╩════════════╩═══════════════╩═══════════════════╩════════════════════╝");
+        Console.WriteLine("╚════════╩═════════════╩════════════╩═══════════════╩═══════════════════╩════════════════════╝");
     }
 
     /// <summary>输出统计信息</summary>
@@ -661,7 +661,7 @@ public static class DatabaseComparisonBenchmark
             }
             else
             {
-                Console.WriteLine($"  IoTDB 比 SonnetDB 快 {1/ratio:F2}x");
+                Console.WriteLine($"  IoTDB 比 SonnetDB 快 {1 / ratio:F2}x");
             }
         }
     }
