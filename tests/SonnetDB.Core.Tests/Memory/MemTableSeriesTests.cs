@@ -372,9 +372,9 @@ public sealed class MemTableSeriesTests
             .Select(_ => Task.Run(() =>
             {
                 start.Wait();
-                int iterations = 0;
                 int extraAfterDone = 0;
-                while (Volatile.Read(ref writerDone) == 0 || extraAfterDone++ < 100)
+                int loopCount = 0;
+                while (Volatile.Read(ref writerDone) == 0 || ++extraAfterDone <= 100)
                 {
                     var slice = series.SnapshotRange(100L, 200L);
                     AssertSorted(slice);
@@ -392,8 +392,8 @@ public sealed class MemTableSeriesTests
                         Assert.True(sum >= 0.0);
                     }
 
-                    iterations++;
-                    if ((iterations & 31) == 0)
+                    loopCount++;
+                    if ((loopCount & 31) == 0)
                         Thread.Yield();
                 }
             }))
