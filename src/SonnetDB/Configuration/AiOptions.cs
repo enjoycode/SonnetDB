@@ -24,6 +24,9 @@ public sealed class AiOptions
     /// <summary>sonnetdb.com 设备码流程签发的 Cloud Refresh Token，预留给后续刷新端点使用。</summary>
     public string CloudRefreshToken { get; set; } = "";
 
+    /// <summary>安装级稳定设备 ID，持久化在 <c>.system/ai-config.json</c> 中，版本升级和容器重建后保持不变。</summary>
+    public string CloudDeviceLocalId { get; set; } = "";
+
     /// <summary>Cloud Access Token 类型，通常为 <c>Bearer</c>。</summary>
     public string CloudTokenType { get; set; } = "Bearer";
 

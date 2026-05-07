@@ -87,6 +87,7 @@ internal static class AiEndpointHandler
                 ApiKey = existing.ApiKey,
                 CloudAccessToken = existing.CloudAccessToken,
                 CloudRefreshToken = existing.CloudRefreshToken,
+                CloudDeviceLocalId = existing.CloudDeviceLocalId,
                 CloudTokenType = string.IsNullOrWhiteSpace(existing.CloudTokenType) ? "Bearer" : existing.CloudTokenType,
                 CloudAccessTokenExpiresAtUtc = existing.CloudAccessTokenExpiresAtUtc,
                 CloudScope = existing.CloudScope,
@@ -167,6 +168,7 @@ internal static class AiEndpointHandler
             req ??= new AiCloudDeviceCodeRequest(null, null, null);
 
             var cfg = configStore.Get();
+            var deviceLocalId = configStore.GetOrCreateCloudDeviceLocalId();
             using var client = httpClientFactory.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(cfg.TimeoutSeconds > 0 ? cfg.TimeoutSeconds : 60);
 
@@ -178,6 +180,7 @@ internal static class AiEndpointHandler
                         string.IsNullOrWhiteSpace(req.ClientName) ? "SonnetDB OSS Copilot" : req.ClientName.Trim(),
                         string.IsNullOrWhiteSpace(req.ClientVersion) ? null : req.ClientVersion.Trim(),
                         string.IsNullOrWhiteSpace(req.DeviceName) ? Environment.MachineName : req.DeviceName.Trim(),
+                        deviceLocalId,
                         ["platform.cloud", "ai.invoke"]),
                     PlatformDeviceCodeJsonContext.Default.PlatformDeviceCodeRequest),
                 ctx.RequestAborted).ConfigureAwait(false);
@@ -265,6 +268,7 @@ internal static class AiEndpointHandler
                 ApiKey = cfg.ApiKey,
                 CloudAccessToken = token.AccessToken,
                 CloudRefreshToken = token.RefreshToken,
+                CloudDeviceLocalId = cfg.CloudDeviceLocalId,
                 CloudTokenType = string.IsNullOrWhiteSpace(token.TokenType) ? "Bearer" : token.TokenType,
                 CloudAccessTokenExpiresAtUtc = expiresAt,
                 CloudScope = token.Scope,
@@ -596,6 +600,7 @@ internal sealed record PlatformDeviceCodeRequest(
     string ClientName,
     string? ClientVersion,
     string? DeviceName,
+    string DeviceLocalId,
     IReadOnlyList<string> Scopes);
 
 internal sealed record PlatformDeviceCodeResponse(

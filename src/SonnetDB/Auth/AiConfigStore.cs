@@ -29,14 +29,59 @@ public sealed class AiConfigStore
         lock (_lock) return _state;
     }
 
+    /// <summary>获取或创建稳定的本机设备 ID，并持久化到 <c>ai-config.json</c>。</summary>
+    public string GetOrCreateCloudDeviceLocalId()
+    {
+        lock (_lock)
+        {
+            if (!string.IsNullOrWhiteSpace(_state.CloudDeviceLocalId))
+            {
+                var normalized = NormalizeCloudDeviceLocalId(_state.CloudDeviceLocalId);
+                if (!string.Equals(normalized, _state.CloudDeviceLocalId, StringComparison.Ordinal))
+                {
+                    _state.CloudDeviceLocalId = normalized;
+                    AtomicJsonFile.Write(_filePath, _state, AuthJsonContext.Default.AiOptions);
+                }
+
+                return _state.CloudDeviceLocalId;
+            }
+
+            _state.CloudDeviceLocalId = GenerateCloudDeviceLocalId();
+            AtomicJsonFile.Write(_filePath, _state, AuthJsonContext.Default.AiOptions);
+            return _state.CloudDeviceLocalId;
+        }
+    }
+
     /// <summary>保存新配置并持久化到磁盘。</summary>
     public void Save(AiOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         lock (_lock)
         {
+            options.CloudDeviceLocalId = NormalizeCloudDeviceLocalId(
+                _state.CloudDeviceLocalId,
+                options.CloudDeviceLocalId);
             _state = options;
             AtomicJsonFile.Write(_filePath, _state, AuthJsonContext.Default.AiOptions);
         }
+    }
+
+    private static string NormalizeCloudDeviceLocalId(string value)
+    {
+        var normalized = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToLowerInvariant();
+        return normalized;
+    }
+
+    private static string NormalizeCloudDeviceLocalId(string existingValue, string newValue)
+    {
+        var candidate = string.IsNullOrWhiteSpace(newValue) ? existingValue : NormalizeCloudDeviceLocalId(newValue);
+        return string.IsNullOrWhiteSpace(candidate) ? string.Empty : candidate;
+    }
+
+    private static string GenerateCloudDeviceLocalId()
+    {
+        Span<byte> buffer = stackalloc byte[16];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(buffer);
+        return $"sdb-device-{Convert.ToHexStringLower(buffer)}";
     }
 }
