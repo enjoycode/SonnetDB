@@ -80,52 +80,13 @@
           {{ isCloudBound ? (modelsErr || '点击「刷新」从平台读取模型列表') : '绑定 sonnetdb.com 账号后可查看平台可用模型。' }}
         </n-text>
       </n-card>
-
-      <n-divider style="margin: 0" />
-
-      <n-card size="small" embedded :bordered="false" title="本地知识库">
-        <template #header-extra>
-          <n-space size="small">
-            <n-button size="small" quaternary :loading="kbLoading" @click="loadKbStatus">刷新</n-button>
-            <n-button
-              size="small"
-              type="primary"
-              :loading="kbReindexing"
-              :disabled="!kbStatus?.enabled"
-              @click="reindexKb"
-            >立即重建索引</n-button>
-          </n-space>
-        </template>
-        <n-space vertical :size="6" v-if="kbStatus">
-          <n-space :size="8" align="center">
-            <n-tag size="small" :type="kbStatus.enabled ? 'success' : 'default'">
-              {{ kbStatus.enabled ? '已启用' : '未启用' }}
-            </n-tag>
-            <n-tag size="small" :type="kbStatus.embeddingFallback ? 'warning' : 'info'">
-              Embedding：{{ kbStatus.embeddingProvider }}{{ kbStatus.embeddingFallback ? ' (降级)' : '' }} · {{ kbStatus.vectorDimension }}D
-            </n-tag>
-          </n-space>
-          <n-text depth="3" style="font-size: 12px">
-            已索引文档 <strong>{{ kbStatus.indexedFiles }}</strong> 篇 ·
-            分块 <strong>{{ kbStatus.indexedChunks }}</strong> 段 ·
-            技能 <strong>{{ kbStatus.skillCount }}</strong> 条 ·
-            最近摄入：<strong>{{ kbStatus.lastIngestedUtc ? formatTime(kbStatus.lastIngestedUtc) : '从未' }}</strong>
-          </n-text>
-          <n-text depth="3" style="font-size: 11px">
-            根目录：{{ kbStatus.docsRoots.join(' / ') || '(默认)' }}
-          </n-text>
-        </n-space>
-        <n-text v-else depth="3" style="font-size: 12px">
-          {{ kbLoading ? '加载中...' : (kbErr || '点击「刷新」查看知识库状态') }}
-        </n-text>
-      </n-card>
     </n-space>
   </n-card>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { NAlert, NButton, NCard, NDivider, NSpace, NTag, NText, useMessage } from 'naive-ui';
+import { NAlert, NButton, NCard, NSpace, NTag, NText } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
 import {
   createAiCloudDeviceCode,
@@ -136,14 +97,8 @@ import {
   type AiCloudDeviceCodeResponse,
   type AiConfigResponse,
 } from '@/api/ai';
-import {
-  fetchCopilotKnowledgeStatus,
-  triggerCopilotDocsIngest,
-  type CopilotKnowledgeStatus,
-} from '@/api/copilot';
 
 const auth = useAuthStore();
-const message = useMessage();
 
 const config = ref<AiConfigResponse | null>(null);
 const loadingConfig = ref(false);
@@ -160,11 +115,6 @@ const modelsLoading = ref(false);
 const models = ref<string[]>([]);
 const defaultModel = ref('');
 const modelsErr = ref('');
-
-const kbStatus = ref<CopilotKnowledgeStatus | null>(null);
-const kbLoading = ref(false);
-const kbReindexing = ref(false);
-const kbErr = ref('');
 
 const isCloudBound = computed(() => config.value?.isCloudBound === true);
 
@@ -304,36 +254,8 @@ async function testConnection(): Promise<void> {
   }
 }
 
-async function loadKbStatus(): Promise<void> {
-  if (!auth.state?.token) return;
-  kbLoading.value = true;
-  kbErr.value = '';
-  try {
-    kbStatus.value = await fetchCopilotKnowledgeStatus(auth.state.token);
-  } catch (e: unknown) {
-    kbErr.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    kbLoading.value = false;
-  }
-}
-
-async function reindexKb(): Promise<void> {
-  if (!auth.state?.token) return;
-  kbReindexing.value = true;
-  try {
-    await triggerCopilotDocsIngest(auth.state.token, true);
-    message.success('已触发知识库重建，请稍候点击「刷新」查看结果');
-    setTimeout(() => { void loadKbStatus(); }, 800);
-  } catch (e: unknown) {
-    message.error(e instanceof Error ? e.message : String(e));
-  } finally {
-    kbReindexing.value = false;
-  }
-}
-
 onMounted(() => {
   void load();
-  void loadKbStatus();
 });
 
 onBeforeUnmount(() => {

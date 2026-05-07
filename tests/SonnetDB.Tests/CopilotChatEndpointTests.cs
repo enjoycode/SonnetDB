@@ -16,7 +16,7 @@ using Xunit;
 namespace SonnetDB.Tests;
 
 /// <summary>
-/// PR #67：Copilot 单轮聊天端点端到端测试。
+/// Cloud-only Copilot endpoint bridge tests.
 /// </summary>
 public sealed class CopilotChatEndpointTests : IAsyncLifetime
 {
@@ -26,40 +26,11 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
     private WebApplication? _app;
     private string _baseUrl = string.Empty;
     private string? _dataRoot;
-    private string? _docsRoot;
-    private string? _skillsRoot;
-    private FakeChatProvider? _chatProvider;
+    private FakeCloudGatewayClient? _cloud;
 
     public async Task InitializeAsync()
     {
-        _dataRoot = CreateTempDirectory("sndb-copilot-chat-data-");
-        _docsRoot = CreateTempDirectory("sndb-copilot-chat-docs-");
-        _skillsRoot = CreateTempDirectory("sndb-copilot-chat-skills-");
-
-        File.WriteAllText(
-            Path.Combine(_docsRoot, "cpu.md"),
-            """
-            # CPU Measurement
-
-            ## Schema
-
-            `cpu` measurement 包含 `host` 标签，以及 `usage`、`temp` 两个字段。
-            """);
-
-        File.WriteAllText(
-            Path.Combine(_skillsRoot, "schema-design.md"),
-            """
-            ---
-            name: schema-design
-            description: 用于回答 measurement 的字段和 schema 问题
-            triggers: [schema, 字段, 列]
-            requires_tools: [describe_measurement, list_measurements]
-            ---
-
-            当用户询问 measurement 的字段、列、tag 或 field 时，优先使用 describe_measurement；
-            如果用户只想看有哪些 measurement，再用 list_measurements。
-            """);
-
+        _dataRoot = CreateTempDirectory("sndb-copilot-cloud-data-");
         var options = new ServerOptions
         {
             DataRoot = _dataRoot,
@@ -71,39 +42,20 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
             },
         };
         options.Copilot.Enabled = true;
-        options.Copilot.Embedding.Provider = "openai";
-        options.Copilot.Embedding.Endpoint = "https://embedding.example/v1/";
-        options.Copilot.Embedding.ApiKey = "embedding-key";
-        options.Copilot.Embedding.Model = "embedding-model";
-        options.Copilot.Chat.Provider = "openai";
-        options.Copilot.Chat.Endpoint = "https://chat.example/v1/";
-        options.Copilot.Chat.ApiKey = "chat-key";
-        options.Copilot.Chat.Model = "chat-model";
-        options.Copilot.Docs.Roots = [_docsRoot];
         options.Copilot.Docs.AutoIngestOnStartup = false;
-        options.Copilot.Skills.Root = _skillsRoot;
         options.Copilot.Skills.AutoIngestOnStartup = false;
-        _chatProvider = new FakeChatProvider();
+        _cloud = new FakeCloudGatewayClient();
 
         _app = Program.BuildApp(
             ["--Kestrel:Endpoints:Http:Url=http://127.0.0.1:0"],
             options,
-            services =>
-            {
-                services.AddSingleton<IEmbeddingProvider, FakeEmbeddingProvider>();
-                services.AddSingleton<IChatProvider>(_chatProvider);
-            });
+            services => services.AddSingleton<ICopilotCloudGatewayClient>(_cloud));
         await _app.StartAsync();
 
         var addresses = _app.Services.GetRequiredService<IServer>()
             .Features.Get<IServerAddressesFeature>()
             ?? throw new InvalidOperationException("Kestrel 未暴露监听地址。");
         _baseUrl = addresses.Addresses.First();
-
-        await _app.Services.GetRequiredService<DocsIngestor>()
-            .IngestAsync([_docsRoot], force: true, dryRun: false);
-        await _app.Services.GetRequiredService<SkillRegistry>()
-            .IngestAsync(_skillsRoot, force: true, dryRun: false);
 
         using var admin = CreateClient(AdminToken);
         await CreateDatabaseAsync(admin, DatabaseName);
@@ -118,14 +70,45 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
             await _app.DisposeAsync();
         }
 
-        DeleteDirectory(_skillsRoot);
-        DeleteDirectory(_docsRoot);
         DeleteDirectory(_dataRoot);
     }
 
     [Fact]
-    public async Task CopilotChat_WithoutGrant_ReturnsForbidden()
+    public async Task CopilotChat_WhenCloudNotBound_ReturnsCloudNotBound()
     {
+        SaveCloudConfig(accessToken: string.Empty);
+        using var client = CreateClient(AdminToken);
+
+        var response = await client.PostAsync(
+            "/v1/copilot/chat",
+            JsonContent.Create(new CopilotChatRequest(DatabaseName, "cpu 表有哪些字段？"), ServerJsonContext.Default.CopilotChatRequest));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("cloud_not_bound", body, StringComparison.Ordinal);
+        Assert.Empty(_cloud!.ChatRequests);
+    }
+
+    [Fact]
+    public async Task CopilotChat_WhenCloudTokenExpired_ReturnsCloudTokenExpired()
+    {
+        SaveCloudConfig(expiresAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1));
+        using var client = CreateClient(AdminToken);
+
+        var response = await client.PostAsync(
+            "/v1/copilot/chat",
+            JsonContent.Create(new CopilotChatRequest(DatabaseName, "cpu 表有哪些字段？"), ServerJsonContext.Default.CopilotChatRequest));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("cloud_token_expired", body, StringComparison.Ordinal);
+        Assert.Empty(_cloud!.ChatRequests);
+    }
+
+    [Fact]
+    public async Task CopilotChat_WithoutDatabaseGrant_ReturnsForbiddenBeforeCloudCall()
+    {
+        SaveCloudConfig();
         using var admin = CreateClient(AdminToken);
         await ExecuteSqlAsync(admin, "CREATE USER nogrant WITH PASSWORD 'p'");
         var token = await LoginAsync("nogrant", "p");
@@ -133,354 +116,150 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
         using var client = CreateClient(token);
         var response = await client.PostAsync(
             "/v1/copilot/chat",
-            JsonContent.Create(
-                new CopilotChatRequest(DatabaseName, "cpu 表有哪些字段？"),
-                ServerJsonContext.Default.CopilotChatRequest));
+            JsonContent.Create(new CopilotChatRequest(DatabaseName, "cpu 表有哪些字段？"), ServerJsonContext.Default.CopilotChatRequest));
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("forbidden", body);
-        Assert.Contains(DatabaseName, body);
+        Assert.Contains("forbidden", body, StringComparison.Ordinal);
+        Assert.Empty(_cloud!.ChatRequests);
     }
 
     [Fact]
-    public async Task CopilotChat_WithoutDbAndWithoutProvisionIntent_ReturnsBadRequest()
+    public async Task CopilotChat_WithCloudFinal_ReturnsNdjsonAndForwardsContext()
     {
-        using var client = CreateClient(AdminToken);
-        var response = await client.PostAsync(
+        SaveCloudConfig();
+        _cloud!.EnqueueChat(
+            CloudEvent("start", message: "cloud-start"),
+            CloudEvent("retrieval", message: "cloud-retrieval", skills: ["schema-design"]),
+            CloudEvent("final", answer: "cpu measurement 包含 host、usage 和 temp。"),
+            CloudEvent("done", message: "completed"));
+
+        using var client = await CreateReaderClientAsync("reader_ndjson");
+        using var response = await client.PostAsync(
             "/v1/copilot/chat",
             JsonContent.Create(
                 new CopilotChatRequest(
-                    Db: null,
-                    Messages:
-                    [
-                        new AiMessage("user", "cpu 表有哪些字段？"),
-                    ]),
+                    DatabaseName,
+                    Messages: [new AiMessage("user", "cpu 表有哪些字段？")],
+                    Mode: "read-only",
+                    CloudMode: "sql_assist",
+                    ConversationId: "session-1"),
                 ServerJsonContext.Default.CopilotChatRequest));
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        using var json = JsonDocument.Parse(body);
-        Assert.Equal("bad_request", json.RootElement.GetProperty("error").GetString());
-        Assert.StartsWith("请求体需包含 db", json.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task CopilotChat_WithReadGrant_ReturnsNdjsonEvents()
-    {
-        _chatProvider!.Reset();
-        using var client = await CreateReaderClientAsync("reader_ndjson");
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
-        {
-            Content = JsonContent.Create(
-                new CopilotChatRequest(DatabaseName, "cpu 表有哪些字段？", DocsK: 3, SkillsK: 2),
-                ServerJsonContext.Default.CopilotChatRequest),
-        };
-
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/x-ndjson", response.Content.Headers.ContentType?.MediaType);
 
         var events = await ReadNdjsonEventsAsync(response);
+        Assert.Equal(["start", "retrieval", "final", "done"], events.Select(static evt => evt.Type));
+        Assert.Equal(["schema-design"], events.Single(static evt => evt.Type == "retrieval").SkillNames);
+        Assert.Contains("usage", events.Single(static evt => evt.Type == "final").Answer ?? string.Empty, StringComparison.Ordinal);
 
-        Assert.Equal(["start", "retrieval", "tool_call", "tool_result", "final", "done"], events.Select(static e => e.Type));
-
-        var retrieval = Assert.Single(events, static e => e.Type == "retrieval");
-        Assert.Contains("schema-design", retrieval.SkillNames ?? []);
-        Assert.NotNull(retrieval.Citations);
-
-        var final = Assert.Single(events, static e => e.Type == "final");
-        Assert.Contains("cpu", final.Answer ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.True(final.Citations?.Count >= 3);
+        var cloudRequest = Assert.Single(_cloud.ChatRequests);
+        Assert.Equal("session-1", cloudRequest.ConversationId);
+        Assert.Equal("sql_assist", cloudRequest.Mode);
+        Assert.Equal(DatabaseName, cloudRequest.Database?.Name);
+        Assert.Contains("tool:query_sql", cloudRequest.Client.Capabilities);
+        var measurement = Assert.Single(cloudRequest.Context.Measurements ?? []);
+        Assert.Equal("cpu", measurement.Name);
+        Assert.Contains(measurement.Fields ?? [], field => field.Name == "usage");
     }
 
     [Fact]
-    public async Task CopilotChatStream_WithReadGrant_ReturnsSseEvents()
+    public async Task CopilotChatStream_WhenCloudNeedsToolResult_ExecutesLocalToolAndContinues()
     {
-        _chatProvider!.Reset();
-        using var client = await CreateReaderClientAsync("reader_sse");
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat/stream")
-        {
-            Content = JsonContent.Create(
-                new CopilotChatRequest(DatabaseName, "cpu 表有哪些字段？", DocsK: 3, SkillsK: 2),
-                ServerJsonContext.Default.CopilotChatRequest),
-        };
+        SaveCloudConfig();
+        _cloud!.EnqueueChat(
+            ToolRequiredEvent(
+                "describe_measurement",
+                """{"measurement":"cpu"}""",
+                requestId: "req-1",
+                toolCallId: "tool-1"),
+            CloudEvent("done", message: "waiting for tool result"));
+        _cloud.EnqueueChat(
+            CloudEvent("final", answer: "本地 schema 显示 cpu 有 host、usage、temp。"),
+            CloudEvent("done", message: "completed"));
 
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        using var client = await CreateReaderClientAsync("reader_tool");
+        using var response = await client.PostAsync(
+            "/v1/copilot/chat/stream",
+            JsonContent.Create(
+                new CopilotChatRequest(DatabaseName, "描述 cpu", ConversationId: "session-tool"),
+                ServerJsonContext.Default.CopilotChatRequest));
+
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
 
-        using var stream = await response.Content.ReadAsStreamAsync();
-        using var reader = new StreamReader(stream);
-        var events = new List<CopilotChatEvent>();
-
-        while (await reader.ReadLineAsync() is { } line)
-        {
-            if (!line.StartsWith("data: ", StringComparison.Ordinal))
-                continue;
-
-            var data = line["data: ".Length..];
-            if (data == "[DONE]")
-                break;
-            if (data.Length == 0)
-                continue;
-
-            var evt = JsonSerializer.Deserialize(data, ServerJsonContext.Default.CopilotChatEvent);
-            Assert.NotNull(evt);
-            events.Add(evt!);
-        }
-
-        Assert.Contains(events, static e => e.Type == "tool_result");
-        var final = Assert.Single(events, static e => e.Type == "final");
-        Assert.Contains("host", final.Answer ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.True(final.Citations?.Count >= 3);
+        var events = await ReadSseEventsAsync(response);
+        Assert.Contains(events, static evt => evt.Type == "tool_call" && evt.ToolName == "describe_measurement");
+        var toolResult = Assert.Single(events, static evt => evt.Type == "tool_result");
+        Assert.Contains("usage", toolResult.ToolResult ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("temp", events.Single(static evt => evt.Type == "final").Answer ?? string.Empty, StringComparison.Ordinal);
         Assert.Equal("done", events[^1].Type);
+
+        var submitted = Assert.Single(_cloud.ToolResults);
+        Assert.Equal("session-tool", submitted.ConversationId);
+        Assert.Equal("req-1", submitted.RequestId);
+        Assert.Equal("tool-1", submitted.ToolCallId);
+        Assert.True(submitted.Result?.Ok);
+        Assert.Equal(2, _cloud.ChatRequests.Count);
     }
 
     [Fact]
-    public async Task CopilotChat_WithMessagesHistory_TrimsOldContextAndKeepsRecentTurns()
+    public async Task CopilotChat_WhenCloudToolRequiresConfirmation_RejectsWithoutExecuting()
     {
-        _chatProvider!.Reset();
-        _chatProvider.PlannerHandler = static _ => """{"tools":[]}""";
-        _chatProvider.AnswerHandler = static _ => "我已经结合最近上下文总结完成。[C1]";
-
-        const string oldMarker = "OLDCTX_MARKER_12345";
-        using var client = await CreateReaderClientAsync("reader_history");
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
-        {
-            Content = JsonContent.Create(
-                new CopilotChatRequest(
-                    DatabaseName,
-                    Messages:
-                    [
-                        new AiMessage("user", string.Concat(Enumerable.Repeat(oldMarker, 900))),
-                        new AiMessage("assistant", "这一段旧回答也应该被裁掉。"),
-                        new AiMessage("user", "上一次你告诉我 cpu measurement 里有 host 和 usage。"),
-                        new AiMessage("assistant", "对，cpu 里有 host(tag)、usage(float64) 和 temp(int64)。"),
-                        new AiMessage("user", "那请基于刚才的上下文，再帮我总结一下字段。"),
-                    ]),
-                ServerJsonContext.Default.CopilotChatRequest),
-        };
-
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var events = await ReadNdjsonEventsAsync(response);
-
-        var start = Assert.Single(events, static e => e.Type == "start");
-        Assert.Contains("裁剪", start.Message ?? string.Empty, StringComparison.Ordinal);
-
-        var answerPrompt = _chatProvider.Calls
-            .Select(static call => call[1].Content)
-            .Last(static prompt => prompt.Contains("当前用户问题：", StringComparison.Ordinal));
-        Assert.DoesNotContain(oldMarker, answerPrompt, StringComparison.Ordinal);
-        Assert.Contains("cpu 里有 host(tag)、usage(float64) 和 temp(int64)。", answerPrompt, StringComparison.Ordinal);
-        Assert.Contains("那请基于刚才的上下文，再帮我总结一下字段。", answerPrompt, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task CopilotChat_WhenQuerySqlFails_RetriesWithRewrittenSql()
-    {
-        _chatProvider!.Reset();
-        _chatProvider.PlannerHandler = static _ => """{"tools":[{"name":"query_sql","sql":"SELECT * FROM missing_cpu"}]}""";
-        _chatProvider.RepairHandler = messages =>
-        {
-            Assert.Contains("SELECT * FROM missing_cpu", messages[1].Content, StringComparison.Ordinal);
-            Assert.Contains("missing_cpu", messages[1].Content, StringComparison.Ordinal);
-            return "SELECT * FROM cpu LIMIT 2";
-        };
-        _chatProvider.AnswerHandler = static _ => "我已经根据执行错误改写 SQL，并完成查询。[C1][C2]";
-
-        using var client = await CreateReaderClientAsync("reader_retry");
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
-        {
-            Content = JsonContent.Create(
-                new CopilotChatRequest(
-                    DatabaseName,
-                    Messages:
-                    [
-                        new AiMessage("user", "帮我查询 cpu 最近两条记录。"),
-                    ]),
-                ServerJsonContext.Default.CopilotChatRequest),
-        };
-
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var events = await ReadNdjsonEventsAsync(response);
-
-        var retry = Assert.Single(events, static e => e.Type == "tool_retry");
-        Assert.Equal(1, retry.Attempt);
-        Assert.Contains("SELECT * FROM cpu LIMIT 2", retry.ToolArguments ?? string.Empty, StringComparison.Ordinal);
-
-        var toolResult = Assert.Single(events, static e => e.Type == "tool_result");
-        Assert.Contains("SELECT * FROM cpu LIMIT 2", toolResult.ToolArguments ?? string.Empty, StringComparison.Ordinal);
-
-        var final = Assert.Single(events, static e => e.Type == "final");
-        Assert.Contains("改写 SQL", final.Answer ?? string.Empty, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task CopilotChat_WhenCreateMeasurementAnswerFails_ReturnsDeterministicSql()
-    {
-        _chatProvider!.Reset();
-        _chatProvider.PlannerHandler = static _ => """{"tools":[{"name":"list_measurements"}]}""";
-        _chatProvider.AnswerHandler = static _ => throw new InvalidOperationException("answer unavailable");
-
-        using var client = await CreateReaderClientAsync("reader_create_fallback");
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
-        {
-            Content = JsonContent.Create(
-                new CopilotChatRequest(
-                    DatabaseName,
-                    Messages:
-                    [
-                        new AiMessage("user", "帮我写一个sql语句，建一个温度和湿度监测的表。"),
-                    ]),
-                ServerJsonContext.Default.CopilotChatRequest),
-        };
-
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var events = await ReadNdjsonEventsAsync(response);
-
-        Assert.Contains(events, static e => e.Type == "tool_call" && e.ToolName == "draft_sql");
-        var draftResult = Assert.Single(events, static e => e.Type == "tool_result" && e.ToolName == "draft_sql");
-        Assert.Contains("CREATE MEASUREMENT sensor_temperature", draftResult.ToolResult ?? string.Empty, StringComparison.Ordinal);
-
-        var final = Assert.Single(events, static e => e.Type == "final");
-        Assert.Contains("CREATE MEASUREMENT sensor_temperature", final.Answer ?? string.Empty, StringComparison.Ordinal);
-        Assert.Contains("temperature FIELD FLOAT", final.Answer ?? string.Empty, StringComparison.Ordinal);
-        Assert.Contains("humidity FIELD FLOAT", final.Answer ?? string.Empty, StringComparison.Ordinal);
-        Assert.DoesNotContain("请结合返回的结构化结果继续确认或缩小问题范围", final.Answer ?? string.Empty, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task CopilotChat_ProvisioningWithoutDb_ReadOnly_ReturnsCreateDatabaseAndMeasurementSql()
-    {
-        _chatProvider!.Reset();
-        _chatProvider.AnswerHandler = static _ => throw new InvalidOperationException("answer unavailable");
+        SaveCloudConfig();
+        _cloud!.EnqueueChat(
+            ToolRequiredEvent(
+                "execute_sql",
+                """{"sql":"CREATE MEASUREMENT danger (value FIELD FLOAT)"}""",
+                requiresConfirmation: true,
+                requestId: "req-danger",
+                toolCallId: "tool-danger"),
+            CloudEvent("done", message: "waiting for confirmation"));
+        _cloud.EnqueueChat(
+            CloudEvent("final", answer: "该写入需要本地确认，已阻止自动执行。"),
+            CloudEvent("done", message: "completed"));
 
         using var client = CreateClient(AdminToken);
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
-        {
-            Content = JsonContent.Create(
-                new CopilotChatRequest(
-                    Db: null,
-                    Messages:
-                    [
-                        new AiMessage("user", "帮我新建一个仓库 perfmetrics_draft，用来保存电脑性能数据，把 cpu 内存 的使用率以及 cpu 的温度建成表。"),
-                    ]),
-                ServerJsonContext.Default.CopilotChatRequest),
-        };
+        using var response = await client.PostAsync(
+            "/v1/copilot/chat",
+            JsonContent.Create(
+                new CopilotChatRequest(DatabaseName, "创建 danger 表", Mode: "read-write", ConversationId: "session-danger"),
+                ServerJsonContext.Default.CopilotChatRequest));
 
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var events = await ReadNdjsonEventsAsync(response);
+        var toolResult = Assert.Single(events, static evt => evt.Type == "tool_result");
+        Assert.Contains("client_confirmation_required", toolResult.ToolResult ?? string.Empty, StringComparison.Ordinal);
 
-        Assert.Equal(2, events.Count(static e => e.Type == "tool_call" && e.ToolName == "draft_sql"));
-        Assert.DoesNotContain(events, static e => e.ToolName == "execute_sql");
+        var submitted = Assert.Single(_cloud!.ToolResults);
+        Assert.False(submitted.Result?.Ok);
+        Assert.True(submitted.Result?.Rejected);
+        Assert.Equal("client_confirmation_required", submitted.Result?.ErrorCode);
 
-        var final = Assert.Single(events, static e => e.Type == "final");
-        Assert.Contains("CREATE DATABASE perfmetrics_draft", final.Answer ?? string.Empty, StringComparison.Ordinal);
-        Assert.Contains("CREATE MEASUREMENT host_perf", final.Answer ?? string.Empty, StringComparison.Ordinal);
-        Assert.Contains("cpu_usage FIELD FLOAT", final.Answer ?? string.Empty, StringComparison.Ordinal);
-        Assert.Contains("memory_usage FIELD FLOAT", final.Answer ?? string.Empty, StringComparison.Ordinal);
-        Assert.Contains("cpu_temp_celsius FIELD FLOAT", final.Answer ?? string.Empty, StringComparison.Ordinal);
+        var showMeasurementsBody = await ExecuteSqlBodyAsync(client, DatabaseName, "SHOW MEASUREMENTS");
+        Assert.DoesNotContain("danger", showMeasurementsBody, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public async Task CopilotChat_ProvisioningWithoutDb_ReadWriteAdmin_ExecutesCreateDatabaseAndMeasurement()
+    private void SaveCloudConfig(
+        string accessToken = "cloud-access-token",
+        DateTimeOffset? expiresAtUtc = null)
     {
-        _chatProvider!.Reset();
-        _chatProvider.AnswerHandler = static _ => throw new InvalidOperationException("answer unavailable");
-
-        using var client = CreateClient(AdminToken);
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
+        var store = _app!.Services.GetRequiredService<AiConfigStore>();
+        store.Save(new AiOptions
         {
-            Content = JsonContent.Create(
-                new CopilotChatRequest(
-                    Db: null,
-                    Messages:
-                    [
-                        new AiMessage("user", "帮我新建一个仓库 perfmetrics_exec，用来保存电脑性能数据，把 cpu 内存 的使用率以及 cpu 的温度建成表。"),
-                    ],
-                    Mode: "read-write"),
-                ServerJsonContext.Default.CopilotChatRequest),
-        };
-
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var events = await ReadNdjsonEventsAsync(response);
-
-        Assert.Equal(2, events.Count(static e => e.Type == "tool_call" && e.ToolName == "execute_sql"));
-
-        var showMeasurementsBody = await ExecuteSqlBodyAsync(client, "perfmetrics_exec", "SHOW MEASUREMENTS");
-        Assert.Contains("host_perf", showMeasurementsBody, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task CopilotChat_WhenPlannerFallsBackForCurrentDatabaseOverview_UsesShowMeasurements()
-    {
-        _chatProvider!.Reset();
-        _chatProvider.PlannerHandler = static _ => "planner unavailable";
-        _chatProvider.AnswerHandler = static _ => throw new InvalidOperationException("answer unavailable");
-
-        using var client = await CreateReaderClientAsync("reader_db_overview");
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
-        {
-            Content = JsonContent.Create(
-                new CopilotChatRequest(
-                    DatabaseName,
-                    Messages:
-                    [
-                        new AiMessage("user", "查一查 当前这个数据库里有什么"),
-                    ]),
-                ServerJsonContext.Default.CopilotChatRequest),
-        };
-
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var events = await ReadNdjsonEventsAsync(response);
-
-        var toolCall = Assert.Single(events, static e => e.Type == "tool_call");
-        Assert.Equal("query_sql", toolCall.ToolName);
-        Assert.Contains("SHOW MEASUREMENTS", toolCall.ToolArguments ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-
-        var final = Assert.Single(events, static e => e.Type == "final");
-        Assert.Contains("SHOW MEASUREMENTS", final.Answer ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("cpu", final.Answer ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("我已经执行了这些工具", final.Answer ?? string.Empty, StringComparison.Ordinal);
-        Assert.DoesNotContain("请结合返回的结构化结果继续确认或缩小问题范围", final.Answer ?? string.Empty, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task CopilotChat_WhenOnlyListMeasurementsIsAvailable_StillSummarizesMeasurements()
-    {
-        _chatProvider!.Reset();
-        _chatProvider.PlannerHandler = static _ => """{"tools":[{"name":"list_measurements"}]}""";
-        _chatProvider.AnswerHandler = static _ => throw new InvalidOperationException("answer unavailable");
-
-        using var client = await CreateReaderClientAsync("reader_list_measurements_fallback");
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/copilot/chat")
-        {
-            Content = JsonContent.Create(
-                new CopilotChatRequest(
-                    DatabaseName,
-                    Messages:
-                    [
-                        new AiMessage("user", "看看这个库里有什么"),
-                    ]),
-                ServerJsonContext.Default.CopilotChatRequest),
-        };
-
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var events = await ReadNdjsonEventsAsync(response);
-
-        var final = Assert.Single(events, static e => e.Type == "final");
-        Assert.Contains("measurement", final.Answer ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("cpu", final.Answer ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("我已经执行了这些工具", final.Answer ?? string.Empty, StringComparison.Ordinal);
-        Assert.DoesNotContain("请结合返回的结构化结果继续确认或缩小问题范围", final.Answer ?? string.Empty, StringComparison.Ordinal);
+            Enabled = true,
+            GatewayBaseUrl = "https://ai.sonnetdb.com",
+            PlatformApiBaseUrl = "https://api.sonnetdb.com",
+            CloudAccessToken = accessToken,
+            CloudRefreshToken = "cloud-refresh-token",
+            CloudTokenType = "Bearer",
+            CloudAccessTokenExpiresAtUtc = expiresAtUtc ?? DateTimeOffset.UtcNow.AddHours(1),
+            CloudScope = "ai.invoke",
+            CloudBoundAtUtc = DateTimeOffset.UtcNow,
+            TimeoutSeconds = 60,
+        });
+        _cloud!.Reset();
     }
 
     private async Task<HttpClient> CreateReaderClientAsync(string userName)
@@ -517,10 +296,8 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
     private async Task ExecuteSqlAsync(HttpClient client, string sql)
         => await ExecuteSqlAsync(client, DatabaseName, sql);
 
-    private async Task ExecuteSqlAsync(HttpClient client, string databaseName, string sql)
-    {
-        await ExecuteSqlBodyAsync(client, databaseName, sql);
-    }
+    private static async Task ExecuteSqlAsync(HttpClient client, string databaseName, string sql)
+        => await ExecuteSqlBodyAsync(client, databaseName, sql);
 
     private static async Task<string> ExecuteSqlBodyAsync(HttpClient client, string databaseName, string sql)
     {
@@ -539,6 +316,44 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
             JsonContent.Create(new CreateDatabaseRequest(databaseName), ServerJsonContext.Default.CreateDatabaseRequest));
         var body = await response.Content.ReadAsStringAsync();
         Assert.True(response.IsSuccessStatusCode, $"创建数据库失败：{(int)response.StatusCode} {body}");
+    }
+
+    private static CopilotCloudRuntimeEvent CloudEvent(
+        string type,
+        string? message = null,
+        string? answer = null,
+        IReadOnlyCollection<string>? skills = null)
+        => new(
+            Type: type,
+            RequestId: "req-" + type,
+            ConversationId: "session-1",
+            Message: message,
+            Answer: answer,
+            Skills: skills);
+
+    private static CopilotCloudRuntimeEvent ToolRequiredEvent(
+        string name,
+        string argumentsJson,
+        bool requiresConfirmation = false,
+        string requestId = "req-tool",
+        string toolCallId = "tool-call")
+        => new(
+            Type: "tool_result_required",
+            RequestId: requestId,
+            ConversationId: "session-tool",
+            Tool: new CopilotCloudToolCallEvent(
+                toolCallId,
+                name,
+                ParseJson(argumentsJson),
+                requiresConfirmation,
+                TimeoutSeconds: 30,
+                MaxRows: 100,
+                ExpiresAt: DateTimeOffset.UtcNow.AddMinutes(5)));
+
+    private static JsonElement ParseJson(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
     }
 
     private static string CreateTempDirectory(string prefix)
@@ -580,62 +395,78 @@ public sealed class CopilotChatEndpointTests : IAsyncLifetime
         return events;
     }
 
-    private sealed class FakeEmbeddingProvider : IEmbeddingProvider
+    private static async Task<List<CopilotChatEvent>> ReadSseEventsAsync(HttpResponseMessage response)
     {
-        public ValueTask<float[]> EmbedAsync(string text, CancellationToken cancellationToken = default)
+        using var stream = await response.Content.ReadAsStreamAsync();
+        using var reader = new StreamReader(stream);
+        var events = new List<CopilotChatEvent>();
+        while (await reader.ReadLineAsync() is { } line)
         {
-            var embedding = new float[DocsIngestor.ExpectedEmbeddingDimensions];
-            embedding[0] = 1.0f;
-            embedding[1] = text.Length;
-            embedding[2] = text.Contains("cpu", StringComparison.OrdinalIgnoreCase) ? 2.0f : 0.5f;
-            return ValueTask.FromResult(embedding);
+            if (!line.StartsWith("data: ", StringComparison.Ordinal))
+                continue;
+
+            var data = line["data: ".Length..];
+            if (data == "[DONE]")
+                break;
+            if (data.Length == 0)
+                continue;
+
+            var evt = JsonSerializer.Deserialize(data, ServerJsonContext.Default.CopilotChatEvent);
+            Assert.NotNull(evt);
+            events.Add(evt!);
         }
+
+        return events;
     }
 
-    private sealed class FakeChatProvider : IChatProvider
+    private sealed class FakeCloudGatewayClient : ICopilotCloudGatewayClient
     {
-        public Func<IReadOnlyList<AiMessage>, string>? PlannerHandler { get; set; }
+        private readonly Queue<IReadOnlyList<CopilotCloudRuntimeEvent>> _responses = new();
 
-        public Func<IReadOnlyList<AiMessage>, string>? RepairHandler { get; set; }
+        public List<CopilotCloudChatRequest> ChatRequests { get; } = [];
 
-        public Func<IReadOnlyList<AiMessage>, string>? AnswerHandler { get; set; }
-
-        public List<IReadOnlyList<AiMessage>> Calls { get; } = [];
+        public List<CopilotCloudToolResultRequest> ToolResults { get; } = [];
 
         public void Reset()
         {
-            PlannerHandler = null;
-            RepairHandler = null;
-            AnswerHandler = null;
-            Calls.Clear();
+            _responses.Clear();
+            ChatRequests.Clear();
+            ToolResults.Clear();
         }
 
-        public ValueTask<string> CompleteAsync(
-            IReadOnlyList<AiMessage> messages,
-            string? modelOverride = null,
-            CancellationToken cancellationToken = default)
+        public void EnqueueChat(params CopilotCloudRuntimeEvent[] events)
+            => _responses.Enqueue(events);
+
+        public Task<CopilotCloudChatResponse> ChatAsync(
+            AiOptions options,
+            CopilotCloudChatRequest request,
+            CancellationToken cancellationToken)
         {
-            Calls.Add(messages.ToArray());
-            var system = messages[0].Content;
-            if (system.Contains("工具规划器", StringComparison.Ordinal))
-            {
-                return ValueTask.FromResult(
-                    PlannerHandler?.Invoke(messages)
-                    ?? """
-                       {"tools":[{"name":"describe_measurement","measurement":"cpu"}]}
-                       """);
-            }
+            ChatRequests.Add(request);
+            var events = _responses.Count > 0
+                ? _responses.Dequeue()
+                : [CloudEvent("final", answer: "默认云端回答。"), CloudEvent("done", message: "completed")];
+            return Task.FromResult(new CopilotCloudChatResponse(StatusCodes.Status200OK, "req-chat", events));
+        }
 
-            if (system.Contains("SQL 纠错器", StringComparison.Ordinal))
-            {
-                return ValueTask.FromResult(
-                    RepairHandler?.Invoke(messages)
-                    ?? "SELECT * FROM cpu LIMIT 5");
-            }
-
-            return ValueTask.FromResult(
-                AnswerHandler?.Invoke(messages)
-                ?? "cpu measurement 包含 host(tag)、usage(float64) 和 temp(int64)。[C1][C2][C3]");
+        public Task<CopilotCloudToolResultResponse> SubmitToolResultAsync(
+            AiOptions options,
+            CopilotCloudToolResultRequest request,
+            CancellationToken cancellationToken)
+        {
+            ToolResults.Add(request);
+            return Task.FromResult(new CopilotCloudToolResultResponse(
+                "tool_result",
+                request.RequestId ?? "req-tool",
+                request.ConversationId,
+                request.ToolCallId ?? "tool-call",
+                "local_tool",
+                request.Result?.Ok == true ? "accepted" : "rejected",
+                new CopilotCloudToolResultEvent(
+                    request.ToolCallId ?? "tool-call",
+                    "local_tool",
+                    request.Result?.Ok == true,
+                    request.Result?.Content ?? ParseJson("{}"))));
         }
     }
 }

@@ -37,9 +37,10 @@ public sealed class CopilotOptions
 public sealed class CopilotSkillsOptions
 {
     /// <summary>
-    /// 服务端启动后是否自动执行一次后台技能库增量摄入。默认 <c>true</c>。
+    /// 服务端启动后是否自动执行一次后台技能库增量摄入。默认 <c>false</c>；
+    /// 在线 Copilot 的知识与技能由 ai.sonnetdb.com 云端维护。
     /// </summary>
-    public bool AutoIngestOnStartup { get; set; } = true;
+    public bool AutoIngestOnStartup { get; set; } = false;
 
     /// <summary>
     /// 技能根目录。默认 <c>./copilot/skills</c>。
@@ -126,9 +127,10 @@ public sealed class CopilotChatOptions
 public sealed class CopilotDocsOptions
 {
     /// <summary>
-    /// 服务端启动后是否自动执行一次后台增量摄入。默认 <c>true</c>。
+    /// 服务端启动后是否自动执行一次后台增量摄入。默认 <c>false</c>；
+    /// 在线 Copilot 不再依赖本地知识库作为兜底。
     /// </summary>
-    public bool AutoIngestOnStartup { get; set; } = true;
+    public bool AutoIngestOnStartup { get; set; } = false;
 
     /// <summary>
     /// 文档根目录列表。默认优先扫描仓库源码文档 <c>./docs</c>，其次兼容 <c>./web/help</c> 与运行时生成目录。

@@ -4,18 +4,6 @@ export interface CopilotMessage {
   citations?: CopilotCitation[];
 }
 
-export interface CopilotKnowledgeStatus {
-  enabled: boolean;
-  embeddingProvider: string;
-  embeddingFallback: boolean;
-  vectorDimension: number;
-  docsRoots: string[];
-  indexedFiles: number;
-  indexedChunks: number;
-  lastIngestedUtc: string | null;
-  skillCount: number;
-}
-
 interface ParsedErrorResponse {
   code: string;
   message: string;
@@ -27,12 +15,12 @@ const CopilotReadinessHints: Record<string, string> = {
   'chat.api_key_missing': 'Copilot 还没有 Cloud Token。请在「Copilot 设置」绑定 sonnetdb.com 账号后再试。',
   'chat.model_missing': '平台默认模型暂不可用，请在「Copilot 设置」刷新平台模型后稍后再试。',
   'chat.provider_unsupported': '当前 Copilot Chat provider 暂不支持，请使用 sonnetdb.com 官方 AI Gateway。',
-  'embedding.endpoint_invalid': 'Copilot 知识库向量服务地址未配置或格式不正确。可改用 builtin embedding，或在「Copilot 设置」补齐 OpenAI 兼容 embedding 配置。',
-  'embedding.api_key_missing': 'Copilot 知识库向量服务缺少 API Key。请补齐 embedding API Key，或改用 builtin embedding。',
-  'embedding.model_missing': 'Copilot 知识库向量模型未配置。请填写 embedding 模型，或改用 builtin embedding。',
-  'embedding.local_model_path_missing': '本地 embedding 模型路径未配置。请配置模型路径，或改用 builtin embedding。',
-  'embedding.local_model_not_found': '本地 embedding 模型文件不存在。请检查模型路径，或改用 builtin embedding。',
-  'embedding.provider_unsupported': '当前 embedding provider 暂不支持。请改用 builtin、local 或 openai。',
+  'embedding.endpoint_invalid': '云端 Copilot 知识服务暂不可用，请稍后重试。',
+  'embedding.api_key_missing': '云端 Copilot 知识服务暂不可用，请稍后重试。',
+  'embedding.model_missing': '云端 Copilot 知识服务暂不可用，请稍后重试。',
+  'embedding.local_model_path_missing': '云端 Copilot 知识服务暂不可用，请稍后重试。',
+  'embedding.local_model_not_found': '云端 Copilot 知识服务暂不可用，请稍后重试。',
+  'embedding.provider_unsupported': '云端 Copilot 知识服务暂不可用，请稍后重试。',
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -85,7 +73,7 @@ function extractReadinessReason(message: string): string {
 
 function formatReadinessError(reason: string): string {
   return CopilotReadinessHints[reason]
-    ?? 'Copilot 还没准备好，请检查「Copilot 设置」中的 sonnetdb.com 账号绑定和知识库配置。';
+    ?? 'Copilot 还没准备好，请检查「Copilot 设置」中的 sonnetdb.com 账号绑定状态。';
 }
 
 function formatProviderStatusError(status: number, providerMessage: string): string {
@@ -175,32 +163,6 @@ async function readCopilotHttpError(resp: Response, action: string): Promise<str
   return `${action}失败（HTTP ${resp.status}）。请稍后重试。`;
 }
 
-/** 读取知识库状态（embedding provider / 已索引文件数 / 最近摄入时间 等）。 */
-export async function fetchCopilotKnowledgeStatus(token: string): Promise<CopilotKnowledgeStatus> {
-  const resp = await fetch('/v1/copilot/knowledge/status', {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!resp.ok) {
-    throw new Error(await readCopilotHttpError(resp, '读取知识库状态'));
-  }
-  return (await resp.json()) as CopilotKnowledgeStatus;
-}
-
-/** 触发知识库重新索引（force=true 时忽略增量指纹强制全量摄入）。 */
-export async function triggerCopilotDocsIngest(token: string, force = false): Promise<void> {
-  const resp = await fetch('/v1/copilot/docs/ingest', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ force, dryRun: false }),
-  });
-  if (!resp.ok) {
-    throw new Error(await readCopilotHttpError(resp, '触发知识库索引'));
-  }
-}
-
 export interface CopilotCitation {
   id: string;
   kind: string;
@@ -225,11 +187,11 @@ export interface CopilotChatEvent {
 export interface CopilotChatRequest {
   db?: string;
   messages: CopilotMessage[];
-  docsK?: number;
-  skillsK?: number;
+  conversationId?: string;
+  cloudMode?: 'sql_assist' | 'sql_analyze' | 'db_maintenance' | 'knowledge_qa';
   /**
    * M7：权限模式。
-   * - `read-only`（默认）：服务端将 `canWrite` 强制置为 false，agent 不会调用 execute_sql 写入。
+   * - `read-only`（默认）：服务端不会自动执行需要写入确认的本地工具。
    * - `read-write`：在凭据本身具备写权限的前提下允许 execute_sql 写入。
    */
   mode?: 'read-only' | 'read-write';

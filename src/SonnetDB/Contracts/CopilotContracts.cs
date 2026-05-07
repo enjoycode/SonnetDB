@@ -141,13 +141,17 @@ public sealed record CopilotKnowledgeStatusResponse(
 /// <param name="DocsK">文档召回条数；为空时使用服务端默认值。</param>
 /// <param name="SkillsK">技能召回条数；为空时使用服务端默认值。</param>
 /// <param name="Mode">权限模式（M7）：<c>read-only</c>（默认，禁止写入工具调用）或 <c>read-write</c>（允许，但仍受凭据本身权限上限约束）。</param>
+/// <param name="CloudMode">云端 Copilot Runtime 模式；为空时服务端按用户意图推断。</param>
+/// <param name="ConversationId">前端会话 ID，用于云端关联同一轮工具结果和审计。</param>
 public sealed record CopilotChatRequest(
     string? Db,
     string? Message = null,
     List<AiMessage>? Messages = null,
     int? DocsK = null,
     int? SkillsK = null,
-    string? Mode = null);
+    string? Mode = null,
+    string? CloudMode = null,
+    string? ConversationId = null);
 
 /// <summary>
 /// Copilot 回答中附带的一条 citation（PR #67）。

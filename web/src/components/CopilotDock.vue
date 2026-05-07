@@ -61,43 +61,6 @@
             </ul>
           </div>
         </n-popover>
-        <n-popover trigger="click" placement="bottom-end" :width="320" :show-arrow="false" :to="dockEl ?? 'body'">
-          <template #trigger>
-            <n-button text size="tiny" title="Copilot 选项">选项</n-button>
-          </template>
-          <div class="copilot-dock__options" @mousedown.stop>
-            <div class="copilot-dock__options-block">
-              <div class="copilot-dock__options-head">
-                <n-text strong style="font-size: 12px">知识库</n-text>
-                <n-space size="small">
-                  <n-button size="tiny" quaternary @click="reloadStatus">刷新</n-button>
-                  <n-button
-                    v-if="auth.isSuperuser"
-                    size="tiny"
-                    quaternary
-                    :loading="reindexing"
-                    @click="onReindex"
-                  >重建</n-button>
-                </n-space>
-              </div>
-              <template v-if="status">
-                <div class="copilot-dock__options-row">
-                  <span>{{ status.embeddingProvider }}{{ status.embeddingFallback ? ' (降级)' : '' }}</span>
-                  <span>{{ status.vectorDimension }}D</span>
-                </div>
-                <div class="copilot-dock__options-row">
-                  <span>{{ status.indexedFiles }} 文档</span>
-                  <span>{{ status.indexedChunks }} 块</span>
-                  <span>{{ status.skillCount }} 技能</span>
-                </div>
-                <div class="copilot-dock__options-muted">
-                  最近摄入：{{ status.lastIngestedUtc ? formatTime(status.lastIngestedUtc) : '从未' }}
-                </div>
-              </template>
-              <n-text v-else depth="3" style="font-size: 12px">打开后可刷新查看知识库状态。</n-text>
-            </div>
-          </div>
-        </n-popover>
         <n-button text size="tiny" @click="fullscreen = !fullscreen" :title="fullscreen ? '还原' : '全屏'">{{ fullscreen ? '⊟' : '⊕' }}</n-button>
         <n-button text size="tiny" @click="close" title="收起到角标">×</n-button>
       </n-space>
@@ -293,9 +256,6 @@ import { listDatabases } from '@/api/server';
 import { execControlPlaneSql, isValidIdentifier } from '@/api/sql';
 import {
   streamCopilotChat,
-  fetchCopilotKnowledgeStatus,
-  triggerCopilotDocsIngest,
-  type CopilotKnowledgeStatus,
   type CopilotChatEvent,
   type CopilotCitation,
   type CopilotMessage,
@@ -315,8 +275,6 @@ const dialog = useDialog();
 const visible = ref(false);
 const fullscreen = ref(false);
 const dockEl = ref<HTMLElement | null>(null);  // dock 容器引用，供 Naive UI 浮层 teleport 到 dock 内部
-const status = ref<CopilotKnowledgeStatus | null>(null);
-const reindexing = ref(false);
 
 const dbs = ref<string[]>([]);
 const selectedDb = ref<string>('');
@@ -343,6 +301,7 @@ const contextEnabled = ref(true);
 
 // === M7: 权限模式 ===
 type PermissionMode = 'read-only' | 'read-write';
+type CloudMode = 'sql_assist' | 'sql_analyze' | 'db_maintenance' | 'knowledge_qa';
 const PERM_STORAGE_KEY = 'sndb.copilot.permission.v1';
 const permissionMode = ref<PermissionMode>('read-only');
 const permConfirmVisible = ref(false);  // 内联确认条显示状态
@@ -645,14 +604,14 @@ const assistantActions = computed<AssistantAction[]>(() => {
         title: '检查配置',
         type: 'info',
         autoSend: true,
-        prompt: () => '请帮我检查 Copilot 配置是否完整，并说明 sonnetdb.com 账号绑定、平台模型和知识库索引分别影响什么。',
+        prompt: () => '请帮我检查 Copilot 云端配置是否完整，并说明 sonnetdb.com 账号绑定和平台模型分别影响什么。',
       },
       {
-        key: 'kb-explain',
-        title: '知识库说明',
+        key: 'cloud-copilot',
+        title: '云端说明',
         type: 'primary',
         autoSend: true,
-        prompt: () => '请解释 SonnetDB Copilot 本地知识库的作用，以及什么时候需要重建索引。',
+        prompt: () => '请解释 SonnetDB Copilot 云端模式的工作方式，以及本地服务会提供哪些数据库上下文和工具结果。',
       },
     ];
   }
@@ -738,31 +697,19 @@ function buildContextMessage(): CopilotMessage | null {
   } else if (ctx.routeKey === 'events') {
     lines.push('用户正在查看「事件流」页面（实时 SSE 事件）。');
   } else if (ctx.routeKey === 'ai-settings') {
-    lines.push('用户正在「Copilot 设置」页面，可能在排查 sonnetdb.com 账号绑定、平台模型或知识库索引相关问题。');
+    lines.push('用户正在「Copilot 设置」页面，可能在排查 sonnetdb.com 账号绑定或平台模型相关问题。');
   }
   return { role: 'system', content: lines.join('\n') };
 }
 
 function open(): void {
   visible.value = true;
-  if (status.value === null) {
-    void reloadStatus();
-    void reloadDbs();
-  }
+  void reloadDbs();
 }
 
 function close(): void {
   visible.value = false;
   fullscreen.value = false;
-}
-
-async function reloadStatus(): Promise<void> {
-  if (!auth.state?.token) return;
-  try {
-    status.value = await fetchCopilotKnowledgeStatus(auth.state.token);
-  } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : String(e);
-  }
 }
 
 /** 系统内置数据库，不应暴露给用户或 AI 推断使用。 */
@@ -786,20 +733,6 @@ async function reloadDbs(): Promise<void> {
     }
   } catch {
     // ignore — user 可能无 list 权限
-  }
-}
-
-async function onReindex(): Promise<void> {
-  if (!auth.state?.token) return;
-  reindexing.value = true;
-  try {
-    await triggerCopilotDocsIngest(auth.state.token, true);
-    message.success('知识库索引已触发，请稍后刷新查看');
-    await reloadStatus();
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : String(e));
-  } finally {
-    reindexing.value = false;
   }
 }
 
@@ -1168,6 +1101,31 @@ function inferProvisioningDatabaseName(message: string): string {
   return 'metrics';
 }
 
+function resolveCloudMode(message: string): CloudMode {
+  const ctx = pageContext.value;
+  const lowered = message.toLowerCase();
+
+  if (ctx?.routeKey === 'sql' && ctx.sql.trim()) {
+    return 'sql_analyze';
+  }
+
+  if (looksLikeProvisioningRequest(message)
+    || /(retention|compaction|wal|recover|recovery|grant|revoke|delete|drop|slow query|bulk|ingest|导入|回填|恢复|权限|授权|撤权|慢查询|清理|压缩|保留)/i.test(message)) {
+    return 'db_maintenance';
+  }
+
+  if (/(fix|repair|explain|analyze|optimize|修复|解释|分析|优化|报错|错误)/i.test(message)) {
+    return 'sql_analyze';
+  }
+
+  if (ctx?.routeKey === 'ai-settings'
+    || /(文档|知识|帮助|是什么|为什么|介绍|docs|help|guide)/i.test(lowered)) {
+    return 'knowledge_qa';
+  }
+
+  return 'sql_assist';
+}
+
 async function send(): Promise<void> {
   if (!prompt.value.trim() || running.value) return;
   if (!auth.state?.token) return;
@@ -1227,6 +1185,8 @@ async function send(): Promise<void> {
         ...(requestDb ? { db: requestDb } : {}),
         messages: requestMessages,
         mode: permissionMode.value,
+        conversationId: sessionId,
+        cloudMode: resolveCloudMode(userText),
       },
       ac.signal,
     )) {
@@ -1339,14 +1299,6 @@ async function scrollToBottom(): Promise<void> {
   if (el) el.scrollTop = el.scrollHeight;
 }
 
-function formatTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
-}
-
 // 拖拽
 let dragStart: { x: number; y: number; right: number; bottom: number } | null = null;
 function onDragStart(e: MouseEvent): void {
@@ -1373,7 +1325,6 @@ function onDragEnd(): void {
 // 当用户登录后，预加载状态
 watch(() => auth.isAuthenticated, (val) => {
   if (val && visible.value) {
-    void reloadStatus();
     void reloadDbs();
   }
 });

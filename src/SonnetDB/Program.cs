@@ -242,7 +242,12 @@ public static class Program
             throw new InvalidOperationException($"Unsupported copilot chat provider '{options.Provider}'.");
         });
 
+        // Copilot 云端运行时：本地仅提供上下文摘要与受权限保护的工具执行。
+        builder.Services.AddSingleton<ICopilotCloudGatewayClient, CopilotCloudGatewayClient>();
+        builder.Services.AddSingleton<CopilotLocalToolExecutor>();
+
         // PR #64：文档摄入与检索（Knowledge 库 __copilot__）
+        // 当前在线 Copilot 流程已切到 ai.sonnetdb.com，下面的本地索引服务仅保留为兼容/手动诊断能力。
         builder.Services.AddSingleton<DocsSourceScanner>();
         builder.Services.AddSingleton<DocsChunker>();
         builder.Services.AddSingleton<DocsIngestor>();
@@ -586,8 +591,9 @@ public static class Program
             serverOptions.Copilot.Embedding);
         CopilotChatEndpointHandler.Map(
             app,
-            copilotReadiness,
-            app.Services.GetRequiredService<CopilotAgent>(),
+            aiConfigStore,
+            app.Services.GetRequiredService<ICopilotCloudGatewayClient>(),
+            app.Services.GetRequiredService<CopilotLocalToolExecutor>(),
             grants,
             registry);
 
