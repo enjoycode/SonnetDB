@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 2,
+  "label": "parity",
+  "message": "100%",
+  "color": "brightgreen",
+  "profile": "full",
+  "requiredReferenceBackends": [
+    "postgres",
+    "redis",
+    "minio",
+    "nats",
+    "influxdb",
+    "victoriametrics",
+    "meilisearch",
+    "qdrant",
+    "clickhouse",
+    "mongodb"
+  ],
+  "status": "passing",
+  "passRate": 100.0,
+  "totalScenarios": 51,
+  "passedScenarios": 49,
+  "skippedScenarios": 2,
+  "failedScenarios": 0,
+  "warningOnlyScenarios": 2,
+  "generatedAtUtc": "2026-10-03T07:32:17.1318912Z",
+  "repository": "enjoycode/SonnetDB",
+  "runId": "37106161402",
+  "runNumber": "109",
+  "commitSha": "46dd3a5ec4a7d2e3ae7b07b139289f34c767345f",
+  "badgeUrl": "https://img.shields.io/badge/parity-100%25-brightgreen",
+  "suites": [
+    {
+      "suite": "analytics-a2624777",
+      "total": 5,
+      "passed": 5,
+      "skipped": 0,
+      "failed": 0,
+      "source": "./artifacts/parity/full/raw/analytics-a2624777/report.json"
+    },
+    {
+      "suite": "document-17580b29",
+      "total": 5,
+      "passed": 5,
+      "skipped": 0,
+      "failed": 0,
+      "source": "./artifacts/parity/full/raw/document-17580b29/report.json"
+    },
+    {
+      "suite": "fulltext-0b626e0d",
+      "total": 6,
+      "passed": 6,
+      "skipped": 0,
+      "failed": 0,
+      "source": "./artifacts/parity/full/raw/fulltext-0b626e0d/report.json"
+    },
+    {
+      "suite": "graph-c8e1444b",
+      "total": 1,
+      "passed": 1,
+      "skipped": 0,
+      "failed": 0,
+      "source": "./artifacts/parity/full/raw/graph-c8e1444b/report.json"
+    },
+    {
+      "suite": "kv-ee40eac4",
+      "total": 5,
+      "passed": 5,
+      "skipped": 0,
+      "failed": 0,
+      "source": "./artifacts/parity/full/raw/kv-ee40eac4/report.json"
+    },
+    {
+      "suite": "mq-df49420e",
+      "total": 5,
+      "passed": 5,
+      "skipped": 0,
+      "failed": 0,
+      "source": "./artifacts/parity/full/raw/mq-df49420e/report.json"
+    },
+    {
+      "suite": "object-65b67d14",
+      "total": 5,
+      "passed": 5,
+      "skipped": 0,
+      "failed": 0,
+      "source": "./artifacts/parity/full/raw/object-65b67d14/report.json"
+    },
+    {
+      "suite": "relational-458b8cf2",
+      "total": 9,
+      "passed": 8,
+      "skipped": 1,
+      "failed": 0,
+      "source": "./artifacts/parity/full/raw/relational-458b8cf2/report.json"
+    },
+    {
+      "suite": "tsdb-7c5d34f1",
+      "total": 7,
+      "passed": 6,
+      "skipped": 1,
+      "failed": 0,
+      "source": "./artifacts/parity/full/raw/tsdb-7c5d34f1/report.json"
+    },
+    {
+      "suite": "vector-32d49a7a",
+      "total": 3,
+      "passed": 3,
+      "skipped": 0,
+      "failed": 0,
+      "source": "./artifacts/parity/full/raw/vector-32d49a7a/report.json"
+    }
+  ],
+  "gateFailures": [],
+  "performanceWarnings": [
+    {
+      "suite": "analytics-a2624777",
+      "scenario": "groupby_time_1b_rows_wallclock",
+      "reason": "performance metrics are warning only"
+    },
+    {
+      "suite": "analytics-a2624777",
+      "scenario": "columnar_compression_ratio",
+      "reason": "performance metrics are warning only"
+    }
+  ]
+}
